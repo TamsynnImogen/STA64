@@ -23,13 +23,23 @@
 //!   keeps its last pose.
 //! - The framing, a fixed oblique angle at a distance that fits the unit's selection radius, is
 //!   **not measured** either, and so is how the original moves the camera.
+//! - **Armada II's window does not use these rules** (they were taken for Armada I's): with Armada II content its
+//!   subject choice and framing are the shot director's ([`a2`], `render::shot_director`, read from the executable,
+//!   static, nothing measured). Everything else here (the camera pair, the picture, the layers, the gates) is shared.
 //! - Selection rings, hull and shield bars (the [`Overlay`] pieces), the strategic view's height bars (gizmos)
 //!   and the map grid (`render::map_grid`) are on [`OVERLAY_LAYER`], which only the main camera draws: seen in
 //!   one frame that the original's window has none of them.
 //! - Not drawn in the window: nebulae (their march belongs to the main camera) and, while the
 //!   main view shows a ship as a symbol (zoomed far out), its model, because the model is hidden
 //!   by that handoff for every camera. Billboarded effects face the main camera. All **not
-//!   measured** against the original; the fog layer is not treated specially.
+//!   measured** against the original.
+//! - The fog and shroud layers ([`GROUND_LAYER`]) are drawn under the scene, as in the map view
+//!   (#1145). The window keeps showing them as it did before that change, by a ground camera of its
+//!   own at the scene camera's place (the sky camera sits at the map camera's, so it must not draw
+//!   them). What the original's window does with the shroud and fog is **not established**; this
+//!   keeps today's picture (grade: not measured).
+
+pub mod a2;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -53,6 +63,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The layer of what only the map's own camera draws: selection rings and bars, the strategic view's bars, the map grid.
 pub const OVERLAY_LAYER: usize = 3;
+/// The layer of the fog and shroud layers: drawn under the scene (#1145), by the map's background camera
+/// and by the action window's ground camera.
+pub const GROUND_LAYER: usize = 4;
+/// The layer of the map grid: drawn under the scene by the map's background camera only (the action
+/// window has none: seen in one frame).
+pub const GRID_LAYER: usize = 5;
 
 /// Vertical field of view of the action camera (the map camera's default).
 const FOV: f32 = std::f32::consts::FRAC_PI_4;
@@ -182,6 +198,11 @@ pub fn picture_size(size: Vec2) -> UVec2 {
 #[derive(Component)]
 pub struct ActionSky;
 
+/// The action view's camera for [`GROUND_LAYER`]: placed and switched like [`ActionCamera`] (it has that
+/// marker too), drawn between the sky and the scene.
+#[derive(Component)]
+pub struct ActionGround;
+
 /// Measurement hook of the performance runs (`bench/perf.rs`): a headless app has no HUD, so
 /// this stands in for the visible picture node (its size) and says which cameras are on.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -199,12 +220,21 @@ impl Plugin for ActionCameraPlugin {
             .init_resource::<ActionCandidates>()
             .init_resource::<ActionScene>()
             .init_resource::<FightLog>()
+            .init_resource::<a2::A2State>()
             .add_message::<SimMsg>()
             .add_systems(Startup, make_view)
             .add_systems(PostUpdate, grid_layer.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>))
             .add_systems(
                 PostUpdate,
-                (layer_overlays, (log_fights, gather.run_if(picture_wanted)).chain().run_if(resource_exists::<SimLink>), subject, sync_cameras)
+                (
+                    layer_overlays,
+                    (log_fights, gather.run_if(picture_wanted).run_if(not(a2::a2_active))).chain().run_if(resource_exists::<SimLink>),
+                    subject.run_if(not(a2::a2_active)),
+                    // Armada II's window: the shot director, only while its picture can be seen.
+                    (a2::track, a2::shots, a2::choose).chain().run_if(a2::a2_active).run_if(picture_wanted).run_if(resource_exists::<SimLink>),
+                    a2::forget.run_if(a2::a2_active),
+                    sync_cameras,
+                )
                     .chain()
                     .after(bevy::transform::TransformSystems::Propagate)
                     .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
@@ -337,6 +367,7 @@ fn sync_cameras(
     bench: Option<Res<ActionBench>>,
     menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
     movies: Option<Res<crate::media::Movies>>,
+    (content, a2_state): (Option<Res<ContentRes>>, Option<Res<a2::A2State>>),
 ) {
     // Only while the picture can be seen: a hidden match UI (loading, a cineractive) costs no passes.
     // Not drawn while the in-game menu is over it or a mission clip plays in the panel: nobody sees it.
@@ -372,7 +403,14 @@ fn sync_cameras(
         img.resize(bevy::render::render_resource::Extent3d { width: want.x, height: want.y, depth_or_array_layers: 1 });
     }
     let target = subject.0.and_then(|id| entities.as_ref()?.0.get(&id)).and_then(|&e| bodies.get(e).ok());
-    let mut pose = target.map(|(gt, radius)| frame(gt.translation(), radius.map_or(20.0, |r| r.0)));
+    // Armada II content: the shot director's pose (none until it has a shot: the camera keeps its last one);
+    // otherwise the Armada I window's fixed oblique frame.
+    let a2_on = content.is_some_and(|c| c.0.profile() == sta_content::Profile::Sta2Classic);
+    let mut pose = if a2_on {
+        a2_state.and_then(|s| s.pose)
+    } else {
+        target.map(|(gt, radius)| frame(gt.translation(), radius.map_or(20.0, |r| r.0)))
+    };
     if pose.is_none() && bench.is_some() {
         // Measurement only: look at the ground point the map camera looks at.
         let f = main_tf.forward().as_vec3();
@@ -395,8 +433,23 @@ fn sync_cameras(
             Msaa::Off,
             // No dithering: it would show as noise in a few hundred pixels.
             bevy::core_pipeline::tonemapping::DebandDither::Disabled,
+            Camera { order: -8, clear_color: ClearColorConfig::None, ..default() },
+            RenderTarget::from(view.image.clone()),
+            projection.clone(),
+            eye,
+            GlobalTransform::from(eye),
+        ));
+        // The fog and shroud layers, under the scene, from the scene camera's own place.
+        commands.spawn((
+            MatchEntity,
+            ActionCamera,
+            ActionGround,
+            Camera3d::default(),
+            Msaa::Off,
+            bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             Camera { order: -9, clear_color: ClearColorConfig::None, ..default() },
             RenderTarget::from(view.image.clone()),
+            RenderLayers::layer(GROUND_LAYER),
             projection.clone(),
             eye,
             GlobalTransform::from(eye),
@@ -441,6 +494,18 @@ mod tests {
     }
     fn cands(fight: &[u32], build: &[u32], idle: &[u32]) -> ActionCandidates {
         ActionCandidates { fight: ids(fight), build: ids(build), idle: ids(idle) }
+    }
+
+    /// The cameras and the candidate gathering run only while a picture can be seen: a hidden picture (the Armada II
+    /// "Cinematic window" off) costs no second render.
+    #[test]
+    fn a_hidden_picture_wants_no_cameras_and_a_visible_one_does() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let picture = world.spawn((ActionPicture, InheritedVisibility::VISIBLE)).id();
+        assert!(world.run_system_once(picture_wanted).unwrap());
+        world.entity_mut(picture).insert(InheritedVisibility::HIDDEN);
+        assert!(!world.run_system_once(picture_wanted).unwrap());
     }
 
     #[test]
@@ -544,14 +609,26 @@ mod tests {
         };
         app.update();
         app.update();
-        assert_eq!(active(&mut app), [true, true], "the picture is seen: the pair runs");
+        assert_eq!(active(&mut app), [true, true, true], "the picture is seen: the sky, ground and scene cameras run");
+        // #1145: the window's cameras, in draw order: the sky (clears), the ground layers, the scene over them.
+        let mut cams: Vec<(isize, Option<RenderLayers>, bool, bool)> = app
+            .world_mut()
+            .query_filtered::<(&Camera, Option<&RenderLayers>, Has<ActionSky>, Has<ActionGround>), Or<(With<ActionCamera>, With<ActionSky>)>>()
+            .iter(app.world())
+            .map(|(c, l, sky, ground)| (c.order, l.cloned(), sky, ground))
+            .collect();
+        cams.sort_by_key(|c| c.0);
+        assert_eq!(cams.iter().map(|c| c.0).collect::<Vec<_>>(), [-10, -9, -8]);
+        assert_eq!((cams[0].2, cams[0].1.clone()), (true, Some(RenderLayers::layer(crate::map::BACKGROUND_LAYER))), "the sky camera draws the background layer only");
+        assert_eq!((cams[1].3, cams[1].1.clone()), (true, Some(RenderLayers::layer(GROUND_LAYER))), "the ground camera draws the fog and shroud layers only (no grid)");
+        assert_eq!(cams[2].1, None, "the scene camera draws the default layer: never the ground layers");
         let target = MovieTarget::Panel(Handle::default());
         app.world_mut().resource_mut::<Movies>().queue_for_test(PlayMovie { id: MovieId(1), name: String::new(), target, skippable: false });
         app.update();
-        assert_eq!(active(&mut app), [false, false], "a clip in the panel: quiet");
+        assert_eq!(active(&mut app), [false, false, false], "a clip in the panel: quiet");
         app.world_mut().resource_mut::<Movies>().stop_for_test();
         app.update();
-        assert_eq!(active(&mut app), [true, true], "the clip is over: the picture runs again");
+        assert_eq!(active(&mut app), [true, true, true], "the clip is over: the picture runs again");
     }
 
     #[test]

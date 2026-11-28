@@ -7,10 +7,14 @@
 //! - One line every [`GRID_SIZE`] world units along each axis across the map rectangle, counted from the
 //!   map's low corner, so a map whose extent is not a multiple of the cell stops short of the far edge.
 //!   The plane is the map's ground plane (height 0).
-//! - The lines are added to the picture in a dim constant colour ([`GRID_COLOUR`]): additive, depth tested
-//!   (units draw over it), no depth write, one device pixel wide at any zoom, no fade. The fog and shroud
-//!   layers sort after it and cover it. Depth write: the original's is not established; additive lines
-//!   need none.
+//! - The lines are added to the picture in a dim constant colour ([`GRID_COLOUR`]): additive, depth tested,
+//!   no depth write, one device pixel wide at any zoom, no fade. The grid is drawn under the scene on
+//!   [`GRID_LAYER`] by the map's background camera, after the background and before the fog and shroud
+//!   layers, which sort after it and cover it (#1145: every object covers it. The original draws build
+//!   footprints, the grid, the fog and the shroud, in that order, before every object, and tests and writes
+//!   depth for the grid: read from the executable, static). Here the lines are depth tested against the
+//!   background camera's own depth and write none: nothing is drawn after them in that camera, so a write
+//!   would change nothing, and the scene is not tested against them (it has its own depth).
 //! - Per view the grid is shown or not by a mode, 0 grid only, 1 grid with height bars, 2 none. The first
 //!   value comes from the mounted `RTS_CFG.h` (`cfgSTRATEGIC_GRID_RENDER` for the original's normal
 //!   view, `cfgTACTICAL_GRID_RENDER` for its tactical view), read from data; the grid-toggle action
@@ -47,8 +51,9 @@ use bevy::shader::ShaderRef;
 pub const GRID_SIZE: f32 = 100.0;
 /// The lines' colour, added in framebuffer terms (read from the executable, static; no data key).
 pub const GRID_COLOUR: [f32; 3] = [0.149, 0.128, 0.0];
-/// The material's sort bias: far below the fog layers' (`render::fog`), so the grid draws first of the blended things.
-pub const GRID_SORT: f32 = -1.0e7;
+/// The material's sort bias: below the fog layers' (`render::fog`) and above any distance in a map, so the grid
+/// draws after the background's blended things and before the fog.
+pub const GRID_SORT: f32 = 5.0e5;
 /// `RTS_CFG.h` key of the original's normal view's initial mode (read from data).
 pub const STRATEGIC_KEY: &str = "cfgSTRATEGIC_GRID_RENDER";
 /// `RTS_CFG.h` key of the original's tactical view's initial mode (read from data).
@@ -152,7 +157,7 @@ impl Material for GridMaterial {
     fn alpha_mode(&self) -> AlphaMode {
         AlphaMode::Add
     }
-    /// Sort only: the grid is the first blended layer.
+    /// Sort only: the grid is the first of the ground layers.
     fn depth_bias(&self) -> f32 {
         GRID_SORT
     }
@@ -234,8 +239,8 @@ fn update(
         Transform::IDENTITY,
         if want { Visibility::Inherited } else { Visibility::Hidden },
         bevy::camera::visibility::NoFrustumCulling,
-        // Only the map's own camera draws it: not the action camera's window.
-        RenderLayers::layer(crate::render::action_camera::OVERLAY_LAYER),
+        // Only the map's own background camera draws it, under the scene: not the action camera's window.
+        RenderLayers::layer(crate::render::action_camera::GRID_LAYER),
         crate::map::MatchEntity,
     ));
 }
@@ -363,13 +368,13 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_is_on_the_overlay_layer_and_sorts_before_the_fog() {
+    fn the_grid_is_on_the_grid_layer_and_sorts_before_the_fog() {
         let mut app = rig(GridModes { rts: GridMode::Grid, tactical: GridMode::None });
         let layers = app.world_mut().query_filtered::<&RenderLayers, With<MapGrid>>().single(app.world()).unwrap().clone();
-        assert_eq!(layers, RenderLayers::layer(crate::render::action_camera::OVERLAY_LAYER));
+        assert_eq!(layers, RenderLayers::layer(crate::render::action_camera::GRID_LAYER));
         let handle = app.world_mut().query_filtered::<&MeshMaterial3d<GridMaterial>, With<MapGrid>>().single(app.world()).unwrap().0.clone();
         let bias = Material::depth_bias(app.world().resource::<Assets<GridMaterial>>().get(&handle).unwrap());
-        assert!(bias < -1.0e6, "far below the fog layers' bias: {bias}");
+        assert!(bias > 1.0e5 && bias < 1.0e6, "above any distance in a map, below the fog layers: {bias}");
     }
 
     #[test]

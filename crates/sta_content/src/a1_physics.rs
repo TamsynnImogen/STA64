@@ -1,20 +1,12 @@
 //! Armada I's physics keys for the movement model (CON-52).
 //!
-//! Rule: under [`Profile::Sta1Classic`] only, a craft flies with the *play
-//! physics* integrator keys (one shared file, [`Profile::play_physics_file`])
-//! and its *own* physics file's order keys and speeds. The own file is the one
-//! the unit ODF names with `physicsFile` (reached through the unit's
-//! `#include` chain, so craft that share a base ODF share a physics file); the
-//! play file is read from the same layered ODF set, so a mod overrides it by
-//! shipping a file of that name, and a unit's own file by the usual layering.
-//! Keys absent from a file take the executable's loader defaults (values
-//! read from the executable, static). A play block that is not
-//! usable (a non-positive `impulseSpeed`,
-//! `frontBackInertia`, `turnRadius`, `velocWhenCoeffHalf` or
-//! `braccelControlStiffness`) is dropped with a warning (a missing file quietly)
-//! and the model stays
-//! off: every Armada I craft keeps the old movement. Nothing here is read, or
-//! hashed, under another profile.
+//! Under the effective Armada I profile, mobile units carry integrator values
+//! from their resolved `physicsFile`. Dogfighting may fall back to the shared
+//! play-physics file where a craft file has no usable dynamics. Keys absent
+//! from either file take the executable's loader defaults (read from the
+//! executable, static). The shared block warns and stays off when unusable;
+//! unusable per-craft blocks are simply absent so the caller can use that
+//! shared fallback. Nothing here is read or hashed under another profile.
 
 use sta_core::Fixed;
 use sta_odf::Odf;
@@ -22,12 +14,10 @@ use sta_odf::Odf;
 use crate::odf::Reader;
 use crate::Warning;
 
-/// The play-physics file's keys the model reads (the file the executable names
-/// `fastphys.odf`; every steered craft integrates with it).
+/// The integrator keys read from an Armada I physics file.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct A1Dynamics {
-    /// `impulseSpeed` of the play physics: the scale of the lag, the turn rate
-    /// and the speed curve.
+    /// `impulseSpeed`: the scale of the lag, turn rate and speed curve.
     pub impulse_speed: Fixed,
     /// `frontBackInertia`: seconds times impulse; the lag is this divided by
     /// `impulse_speed`.
@@ -88,8 +78,8 @@ fn key(r: &mut Reader<'_>, name: &str) -> Fixed {
     Fixed::from_f64(r.num(name).unwrap_or(default))
 }
 
-/// The play-physics block of the ODF `odf` named `file`, or `None` (with a
-/// warning) when it is not usable.
+/// The dynamics block of an ODF named `file`, or `None` when it is not usable.
+/// Validation is shared by the common play file and per-craft physics files.
 pub(crate) fn play_dynamics(odf: &Odf, file: &str, warnings: &mut Vec<Warning>) -> Option<A1Dynamics> {
     let mut r = Reader { odf, file, warnings };
     let d = A1Dynamics {

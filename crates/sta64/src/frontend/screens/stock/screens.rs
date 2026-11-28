@@ -187,7 +187,8 @@ fn single_player(p: &mut Box_, ctx: &Ctx, b: Vec2) {
             }
         }
     }
-    off_button(p, ctx, b, Slot::SpLoad, &cap(ctx, "load_game", "Load game"));
+    let load = region(Slot::SpLoad).px(b);
+    put(p, Slot::SpLoad, load, (kit_button(ctx.theme, &cap(ctx, "load_game", "Load game"), load.width()), crate::ui::save_menu::OpenSaveButton(crate::ui::save_menu::SaveMode::Load)));
     act_button(p, ctx, b, Slot::SpBack, &cap(ctx, "previous_menu", "Previous menu"), Act::Goto(Screen::Main));
 }
 
@@ -343,6 +344,13 @@ fn advanced(p: &mut Box_, ctx: &Ctx, b: Vec2) {
         None => off_button(p, ctx, b, Slot::AdvancedOfficers, &tr("Officer limit unavailable")),
     }
     act_button(p, ctx, b, Slot::AdvancedSpeed, &trf("Game speed: {0}", &[&ctx.draft.speed.label()]), Act::CycleMatchSpeed);
+    if let Some(caption) = super::super::view::directors_caption(ctx) {
+        act_button(p, ctx, b, Slot::AdvancedDirectorsCut, &caption, Act::ToggleDirectorsCut);
+    }
+    // The same slot: Director's Cut and warp belong to different profiles and never show together.
+    if let Some(caption) = super::super::view::warp_caption(ctx) {
+        act_button(p, ctx, b, Slot::AdvancedDirectorsCut, &caption, Act::ToggleWarp);
+    }
     act_button(p, ctx, b, Slot::AdvancedDefault, &tr("Default"), Act::DefaultOptions);
     act_button(p, ctx, b, Slot::AdvancedClose, &tr("OK"), Act::CloseAdvanced(true));
     act_button(p, ctx, b, Slot::AdvancedCancel, &tr("Cancel"), Act::CloseAdvanced(false));

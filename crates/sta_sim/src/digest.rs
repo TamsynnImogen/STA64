@@ -65,9 +65,9 @@ fn _every_entity_field_has_a_section(e: &Entity) {
 /// not in the digest) here and in `Sim::digest`.
 fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
-        tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
+        tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, directors_cut: _, match_warp_off: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, ship_upgrades: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, replacements: _, nav: _, subsystems: _, zero_shield_holds: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, nebula_shields: _, alerts: _, mission_switches: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, replacements: _, nav: _, subsystems: _, zero_shield_holds: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, nebula_shields: _, alerts: _, mission_switches: _, move_modes: _, dying: _,
     } = s;
 }
 
@@ -145,6 +145,8 @@ impl Sim {
 
     fn movement_digest(&self) -> u64 {
         let mut h = start("movement");
+        self.hash_directors_cut(&mut h);
+        self.hash_match_warp(&mut h);
         for e in self.units.iter() {
             h.u64(e.id.0 as u64);
             for f in [e.pos.x, e.pos.y, e.pos.z, e.heading.0, e.heading.1, e.speed, e.omega] {
@@ -170,6 +172,8 @@ impl Sim {
             }
         }
         self.movement.hash_into(&mut h);
+        // SIM-76: the move modes move orders named (nothing is hashed without any).
+        self.hash_move_modes(&mut h);
         // SIM-36: crafts in warp on an attack approach.
         if !self.approach_warp.is_empty() {
             self.approach_warp.hash_into(&mut h);
@@ -221,6 +225,10 @@ impl Sim {
         }
         if !self.zero_shield_holds.is_empty() {
             self.zero_shield_holds.hash_into(&mut h);
+        }
+        // #1100: the dying phases decide when units are removed (nothing is hashed without any).
+        if !self.dying.is_empty() {
+            self.dying.hash_into(&mut h);
         }
         if !self.scripted.is_empty() {
             self.scripted.hash_into(&mut h);
@@ -368,6 +376,9 @@ impl Sim {
                     row(Some(id), "formation", course.formation.to_string());
                     row(Some(id), "waypoints", course.waypoints.iter().map(|w| v3(*w).map(fx).join(", ")).collect::<Vec<_>>().join("; "));
                 }
+                for (id, mode) in self.move_mode_rows() {
+                    row(Some(id), "move mode", format!("{mode:?}"));
+                }
                 row(None, "map confinement (hash)", block("confinement", &|h| self.confinement.hash_into(h)));
             }
             "combat" => {
@@ -459,7 +470,7 @@ mod tests {
         let stats = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
         let a = sim.spawn(0, v(0, 0), (Fixed::ZERO, Fixed::ONE), stats);
         sim.spawn(1, v(1000, 0), (-Fixed::ONE, Fixed::ZERO), stats);
-        sim.step(&[Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(500, -300), queue: false }) }]);
+        sim.step(&[Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(500, -300), queue: false, mode: None }) }]);
         for _ in 0..40 {
             sim.step(&[]);
             sim.rng.next_u64();

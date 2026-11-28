@@ -465,48 +465,121 @@ pub struct Envelope {
 
 /// Build the envelope for nebulae at `pos` (x, y, z) with `radius`.
 pub fn envelope(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]]) -> Envelope {
-    let reach = radius * r.extent;
-    let mut freach = reach * if r.filaments[0] > 0.0 && r.fil_reach > 1.0 { r.fil_reach } else { 1.0 };
-    if r.fringe[0] > 0.0 && reach * r.fringe_reach > freach {
-        freach = reach * r.fringe_reach;
+    envelope_of(r, radius, pos, &[])
+}
+
+/// As [`envelope`], with the places where `shown` is false left empty (no dome, no cover): the
+/// rectangle, mean height and spread stay those of all of `pos`, so the shown places look as they
+/// do in the full envelope. A `shown` shorter than `pos` counts the rest as shown.
+pub fn envelope_masked(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], shown: &[bool]) -> Envelope {
+    let weights: Vec<f32> = shown.iter().map(|&s| if s { 1.0 } else { 0.0 }).collect();
+    envelope_of(r, radius, pos, &weights)
+}
+
+/// The light weight of each place of a class's envelope, one byte per texel over the same rectangle and size as the
+/// envelope of the same `pos` (R8: 255 is 1). `shown[i]` false leaves nebula `i` out (as [`envelope_masked`] does);
+/// `light[i]` is the factor on the light the gas emits over nebula `i`'s places, past the end of `light` 1. Where
+/// nebulae overlap, the texel takes the average of their factors weighted by their reach's falloff (the envelope's
+/// haze term); a texel no nebula reaches is 1. The shape of the gas (the envelope) does not depend on it: a copy out
+/// of sight keeps its cover and reach, only its emitted light is scaled (#1146; the factor and its grade are the
+/// caller's).
+pub fn light_weights(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], shown: &[bool], light: &[f32]) -> Vec<u8> {
+    let g = Grid::of(r, radius, pos);
+    let mut out = vec![255u8; (g.w * g.h) as usize];
+    for z in 0..g.h {
+        let wz = g.z0 + (z as f32 + 0.5) * (g.z1 - g.z0) / g.h as f32;
+        for x in 0..g.w {
+            let wx = g.x0 + (x as f32 + 0.5) * (g.x1 - g.x0) / g.w as f32;
+            let (mut sum, mut total) = (0.0f32, 0.0f32);
+            for (i, p) in pos.iter().enumerate() {
+                if !shown.get(i).copied().unwrap_or(true) {
+                    continue;
+                }
+                let (dx, dz) = (wx - p[0], wz - p[2]);
+                let d2 = dx * dx + dz * dz;
+                if d2 >= g.freach * g.freach {
+                    continue;
+                }
+                let q = smooth(1.0, 0.3, d2.sqrt() / g.freach) + 1e-4;
+                sum += q * light.get(i).copied().unwrap_or(1.0);
+                total += q;
+            }
+            if total > 0.0 {
+                out[(z * g.w + x) as usize] = ((sum / total).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+            }
+        }
     }
-    let outer = freach + reach * r.edge_warp;
-    let (mut x0, mut z0, mut x1, mut z1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-    let mut ys = 0.0;
-    for p in pos {
-        x0 = x0.min(p[0] - outer);
-        x1 = x1.max(p[0] + outer);
-        z0 = z0.min(p[2] - outer);
-        z1 = z1.max(p[2] + outer);
-        ys += p[1];
+    out
+}
+
+/// The envelope's rectangle and size for nebulae at `pos`, shared by [`envelope`] and [`light_weights`].
+struct Grid {
+    reach: f32,
+    freach: f32,
+    x0: f32,
+    z0: f32,
+    x1: f32,
+    z1: f32,
+    w: u32,
+    h: u32,
+    ey: f32,
+    ydev: f32,
+}
+
+impl Grid {
+    fn of(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]]) -> Grid {
+        let reach = radius * r.extent;
+        let mut freach = reach * if r.filaments[0] > 0.0 && r.fil_reach > 1.0 { r.fil_reach } else { 1.0 };
+        if r.fringe[0] > 0.0 && reach * r.fringe_reach > freach {
+            freach = reach * r.fringe_reach;
+        }
+        let outer = freach + reach * r.edge_warp;
+        let (mut x0, mut z0, mut x1, mut z1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        let mut ys = 0.0;
+        for p in pos {
+            x0 = x0.min(p[0] - outer);
+            x1 = x1.max(p[0] + outer);
+            z0 = z0.min(p[2] - outer);
+            z1 = z1.max(p[2] + outer);
+            ys += p[1];
+        }
+        let ey = ys / pos.len().max(1) as f32;
+        let ydev = pos.iter().fold(1.0f32, |m, p| m.max((p[1] - ey).abs()));
+        const ENV_MAX: u32 = 1024;
+        let cell = radius / 16.0;
+        let w = (((x1 - x0) / cell) as u32 + 2).clamp(4, ENV_MAX);
+        let h = (((z1 - z0) / cell) as u32 + 2).clamp(4, ENV_MAX);
+        Grid { reach, freach, x0, z0, x1, z1, w, h, ey, ydev }
     }
-    let ey = ys / pos.len().max(1) as f32;
-    let ydev = pos.iter().fold(1.0f32, |m, p| m.max((p[1] - ey).abs()));
-    const ENV_MAX: u32 = 1024;
-    let cell = radius / 16.0;
-    let w = (((x1 - x0) / cell) as u32 + 2).clamp(4, ENV_MAX);
-    let h = (((z1 - z0) / cell) as u32 + 2).clamp(4, ENV_MAX);
+}
+
+fn envelope_of(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], weights: &[f32]) -> Envelope {
+    let Grid { reach, freach, x0, z0, x1, z1, w, h, ey, ydev } = Grid::of(r, radius, pos);
     let mut px = vec![0u8; (w * h * 4) as usize];
     for z in 0..h {
         let wz = z0 + (z as f32 + 0.5) * (z1 - z0) / h as f32;
         for x in 0..w {
             let wx = x0 + (x as f32 + 0.5) * (x1 - x0) / w as f32;
             let (mut s, mut hh, mut g, mut wy, mut ww) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-            for p in pos {
+            for (i, p) in pos.iter().enumerate() {
+                let weight = weights.get(i).copied().unwrap_or(1.0);
+                if weight <= 0.0 {
+                    continue;
+                }
                 let (dx, dz) = (wx - p[0], wz - p[2]);
                 let d2 = dx * dx + dz * dz;
                 if d2 >= freach * freach {
                     continue;
                 }
                 let d = d2.sqrt();
-                g += smooth(1.0, 0.3, d / freach);
+                g += smooth(1.0, 0.3, d / freach) * weight;
                 let q = smooth(1.0, 0.0, d / freach) + 1e-4;
                 wy += q * (p[1] - ey);
                 ww += q;
                 if d >= reach {
                     continue;
                 }
-                s += smooth(1.0, 0.6, d / reach);
+                s += smooth(1.0, 0.6, d / reach) * weight;
                 let q = d / reach;
                 hh = hh.max(1.0 - q * q * q);
             }
@@ -650,6 +723,53 @@ mod tests {
         assert!(at(0.0, 0.0)[3] > 200 && at(0.0, 0.0)[0] > 200, "centre covered");
         assert_eq!(at(300.0, 500.0)[3], 0, "beyond every reach is empty");
         assert!((e.ey - 25.0).abs() < 1e-3 && (e.ydev - 25.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_masked_envelope_empties_the_hidden_places_and_keeps_the_rest() {
+        let r = NebulaRecipe::parse("[Nebula]\nExtent=1.3\nHeight=3\n");
+        let pos = [[0.0, 0.0, 0.0], [2000.0, 50.0, 0.0]];
+        let full = envelope(&r, 300.0, &pos);
+        assert_eq!(envelope_masked(&r, 300.0, &pos, &[true, true]).pixels, full.pixels, "all shown: the same bytes");
+        assert_eq!(envelope_masked(&r, 300.0, &pos, &[]).pixels, full.pixels, "no mask: all shown");
+        let m = envelope_masked(&r, 300.0, &pos, &[false, true]);
+        assert_eq!((m.w, m.h, m.rect, m.ey, m.ydev), (full.w, full.h, full.rect, full.ey, full.ydev));
+        let at = |e: &Envelope, wx: f32| {
+            let x = ((wx - e.rect[0]) / (e.rect[2] - e.rect[0]) * e.w as f32) as u32;
+            let z = (((0.0 - e.rect[1]) / (e.rect[3] - e.rect[1]) * e.h as f32) as u32).min(e.h - 1);
+            let o = ((z * e.w + x) * 4) as usize;
+            [e.pixels[o], e.pixels[o + 1], e.pixels[o + 2], e.pixels[o + 3]]
+        };
+        assert_eq!(at(&m, 0.0), [0, 0, 128, 0], "the hidden nebula's centre is empty");
+        assert!(at(&full, 0.0)[3] > 200);
+        assert_eq!(at(&m, 2000.0), at(&full, 2000.0), "the shown one is as in the full envelope");
+    }
+
+    /// #1146: the light weights are one byte per envelope texel over the envelope's own rectangle; a place's weight
+    /// is its nebula's factor, 255 where nothing reaches or nothing is dimmed, and the envelope's shape is not
+    /// touched by them.
+    #[test]
+    fn light_weights_follow_the_nebula_and_leave_the_shape_alone() {
+        let r = NebulaRecipe::parse("[Nebula]\nExtent=1.3\nHeight=3\n");
+        let pos = [[0.0, 0.0, 0.0], [2000.0, 50.0, 0.0]];
+        let env = envelope(&r, 300.0, &pos);
+        let all = light_weights(&r, 300.0, &pos, &[], &[]);
+        assert_eq!(all.len(), (env.w * env.h) as usize, "one byte per envelope texel");
+        assert!(all.iter().all(|b| *b == 255), "nothing dimmed: all 255");
+        let w = light_weights(&r, 300.0, &pos, &[true, true], &[0.25, 1.0]);
+        let at = |bytes: &[u8], wx: f32| {
+            let x = ((wx - env.rect[0]) / (env.rect[2] - env.rect[0]) * env.w as f32) as u32;
+            let z = (((0.0 - env.rect[1]) / (env.rect[3] - env.rect[1]) * env.h as f32) as u32).min(env.h - 1);
+            bytes[(z * env.w + x) as usize]
+        };
+        assert_eq!(at(&w, 0.0), 64, "the dimmed nebula's centre carries its factor (0.25 of 255)");
+        assert_eq!(at(&w, 2000.0), 255, "the other one is untouched");
+        assert_eq!(at(&w, 1000.0), 255, "between them nothing reaches");
+        // A nebula left out of the envelope does not weigh.
+        let hidden = light_weights(&r, 300.0, &pos, &[false, true], &[0.25, 1.0]);
+        assert_eq!(at(&hidden, 0.0), 255);
+        // The shape is the envelope's, whatever the weights: same bytes as without them.
+        assert_eq!(envelope_masked(&r, 300.0, &pos, &[true, true]).pixels, env.pixels);
     }
 
     #[test]

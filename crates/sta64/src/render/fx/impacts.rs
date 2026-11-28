@@ -17,7 +17,8 @@
 //!   is the strongest hit; Refit's lightning (`down_ps`) is not ported. Only under the Remaster look
 //!   ([`Effect::ShieldHits`]): the Stock look draws `stock_shield_hits.rs`' cap instead, and nothing for
 //!   shields going down yet.
-//! - **Hull impact** (`Hit.hull > 0`): `HitSparks` (6) streaks from `Hit.at`.
+//! - **Hull impact** (`Hit.hull > 0`): `HitSparks` (6) streaks from `Hit.at`. Under the Stock look one node
+//!   particle instead (`stock_hull_hits.rs`, [`Effect::HullHits`]).
 //! - **Explosion** (`Destroyed`): the fireball and shock ring sized by the unit's
 //!   `SelectRadius` (last seen, the unit is gone from the view): the radius
 //!   at least `MinRadius` (25), growing over `Growth` of its 2.5 s, `BlastSparks` (14)
@@ -26,7 +27,8 @@
 //!   [`HullShare`] is under [`SMOKE_LIGHT`] (one stream) or [`SMOKE_HEAVY`]
 //!   (two); it detaches above the threshold, while cloaked, and with the root.
 //!   Puffs already out run their course. Refit has no such rule (stock's damage
-//!   vents come from the SOD's damage nodes); these thresholds are STA64's own.
+//!   vents come from the SOD's damage nodes); these thresholds are STA64's own. Under the Stock look
+//!   the smoke is off ([`Effect::DamageSmoke`], D-02).
 //!
 //! The chunks and the smoke stay plain spheres: Refit's chunks break the unit's own
 //! meshes (`chunks.rs`) and its smoke is the SOD emitters'.
@@ -35,7 +37,7 @@
 
 use bevy::prelude::*;
 use sta_content::WeaponKind;
-use sta_sim::{EntityId, SimEvent, TICK_HZ, Tick};
+use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 use std::collections::BTreeMap;
 
 use super::fire::{self, FireFrame, FireMaterial, RingFrame};
@@ -143,21 +145,24 @@ struct SeenUnit {
     heading: Vec3,
     radius: f32,
     faction: Faction,
+    /// Its definition, for the explosion it names (#1153).
+    def: Option<ContentKey>,
 }
 
 impl Default for SeenUnit {
     fn default() -> SeenUnit {
-        SeenUnit { pos: Vec3::ZERO, heading: Vec3::NEG_Z, radius: DEFAULT_RADIUS, faction: Faction::of_odf("") }
+        SeenUnit { pos: Vec3::ZERO, heading: Vec3::NEG_Z, radius: DEFAULT_RADIUS, faction: Faction::of_odf(""), def: None }
     }
 }
 
 #[derive(Resource, Default)]
-struct Seen(BTreeMap<EntityId, SeenUnit>);
+pub(super) struct Seen(BTreeMap<EntityId, SeenUnit>);
 
 pub struct ImpactFxPlugin;
 
 impl Plugin for ImpactFxPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins((super::stock_explosions::StockExplosionsPlugin, super::stock_hull_hits::StockHullHitsPlugin));
         app.init_resource::<Seen>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_units)
             .add_systems(OnExit(crate::app::AppState::InGame), forget_units)
@@ -165,6 +170,8 @@ impl Plugin for ImpactFxPlugin {
             Update,
             (track, spawn_impacts, smoke_attach, emit_smoke, update_impacts, attach_visuals, apply_alpha, apply_shields, apply_fire, apply_quads)
                 .chain()
+                // The beams' hull ends of this frame (`HullHitPoints`) are written first.
+                .after(super::stock_shots::update_shots)
                 .in_set(GameSet::Interpolate)
                 .distributive_run_if(resource_exists::<SimLink>),
         );
@@ -239,17 +246,25 @@ fn forget_units(mut seen: ResMut<Seen>) {
     seen.0.clear();
 }
 
-fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<SimEntities>>, radii: Query<&SelectRadius>, mut seen: ResMut<Seen>) {
+fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<SimEntities>>, radii: Query<&SelectRadius>, mut seen: ResMut<Seen>, fog: Option<Res<crate::render::fog::FogState>>) {
     for u in &link.curr().units {
+        // #1145: hits and explosions are drawn only for units the client draws; the layers no longer cover them
+        // over unseen ground.
+        if !super::client_draws(ents.as_deref(), fog.is_some(), u.id) {
+            // Out of sight, or never seen: no record of where it was, so nothing happens at a stale place when it
+            // dies out of sight (a unit that dies while drawn is gone from the view that frame, keeping its record).
+            seen.0.remove(&u.id);
+            continue;
+        }
         let radius = ents.as_ref().and_then(|m| m.0.get(&u.id)).and_then(|e| radii.get(*e).ok()).map_or(DEFAULT_RADIUS, |r| r.0);
         let heading = Vec3::new(u.heading.0.to_f32(), 0.0, -u.heading.1.to_f32()).normalize_or(Vec3::NEG_Z);
         let faction = content.as_ref().and_then(|c| c.0.unit(u.def)).map_or(Faction::of_odf(""), |d| Faction::of_odf(&d.odf));
-        seen.0.insert(u.id, SeenUnit { pos: to_bevy(u.pos.to_f32()), heading, radius, faction });
+        seen.0.insert(u.id, SeenUnit { pos: to_bevy(u.pos.to_f32()), heading, radius, faction, def: Some(u.def) });
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_impacts(
+pub(super) fn spawn_impacts(
     mut cmds: Commands,
     mut msgs: MessageReader<SimMsg>,
     clock: Res<AnimClock>,
@@ -257,13 +272,32 @@ fn spawn_impacts(
     mut seen: ResMut<Seen>,
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
+    fog: Option<Res<crate::render::fog::FogState>>,
+    mut explosions: Option<ResMut<super::stock_explosions::ExplosionQueue>>,
+    mut store: Option<ResMut<super::stock_flares::NodeParticles>>,
+    sprites: Option<Res<super::stock_shots::ShotSprites>>,
+    mut dying: ResMut<super::stock_hull_hits::DyingUnits>,
+    points: Option<Res<super::stock_hull_hits::HullHitPoints>>,
+    mut logged: Local<bool>,
 ) {
     let tick = clock.tick();
     let shell = refit_shield_shell(profile.as_deref(), effects.as_deref());
+    // #1153: under Stock the explosion of a unit whose definition resolves is `stock_explosions.rs`', and the hull hit
+    // is `stock_hull_hits.rs`' spark (Refit's streaks are not drawn then).
+    let stock = super::stock_explosions::stock_explosions(profile.as_deref(), effects.as_deref());
+    let stock_hits = super::stock_hull_hits::stock_hull_hits(profile.as_deref(), effects.as_deref());
     for SimMsg(ev) in msgs.read() {
         match ev {
-            SimEvent::Hit { target, weapon, facing, shield, hull, at, .. } => {
-                let s = seen.0.get(target).copied().unwrap_or_default();
+            SimEvent::Dying { id, .. } => {
+                dying.0.insert(*id);
+            }
+            SimEvent::Hit { target, by, weapon, facing, shield, hull, at, .. } => {
+                // A unit the client does not draw (no record: `track`) gets no shield shell and no sparks.
+                let known = seen.0.get(target).copied();
+                if known.is_none() && fog.is_some() {
+                    continue;
+                }
+                let s = known.unwrap_or_default();
                 let at = to_bevy(at.to_f32());
                 let dir = (at - s.pos).try_normalize().unwrap_or_else(|| facing_dir(s.heading, *facing));
                 let mk = |kind, idx, life, origin, vel, colour| {
@@ -300,7 +334,18 @@ fn spawn_impacts(
                     b.seed = Vec3::splat(rand(*target, tick, 0, 20));
                     cmds.spawn((b, a, t));
                 }
-                if hull.to_f32() > 0.0 {
+                if hull.to_f32() > 0.0 && stock_hits {
+                    // A hit on a unit already dying draws none; the lethal hit itself does (`Dying` follows it).
+                    if !dying.0.contains(target)
+                        && let (Some(store), Some(sprites)) = (store.as_mut(), sprites.as_ref())
+                    {
+                        // Where the stock beam drawing says its end on the hull is; else the event's place (the target's
+                        // centre). INTERIM against the original's hit node.
+                        let spot = points.as_ref().and_then(|p| p.of(*by, *weapon, *target)).unwrap_or(at);
+                        let local = super::stock_flares::to_local(s.heading, spot - s.pos);
+                        super::stock_hull_hits::raise_hit_spark(&mut cmds, store, sprites, &mut logged, *target, s.radius, local, rand(*target, tick, 0, 70), clock.now() * TICK_HZ as f64);
+                    }
+                } else if hull.to_f32() > 0.0 {
                     let size = (s.radius * 0.14).max(4.0);
                     for i in 0..HIT_SPARKS {
                         cmds.spawn(spark(*target, tick, i, at, dir, size, s));
@@ -310,7 +355,11 @@ fn spawn_impacts(
             // Under the Stock look nothing is drawn for shields going down yet (the lasting bands wait for the
             // sim's zero-shield hold, #1101): the Refit shell is not the original's (#1041).
             SimEvent::ShieldsDown { id, facing } if shell => {
-                let s = seen.0.get(id).copied().unwrap_or_default();
+                let known = seen.0.get(id).copied();
+                if known.is_none() && fog.is_some() {
+                    continue;
+                }
+                let s = known.unwrap_or_default();
                 let dir = facing_dir(s.heading, *facing);
                 cmds.spawn((
                     ImpactFx {
@@ -337,8 +386,16 @@ fn spawn_impacts(
                 ));
             }
             SimEvent::Destroyed { id, .. } => {
+                dying.0.remove(id);
                 let Some(s) = seen.0.remove(id) else { continue };
                 let p = s.pos;
+                if stock
+                    && let (Some(queue), Some(content), Some(def)) = (explosions.as_mut(), content.as_ref(), s.def)
+                    && let Some(req) = super::stock_explosions::request(&content.0, def, *id, p, s.heading, s.radius, clock.now() * TICK_HZ as f64)
+                {
+                    queue.0.push(req);
+                    continue;
+                }
                 let mk = |kind, idx, life, vel, colour| {
                     (
                         ImpactFx {
@@ -424,14 +481,18 @@ fn smoke_level(share: f32) -> u8 {
     }
 }
 
-/// Attach, retune and detach emitters as `HullShare` crosses the thresholds.
+/// Attach, retune and detach emitters as `HullShare` crosses the thresholds. Under the Stock look STA64's smoke is
+/// off (D-02: the original's damage look is the model's damage nodes): every emitter detaches and none is made.
 fn smoke_attach(
     mut cmds: Commands,
     clock: Res<AnimClock>,
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
     units: Query<(&SimEntity, &HullShare, Has<Cloaked>)>,
     mut emitters: Query<(Entity, &mut SmokeEmitter)>,
 ) {
-    let want: BTreeMap<EntityId, u8> = units.iter().map(|(u, h, cloaked)| (u.0, if cloaked { 0 } else { smoke_level(h.0) })).collect();
+    let on = super::stock_hull_hits::damage_smoke(profile.as_deref(), effects.as_deref());
+    let want: BTreeMap<EntityId, u8> = units.iter().map(|(u, h, cloaked)| (u.0, if cloaked || !on { 0 } else { smoke_level(h.0) })).collect();
     for (e, mut s) in &mut emitters {
         match want.get(&s.unit).copied().unwrap_or(0) {
             0 => cmds.entity(e).try_despawn(),
@@ -737,6 +798,12 @@ mod tests {
 
     /// Frames of FX rows, and per frame the emitter levels.
     fn run() -> (Vec<Vec<Row>>, Vec<Vec<u8>>) {
+        run_with(false, 0..u32::MAX)
+    }
+
+    /// `fog`: a fog grid exists (so units the client does not draw get no effects); `drawn`: the frames in which
+    /// the unit 2 has an entity (the client draws it).
+    fn run_with(fog: bool, drawn: std::ops::Range<u32>) -> (Vec<Vec<Row>>, Vec<Vec<u8>>) {
         let db = sta_content::fake::db();
         let src = ScriptedSource::from_json5(&timeline(&db), &db).unwrap();
         let mut app = App::new();
@@ -747,11 +814,25 @@ mod tests {
             .insert_resource(SimLink::new(Box::new(src), Box::new(LocalRouter::new()), PlayerId(0)))
             .add_plugins(ImpactFxPlugin);
         configure_sets(&mut app);
-        let root = app.world_mut().spawn((SimEntity(EntityId(2)), HullShare(1.0))).id();
+        if fog {
+            app.insert_resource(crate::render::fog::FogState { grid: crate::render::fog::FogGrid::new([-1000.0, -1000.0], [1000.0, 1000.0]), updates: 1 });
+        }
+        let mut root: Option<Entity> = None;
         let (mut frames, mut smoke) = (Vec::new(), Vec::new());
         for f in 0..900 {
+            if drawn.contains(&f) && root.is_none() && app.world().resource::<SimLink>().curr().unit(EntityId(2)).is_some() {
+                let e = app.world_mut().spawn((SimEntity(EntityId(2)), HullShare(1.0))).id();
+                app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(2), e);
+                root = Some(e);
+            }
+            if !drawn.contains(&f)
+                && let Some(r) = root.take()
+            {
+                app.world_mut().entity_mut(r).despawn();
+                app.world_mut().resource_mut::<SimEntities>().0.remove(&EntityId(2));
+            }
             // Stand-in for the unit view: share falls with time, root goes with the unit.
-            if app.world().get_entity(root).is_ok() {
+            if let Some(root) = root.filter(|r| app.world().get_entity(*r).is_ok()) {
                 if app.world().resource::<SimLink>().curr().unit(EntityId(2)).is_none() && f > 10 {
                     app.world_mut().entity_mut(root).despawn();
                 } else {
@@ -807,5 +888,44 @@ mod tests {
         // Everything drains after the destruction.
         assert!(a.last().unwrap().is_empty(), "FX left: {:?}", a.last());
         assert!(sa.last().unwrap().is_empty());
+    }
+
+    fn kinds(frames: &[Vec<Row>]) -> std::collections::BTreeMap<String, usize> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for r in frames.iter().flatten() {
+            if seen.insert(r.0) {
+                *out.entry(format!("{:?}", r.0.0)).or_insert(0) += 1;
+            }
+        }
+        out
+    }
+
+    /// #1145 (H1): with a fog grid, hits and shields-down on a unit the client does not draw spawn no effect (no
+    /// shield shell, no sparks); drawn they do, and without a grid everything is as before.
+    #[test]
+    fn hits_on_a_unit_the_client_does_not_draw_spawn_no_effects() {
+        let (drawn, _) = run_with(true, 0..u32::MAX);
+        let (hidden, _) = run_with(true, 0..0);
+        let (no_grid, _) = run_with(false, 0..0);
+        let (k_drawn, k_hidden, k_no_grid) = (kinds(&drawn), kinds(&hidden), kinds(&no_grid));
+        assert_eq!(k_drawn.get("Shield"), Some(&4), "{k_drawn:?}");
+        assert!(k_drawn.get("Spark").is_some_and(|n| *n > 0));
+        assert!(k_hidden.is_empty(), "nothing for a unit the client does not draw: {k_hidden:?}");
+        assert_eq!(k_no_grid.get("Shield"), Some(&4), "without a grid every unit counts as drawn: {k_no_grid:?}");
+    }
+
+    /// #1145 (H2): a unit that leaves sight and then dies explodes nowhere (it has no record of a place); a unit
+    /// that dies drawn explodes where it was.
+    #[test]
+    fn a_unit_that_dies_out_of_sight_does_not_explode_at_its_last_drawn_place() {
+        let (drawn, _) = run_with(true, 0..u32::MAX);
+        assert_eq!(kinds(&drawn).get("Fire"), Some(&1), "dies drawn: one fireball");
+        // Drawn for the first 150 frames, out of sight before it dies (at tick 200).
+        let (left, _) = run_with(true, 0..150);
+        let k = kinds(&left);
+        assert_eq!(k.get("Fire"), None, "no fireball at a stale place: {k:?}");
+        assert_eq!(k.get("Ring"), None);
+        assert_eq!(k.get("Debris"), None);
     }
 }

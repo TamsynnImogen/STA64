@@ -21,6 +21,7 @@ mod platform;
 
 mod audio;
 mod capture;
+mod save;
 mod crash_report;
 mod diagnostics;
 mod footage;

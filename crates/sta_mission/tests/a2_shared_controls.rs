@@ -208,6 +208,7 @@ fn team_numbering_and_cached_reads_follow_the_shared_owner_change() {
                 units: vec![craft],
                 to: pos(300),
                 queue: false,
+                mode: None,
             }),
         }]);
         assert!(denied.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
@@ -218,6 +219,7 @@ fn team_numbering_and_cached_reads_follow_the_shared_owner_change() {
                 units: vec![craft],
                 to: pos(300),
                 queue: false,
+                mode: None,
             }),
         }]);
         no_rejection(&allowed.events);
@@ -304,6 +306,7 @@ fn disabling_force_changes_the_actual_map_boundary_behavior() {
             units: vec![craft],
             to: pos(900),
             queue: false,
+            mode: None,
         }),
     };
     no_rejection(&unconfined.step(std::slice::from_ref(&move_order)).events);

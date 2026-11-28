@@ -10,6 +10,26 @@
 //!   client derives `fire.end` as the `Fired` tick plus `duration`). A
 //!   projectile flies at `shot_speed` toward its target's current position and
 //!   hits on the tick it arrives; its first move is the tick after it fired.
+//! - Under `beam_damage_at_end` (issue #1068, stock Armada II) a beam's hit is
+//!   not sent on the tick it fires but on the tick its life ends: the beam is
+//!   kept as a [`Beam`] in flight until then. On every tick of its life it is
+//!   lost, for good, when its shooter or its target is gone or the target is
+//!   farther than [`BEAM_BREAK_RANGE_FACTOR`] times the weapon's range
+//!   ([`beam_holds`]). Evidence: the damage lands exactly on the fire tick
+//!   plus the life in ticks, and on the fire tick for a life of none
+//!   (measured, repeated, no spread); a shooter that dies during the life
+//!   loses the beam (measured, repeated); so does a target beyond the range
+//!   factor (the factor: measured, repeated, with controls; the point the
+//!   distance is taken from is INTERIM, see [`beam_holds`]); the other
+//!   cancelling cases are read from the executable, static, not measured. The
+//!   beam still lands when the
+//!   shooter's weapons are switched off, when it is given a move order or
+//!   starts to cloak, and when the target cloaks or changes side (measured,
+//!   once each). STA64's own rules, on which the evidence is silent: the hit
+//!   roll stays at fire time and a missed beam keeps nothing; a beam follows a
+//!   replaced target as a shot does. Only the regular beam class ([`REGULAR_BEAM_CLASS`],
+//!   [`lands_at_end`]): the other beam classes, weapons without ordnance, point
+//!   defence, sustained special beams and mining beams hit as before.
 //! - Under `start_fire_hold` nothing fires before [`START_HOLD_TICKS`] of
 //!   mission time (SIM-53). An
 //!   `Attack` order adds no delay of its own: a mount fires on the first
@@ -19,6 +39,9 @@
 //!   (ties to the lowest id); under `target_score` one best-scoring enemy per
 //!   craft (`targeting`). Under `attack_opportunity_fire` (Roots) a weapon whose
 //!   ordered target is out of reach takes another enemy as if it had no order. Point-defence weapons do not shoot at units (`pd.rs` runs them).
+//! - A unit in its dying phase (`dying_phase`, #1100, see `dying`) fires nothing, is not
+//!   picked as a target, and an attack ordered on it ends; shots and beams already on their
+//!   way to it land.
 //! - `Hit` carries the weapon's damage as `hull` and zero `shield`: applying
 //!   it (shields, hull, destruction) is `damage.rs`, which rewrites the split.
 //!
@@ -172,6 +195,61 @@ fn shot_reload(timing: bool, w: &sta_content::WeaponDef, rng: &mut Rng) -> u64 {
     }
 }
 
+/// Marks the flight of a shot in the weapons digest.
+const FLIGHT_TAG: u64 = 0x666c_6967_6874_5f31;
+
+/// Marks the beams block of the weapons digest (hashed only when a beam is in flight).
+const BEAMS_TAG: u64 = 0x6265_616d_735f_3031;
+
+/// A beam in flight is lost when its target is farther from its shooter than this many
+/// times the weapon's range (`beam_damage_at_end`; a constant of the rule, not a data key).
+/// Measured, repeated, with controls, on stock Armada II; also read from the executable,
+/// static.
+/// Public so the client's drawing breaks a beam at the same distance (one source).
+pub const BEAM_BREAK_RANGE_FACTOR: i32 = 2;
+
+/// The ordnance class of the regular beam, the one class the evidence for
+/// `beam_damage_at_end` covers (a data key value, as in `sta_content::weapon::BEAM_CLASSES`).
+pub(crate) const REGULAR_BEAM_CLASS: &str = "phaser";
+
+/// Whether a shot of `w` under `features` lands when its life ends instead of when it
+/// fires: the switch is on, and `w` is a beam of the regular class with a life. Every other
+/// beam class, a weapon without ordnance (its class is its own) and a beam with no
+/// `duration` hit on the tick they fire, as without the switch.
+pub fn lands_at_end(features: &sta_content::Features, w: &sta_content::WeaponDef) -> bool {
+    features.beam_damage_at_end && w.kind == WeaponKind::Beam && w.class.0 == REGULAR_BEAM_CLASS && w.duration > 0
+}
+
+/// Whether a beam in flight still holds on this tick, and between what: its shooter and its
+/// target as they are now. `None`: the beam is lost and never applies its damage.
+///
+/// - The shooter or the target is gone, or the shooter has started to die (`dying_phase`,
+///   #1100; a shooter that dies during the life: measured, repeated). A dying target still
+///   takes the hit (measured, repeated).
+/// - The target is farther than [`BEAM_BREAK_RANGE_FACTOR`] times the weapon's range.
+///   The factor is measured; the points are INTERIM: the distance is taken centre to
+///   centre and flat, as `pick` takes a range today. In
+///   the original the distance runs to the target's centre from a point ahead of the
+///   shooter's centre (measured, in more than one geometry); that the point is the firing
+///   hardpoint is an inference. The sim has no hardpoint positions (a hardpoint is a model
+///   node name, resolved by the client), so the centre stands in until it has.
+/// - The target is phased (`Specials::phased`, the state in which `damage` applies no
+///   hit): a target that phases during the beam's life and comes back before its end
+///   takes nothing.
+///
+/// Deliberately not tested, the beam still lands (measured, once each): the shooter's
+/// weapons switched off since, a move order to it, the start of its cloak; the target
+/// cloaking (a phase cloak is the case above) or changing side. INTERIM, not staged: a
+/// new attack target for the shooter, an upgrade or a difficulty factor that completes
+/// during the life, a target replaced by an upgrade (STA64 follows the replacement).
+/// INTERIM, because STA64 has no such state at this place: a target hidden from its
+/// shooter. Not modelled: a body between the two.
+fn beam_holds<'a>(db: &ContentDb, units: &'a Entities, specials: &Specials, b: &Beam) -> Option<(&'a Entity, &'a Entity)> {
+    let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
+    let (s, t) = (alive(b.shooter).filter(|s| !s.flags.contains(UnitFlags::DYING))?, alive(b.target)?);
+    (flat(s.pos, t.pos).1 <= b.range * Fixed::from_int(BEAM_BREAK_RANGE_FACTOR) && !specials.phased(db, t)).then_some((s, t))
+}
+
 /// One hardpoint's firing state: the first tick its weapon may fire again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct Mount {
@@ -189,6 +267,29 @@ pub(crate) struct Shot {
     /// Units per tick.
     pub(super) step: Fixed,
     pub(super) damage: Fixed,
+    /// The shot's own flight under `ordnance_flight` (see `flight`); `None`: it homes on its
+    /// target every tick. Not part of this record: the snapshot keeps it in a record of its own.
+    #[serde(skip)]
+    pub(super) flight: Option<super::flight::Flight>,
+}
+
+/// A beam in flight under `beam_damage_at_end`: fired, its damage not yet applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Beam {
+    pub(super) shooter: EntityId,
+    pub(super) weapon: ContentKey,
+    pub(super) target: EntityId,
+    /// The tick the beam's life ends and its hit is sent: the fire tick plus `duration`
+    /// (measured, repeated, no spread; a beam with no `duration` hits on the fire tick and
+    /// is never kept).
+    pub(super) ends: u64,
+    /// INTERIM: every multiplier STA64 has (the target's damage row, the upgrade and the
+    /// chant factor) is applied at fire and the result carried. In the original the base
+    /// amount is carried and the shooter's side-wide factors are applied at the end (read
+    /// from the executable, static); which of STA64's multipliers are which is not settled.
+    pub(super) damage: Fixed,
+    /// The weapon's range. INTERIM: as it was at fire (when it is read is not settled).
+    pub(super) range: Fixed,
 }
 
 /// Weapon state of the whole sim.
@@ -198,6 +299,8 @@ pub struct Weapons {
     attack: Table<EntityId>,
     mounts: Table<Vec<Mount>>,
     shots: Vec<Shot>,
+    /// Beams whose life has not ended (`beam_damage_at_end`), in the order they fired.
+    beams: Vec<Beam>,
     next_shot: u32,
     pd: Pd,
     /// Crafts that hold fire this tick (SIM-36 `builder_hold_fire`: a
@@ -241,6 +344,7 @@ impl Weapons {
             attack: Table::from_rows(r.attack)?,
             mounts: Table::from_rows(r.mounts)?,
             shots: r.shots,
+            beams: Vec::new(),
             next_shot: r.next_shot,
             pd: Pd::from_rec(r.pd)?,
             held: Vec::new(),
@@ -250,6 +354,78 @@ impl Weapons {
     }
 
     /// SIM-74: the reload multipliers for the next step, `(unit, factor)` (sorted here).
+    /// The beams in flight, as the snapshot stores them (its own record, after [`WeaponsRec`]).
+    pub(crate) fn beams_rec(&self) -> Vec<Beam> {
+        self.beams.clone()
+    }
+
+    /// Puts back the beams a snapshot held; `false` (a corrupt record) when one names a
+    /// weapon `db` does not have. The order is the order they fired in (weapons differ in
+    /// `duration`, so end ticks need not ascend). A beam that names a unit that does not
+    /// exist is accepted, unlike such a row in other records: a unit destroyed after the
+    /// weapons step is removed in the same tick, so a snapshot taken at the end of that
+    /// tick holds its beams until the next step drops them.
+    pub(crate) fn set_beams(&mut self, db: Option<&ContentDb>, beams: Vec<Beam>) -> bool {
+        if db.is_some_and(|db| beams.iter().any(|b| db.weapon(b.weapon).is_none())) {
+            return false;
+        }
+        self.beams = beams;
+        true
+    }
+
+    /// The flights of the shots that have one, by shot id, as the snapshot stores them (its own record).
+    pub(crate) fn flights_rec(&self) -> Vec<(u32, super::flight::Flight)> {
+        self.shots.iter().filter_map(|s| s.flight.map(|f| (s.id, f))).collect()
+    }
+
+    /// Puts back the flights a snapshot taken at `tick` held; `false` (a corrupt record) when the ids do not
+    /// ascend, a row names a shot that is not in flight, a shot whose weapon does not fly this way (its switch is
+    /// off, or it is not a torpedo with a `lifeSpan`), or a flight no live game could have made (see
+    /// `flight::plausible`).
+    pub(crate) fn set_flights(&mut self, db: Option<&ContentDb>, rows: Vec<(u32, super::flight::Flight)>, tick: u64) -> bool {
+        if rows.windows(2).any(|w| w[0].0 >= w[1].0) {
+            return false;
+        }
+        for (id, f) in rows {
+            let Some(s) = self.shots.iter_mut().find(|s| s.id == id) else { return false };
+            let life = db.and_then(|db| db.weapon(s.weapon).and_then(|w| super::flight::life_ticks(db.weapon_features(w), w)));
+            if !life.is_some_and(|life| super::flight::plausible(&f, tick, life)) {
+                return false;
+            }
+            s.flight = Some(f);
+        }
+        true
+    }
+
+    /// A snapshot from before shots had a flight: each shot that would fly this way gets one, its heading toward
+    /// its target and its life counted from `tick` (INTERIM: the launch is not known).
+    pub(crate) fn adopt_flights(&mut self, db: &ContentDb, units: &Entities, tick: u64) {
+        for s in &mut self.shots {
+            let Some(w) = db.weapon(s.weapon) else { continue };
+            s.flight = super::flight::adopt(db.weapon_features(w), w, s.pos, units.get(s.target), tick);
+        }
+    }
+
+    /// Beams in flight.
+    pub fn beams_in_flight(&self) -> usize {
+        self.beams.len()
+    }
+
+    /// The beams in flight as the view shows them, sorted (derived, not state).
+    pub(crate) fn beam_rows(&self) -> Vec<crate::view::BeamRow> {
+        let mut rows: Vec<_> = self.beams.iter().map(|b| crate::view::BeamRow { shooter: b.shooter, weapon: b.weapon, target: b.target, ends: b.ends }).collect();
+        rows.sort_by_key(|r| (r.shooter, r.weapon, r.target, r.ends));
+        rows
+    }
+
+    /// The flown shots as the view shows them, by shot id (derived, not state).
+    pub(crate) fn shot_rows(&self) -> Vec<crate::view::ShotRow> {
+        self.shots
+            .iter()
+            .filter_map(|s| s.flight.map(|f| crate::view::ShotRow { id: s.id, shooter: s.shooter, weapon: s.weapon, target: s.target, pos: s.pos, heading: f.heading }))
+            .collect()
+    }
+
     pub(crate) fn set_crew_delay(&mut self, mut rows: Vec<(EntityId, Fixed)>) {
         rows.sort_by_key(|r| r.0);
         rows.dedup_by_key(|r| r.0);
@@ -265,6 +441,11 @@ impl Weapons {
         for shot in &mut self.shots {
             if shot.target == old {
                 shot.target = new;
+            }
+        }
+        for beam in &mut self.beams {
+            if beam.target == old {
+                beam.target = new;
             }
         }
     }
@@ -332,6 +513,7 @@ impl Weapons {
         self.attack.is_empty()
             && self.mounts.is_empty()
             && self.shots.is_empty()
+            && self.beams.is_empty()
             && self.next_shot == 0
             && self.pd.is_empty()
     }
@@ -358,10 +540,31 @@ impl Weapons {
             for f in [s.pos.x, s.pos.y, s.pos.z, s.step, s.damage] {
                 h.fixed(f);
             }
+            // Only a flown shot, so the digest of a game without `ordnance_flight` is unchanged.
+            if let Some(f) = s.flight {
+                h.u64(FLIGHT_TAG);
+                h.fixed(f.heading.0);
+                h.fixed(f.heading.1);
+                h.u64(f.ends);
+            }
         }
         h.u64(self.next_shot as u64);
         if !self.pd.is_empty() {
             self.pd.hash_into(h);
+        }
+        // Only when a beam is in flight, so the digest of a game without
+        // `beam_damage_at_end` is the one from before it.
+        if !self.beams.is_empty() {
+            h.u64(BEAMS_TAG);
+            h.u64(self.beams.len() as u64);
+            for b in &self.beams {
+                h.u64(b.shooter.0 as u64);
+                h.u64(b.weapon.0 as u64);
+                h.u64(b.target.0 as u64);
+                h.u64(b.ends);
+                h.fixed(b.damage);
+                h.fixed(b.range);
+            }
         }
     }
 
@@ -400,10 +603,12 @@ impl Weapons {
         use crate::ship_upgrades::{Effect, ShipUpgrades};
         let upgrades = ShipUpgrades::collect(db, units);
         let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
+        // An attack on a unit that has started to die ends (#1100: no new shot at it,
+        // measured once); shots and beams already on their way still land on it.
         let gone: Vec<EntityId> = self
             .attack
             .iter()
-            .filter(|(id, t)| !units.contains(*id) || alive(**t).is_none())
+            .filter(|(id, t)| !units.contains(*id) || alive(**t).is_none_or(|t| t.flags.contains(UnitFlags::DYING)))
             .map(|(id, _)| id)
             .collect();
         for id in gone {
@@ -428,6 +633,26 @@ impl Weapons {
         // Shots in flight home on the target's current position.
         let mut flying = Vec::with_capacity(self.shots.len());
         for mut s in std::mem::take(&mut self.shots) {
+            if s.flight.is_some() {
+                let target = super::flight::valid(units, specials, db, s.target);
+                match super::flight::fly(db, tick, &mut s, target) {
+                    super::flight::Fate::Gone => {}
+                    super::flight::Fate::Flying => flying.push(s),
+                    super::flight::Fate::Hit => {
+                        let Some(t) = target else { continue };
+                        events.push(SimEvent::Hit {
+                            target: s.target,
+                            by: s.shooter,
+                            weapon: s.weapon,
+                            facing: facing(t.heading, t.pos, s.pos),
+                            shield: Fixed::ZERO,
+                            hull: s.damage,
+                            at: t.pos,
+                        });
+                    }
+                }
+                continue;
+            }
             let Some(t) = alive(s.target) else { continue };
             let (dir, d) = flat(s.pos, t.pos);
             if d <= s.step {
@@ -448,6 +673,28 @@ impl Weapons {
             }
         }
         self.shots = flying;
+
+        // Beams in flight, in the order they fired: one that no longer holds is dropped
+        // (it never lands, even if its target comes back); one whose life ends lands now.
+        let mut lasting = Vec::with_capacity(self.beams.len());
+        for b in std::mem::take(&mut self.beams) {
+            let Some((s, t)) = beam_holds(db, units, specials, &b) else { continue };
+            if b.ends > tick {
+                lasting.push(b);
+                continue;
+            }
+            // INTERIM: the facing is taken centre to centre, as for every other hit.
+            events.push(SimEvent::Hit {
+                target: b.target,
+                by: b.shooter,
+                weapon: b.weapon,
+                facing: facing(t.heading, t.pos, s.pos),
+                shield: Fixed::ZERO,
+                hull: b.damage,
+                at: t.pos,
+            });
+        }
+        self.beams = lasting;
 
         // Compute after this tick's movement, using the same shared-vision rule
         // as WorldView (which then also leaves out `hidden = 1` units).
@@ -473,7 +720,9 @@ impl Weapons {
             self.init_mounts(tick, db, u.id, def, rng);
             // LUA-32: green never, yellow only after a recent enemy hit fires at a target other than the ordered one.
             let opportunity = alerts.opportunity_allowed(u.id, tick);
+            // #1100: a dying unit fires nothing (read from the executable, static).
             if u.flags.contains(UnitFlags::WEAPONS_OFF)
+                || u.flags.contains(UnitFlags::DYING)
                 || self.held.binary_search(&u.id).is_ok()
                 || specials.stasis(u.id, tick)
                 || specials.a2_held(u.id, crate::command::Subsystem::Weapons, tick)
@@ -570,6 +819,16 @@ impl Weapons {
                         pos: u.pos,
                         step,
                         damage,
+                        flight: super::flight::launch(features, w, u.heading, tick),
+                    });
+                } else if lands_at_end(features, w) {
+                    self.beams.push(Beam {
+                        shooter: u.id,
+                        weapon: w.key,
+                        target: t.id,
+                        ends: tick.saturating_add(w.duration),
+                        damage,
+                        range: w.range,
                     });
                 } else {
                     let face = facing(t.heading, t.pos, u.pos);
@@ -686,7 +945,7 @@ impl Weapons {
         ids: &[EntityId],
         target: EntityId,
     ) -> bool {
-        if !units.get(target).is_some_and(|t| t.hull[1] > Fixed::ZERO) {
+        if !units.get(target).is_some_and(|t| t.hull[1] > Fixed::ZERO && !t.flags.contains(UnitFlags::DYING)) {
             return false;
         }
         let mut any = false;
@@ -738,6 +997,7 @@ impl Weapons {
                 && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
                 && !unseen(t)
                 && t.hull[1] > Fixed::ZERO
+                && !t.flags.contains(UnitFlags::DYING)
                 && flat(u.pos, t.pos).1 <= range
                 && in_arc(u.heading, arc, u.pos, t.pos)
         };

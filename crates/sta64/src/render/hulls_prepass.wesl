@@ -11,7 +11,6 @@ struct HullParams {
     tint: vec4<f32>,
     misc: vec4<f32>,
     rim: vec4<f32>,
-    eye: vec4<f32>,
     cut: vec4<f32>,   // x: 1 to cut out at texture alpha 0.5
     uv: vec4<f32>,    // xy: the flipbook's UV offset
 };

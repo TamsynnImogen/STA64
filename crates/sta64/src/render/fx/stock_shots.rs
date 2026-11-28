@@ -45,9 +45,13 @@
 //! - **Early ends** (read from the executable, static): the owner gone ends a beam at once (a shot in
 //!   flight flies on: the sim still delivers its hit); a
 //!   target lost while `BEAM_MISS_LIFETIME` (counted from the shot) still runs moves the end to
-//!   the weapon's range along the last direction until it has run; lost after that, the beam
-//!   ends at once; a target further than the square root of two times the range ends it at
-//!   once. A planet blocking the path is not tested (no such information in the view).
+//!   the weapon's range until it has run (INTERIM: that the end goes to full range for that time is
+//!   established, along which line is not: the last aim line is taken; a target that reappears
+//!   inside the time does not resume the beam); lost after that, the beam
+//!   ends at once (read from the executable, static; not measured; under `beam_damage_at_end` a beam
+//!   the sim loses because its target is gone or phased is drawn the same way, and stays lost; one it loses because
+//!   its shooter is gone or dying, or its target is beyond twice the range, ends at once); a target further than twice the range ends it at once (this replaces an
+//!   earlier reading of the factor as the square root of two; #1068). A planet blocking the path is not tested (no such information in the view).
 //! - **Sim timing.** The sim applies a beam's damage on the fire tick (issue #1068); the original
 //!   applies it at the end of `lifeSpan`. The beam is drawn for the data's `lifeSpan` from the
 //!   fire event, whatever the sim's timing; a target the shot killed on the fire tick is held at
@@ -239,7 +243,8 @@ impl ShotSprites {
             .weapons()
             .flat_map(|w| [w.look.sprite.as_deref(), w.look.flare.as_ref().map(|f| f.sprite.as_str())])
             .flatten()
-            .chain(std::iter::once(stock_flares::IMPACT_SPRITE));
+            .chain(std::iter::once(stock_flares::IMPACT_SPRITE))
+            .chain(stock_flares::SPARK_FAMILY);
         for name in names {
             let key = name.to_ascii_lowercase();
             if map.contains_key(&key) {
@@ -398,12 +403,31 @@ pub struct StockShot {
     shield_end: Vec3,
     /// The target was already gone from the view when the shot was fired (the shot killed it).
     pinned: bool,
+    /// The shooter is one the client does not draw (#1145): the shot is drawn only while it is over ground in sight
+    /// (a beam: where it starts; a pulse or torpedo: where it is now). Interim: the original's rule is not established.
+    hidden_shooter: bool,
     /// The muzzle flare this shot raises on its first frame (a beam of a class with one).
     muzzle_flare: Option<FlareSpec>,
     /// The impact flare's sprite and size, until the beam has reached its target (once per beam).
     impact_flare: Option<FlareSpec>,
     /// A beam has reached its target (once per beam): its flare or its shield cap was raised then.
     arrived: bool,
+    /// A projectile whose sim flies it by its own flight (`ordnance_flight`, #1068): it is drawn where the view's
+    /// shot row says, not along the line to its target. `bound` is the row's shot number once it is found.
+    flown: bool,
+    bound: Option<u32>,
+    /// A flown shot's drawing: how far it was from its target when found, how far along it is (0 to 1), where it left
+    /// the hardpoint from the sim's own place, and where the aim point lies from the target's centre.
+    start_distance: f32,
+    progress: f32,
+    muzzle_offset: Vec3,
+    aim_offset: Vec3,
+    /// A flown shot the view never showed a row for (a view without rows): drawn as without the switch.
+    unbound_fallback: bool,
+    /// A flown shot's end height: the target's aim point (the sim keeps a shot at its shooter's height).
+    end_height: Option<f32>,
+    /// The sim lost this beam mid-life (latched: a target that comes back does not resume it).
+    sim_lost: bool,
     pub geom: Geom,
 }
 
@@ -417,6 +441,35 @@ impl StockShot {
     pub(super) fn beam_end_now(&self) -> Vec3 {
         self.shield_end
     }
+
+    /// Where a projectile at `body` is aimed and ends: the hull node chosen for the shot (the centre where the model
+    /// has none, a planet's sphere point towards the muzzle), whatever the shields do, so the flight never changes
+    /// line (read from the executable, static: the shot is aimed at the node). With shields up and ordnance that does
+    /// not ignore them the original lands the hit on the shield shape on its way there; that crossing is not
+    /// computed: the shot is drawn on to the node (INTERIM). The hull-hit spark is drawn at the same point.
+    pub(super) fn aim(&self, body: &Body) -> Vec3 {
+        beam_end(self.muzzle, body, true)
+    }
+
+    /// Where a beam ends on the hull of its target whatever the shields show: the chosen hardpoint, the centre where
+    /// the model has none, a planet's sphere towards the muzzle. `None` before the target has been seen.
+    pub(super) fn hull_end(&self) -> Option<Vec3> {
+        self.last_body.as_ref().map(|b| beam_end(self.muzzle, b, true))
+    }
+}
+
+/// Ticks of slack between the sim's view and the drawing's clock when the drawing asks whether the sim still holds
+/// a beam (`beam_damage_at_end`, #1068): STA64's own, so a beam is not dropped at the first or last tick of its life.
+const BEAM_VIEW_SLACK: f32 = 2.0;
+
+/// Ticks a flown shot may wait for its row in the view before it is drawn as without the switch: STA64's own.
+const SHOT_ROW_SLACK: f32 = 3.0;
+
+/// The squared distance beyond which a beam of `range` is lost: twice the range (the sim's own factor,
+/// measured, repeated; also read from the executable, static), squared.
+pub(super) fn break_distance_squared(range: f32) -> f32 {
+    let reach = sta_sim::combat::weapons::BEAM_BREAK_RANGE_FACTOR as f32 * range;
+    reach * reach
 }
 
 /// The nodes and bodies of the render side, for the systems of this module.
@@ -427,6 +480,7 @@ pub struct StockShots<'w, 's> {
     tables: Option<Res<'w, SpriteTables>>,
     content: Option<Res<'w, ContentRes>>,
     ents: Option<Res<'w, SimEntities>>,
+    fog: Option<Res<'w, crate::render::fog::FogState>>,
     teams: Option<Res<'w, crate::viewer::TeamColours>>,
     map_teams: Option<Res<'w, crate::viewer::MapTeamColours>>,
     children: Query<'w, 's, &'static Children>,
@@ -458,8 +512,23 @@ impl StockShots<'_, '_> {
         Some(self.transforms.get(node).ok()?.translation() - base)
     }
 
-    /// Whether `object`'s model is visible (no model, or none known: yes).
+    /// Whether the client draws unit `id`: with a fog grid, only a unit that has an entity (the units the local
+    /// player's side sees, #1145: the layers no longer hide what is drawn over unseen ground); without one, every
+    /// unit.
+    pub(super) fn client_draws(&self, id: EntityId) -> bool {
+        super::client_draws(self.ents.as_deref(), self.fog.is_some(), id)
+    }
+
+    /// Whether the ground under the render-space point is in sight now (without a grid: yes).
+    pub(super) fn ground_in_sight(&self, at: Vec3) -> bool {
+        self.fog.as_deref().is_none_or(|f| f.grid.visible_at(at.x, -at.z))
+    }
+
+    /// Whether `object`'s model is visible (no model known: yes, unless the client does not draw the unit).
     pub(super) fn object_visible(&self, object: EntityId, visibility: &Query<&InheritedVisibility>) -> bool {
+        if !self.client_draws(object) {
+            return false;
+        }
         self.ents.as_ref().and_then(|m| m.0.get(&object)).and_then(|e| visibility.get(*e).ok()).is_none_or(|v| v.get())
     }
 
@@ -467,6 +536,13 @@ impl StockShots<'_, '_> {
     pub(super) fn stock_path(&self, def: &WeaponDef) -> Option<ShotPath> {
         let tables = self.tables.as_deref()?;
         stock_spec(self.look(), def, &tables.0).map(|s| s.path)
+    }
+
+    /// A beam of `def` under `beam_damage_at_end` (#1068): the sim keeps it in flight and applies its damage when
+    /// its life ends (`sta_sim::combat::weapons::lands_at_end`). `false` under every other profile and for every
+    /// other weapon: the drawing then reads the beam as it always did.
+    pub(super) fn lands_at_end(&self, def: &WeaponDef) -> bool {
+        self.content.as_ref().is_some_and(|c| sta_sim::combat::weapons::lands_at_end(c.0.features(), def))
     }
 
     /// Whether the stock shield hit (`Effect::ShieldHits`) is the one drawing.
@@ -588,7 +664,17 @@ impl StockShots<'_, '_> {
             muzzle_flare,
             impact_flare,
             arrived: false,
+            flown: spec.path != ShotPath::Ribbon && sta_sim::combat::flight::flies(content.0.weapon_features(def), def),
+            bound: None,
+            start_distance: 0.0,
+            progress: 0.0,
+            muzzle_offset: Vec3::ZERO,
+            aim_offset: Vec3::ZERO,
+            unbound_fallback: false,
+            end_height: None,
+            sim_lost: false,
             geom: Geom::None,
+            hidden_shooter: !self.client_draws(shooter),
         });
         true
     }
@@ -606,22 +692,70 @@ pub(super) fn update_shots(
     mut store: ResMut<NodeParticles>,
     mut caps: ResMut<ShieldCapQueue>,
     fractions: Res<BeamFractions>,
+    mut points: ResMut<super::stock_hull_hits::HullHitPoints>,
     mut q: Query<(Entity, &mut StockShot)>,
 ) {
     let alpha = clock.alpha();
     let now_ticks = clock.now() * TICK_HZ as f64;
-    // The earliest matching shot in flight has arrived.
+    points.0.clear();
+    let mut hull_hits = Vec::new();
+    let mut matched: Vec<Entity> = Vec::new();
+    // The earliest matching shot in flight has arrived (one hit takes one shot: a shot already matched this frame is
+    // not matched again).
     for ev in msgs.read().map(|m| &m.0) {
-        if let SimEvent::Hit { target, by, weapon, .. } = ev {
-            let hit = q.iter().filter(|(_, s)| s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target)).min_by_key(|(_, s)| s.fired).map(|(e, _)| e);
+        if let SimEvent::Hit { target, by, weapon, hull, .. } = ev {
+            if hull.to_f32() > 0.0 {
+                hull_hits.push((*by, *weapon, *target));
+            }
+            // A flown shot bound to a row is matched by its row: the shot that hit is the one whose row is gone from this
+            // view (a later torpedo may arrive first, so the earliest fired is not the one). Only a shot with no row
+            // (not flown, or not yet bound) is matched as before, the earliest fired.
+            let same = |e: &Entity, s: &StockShot| !matched.contains(e) && s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target);
+            let hit = q
+                .iter()
+                .filter(|(e, s)| same(e, s) && s.bound.is_some_and(|id| link.real_curr().shot_row(id).is_none()))
+                .min_by_key(|(_, s)| s.fired)
+                .or_else(|| q.iter().filter(|(e, s)| same(e, s) && s.bound.is_none()).min_by_key(|(_, s)| s.fired))
+                .map(|(e, _)| e);
             if let Some(e) = hit {
+                matched.push(e);
+                // A projectile that took damage past the shields struck the hull node it was aimed at (the target
+                // hardpoint chosen for the shot, the centre where the model has none; read from the executable, static;
+                // the choice per shot is INTERIM): the hull-hit spark is drawn there (`stock_hull_hits`).
+                if hull.to_f32() > 0.0
+                    && let Ok((_, s)) = q.get(e)
+                    && let Some(body) = ctx.body(&link, *target, alpha, &offsets, s.target_node)
+                {
+                    points.0.push((*by, *weapon, *target, s.aim(&body)));
+                }
                 cmds.entity(e).try_despawn();
             }
         }
     }
+    // A flown shot finds its row in the view: the lowest shot number of its shooter, weapon and target that no
+    // other drawn shot holds, earliest fired first (the sim numbers its shots in the order they fire).
+    let mut rows_taken: BTreeSet<u32> = q.iter().filter_map(|(_, s)| s.bound).collect();
+    let mut waiting: Vec<(Tick, Entity)> = q.iter().filter(|(_, s)| s.flown && s.bound.is_none() && !s.unbound_fallback).map(|(e, s)| (s.fired, e)).collect();
+    waiting.sort();
+    let mut found: BTreeMap<Entity, u32> = BTreeMap::new();
+    for (_, e) in waiting {
+        let Ok((_, s)) = q.get(e) else { continue };
+        let Target::Entity(target) = s.target else { continue };
+        if let Some(row) = link.real_curr().shot_rows.iter().find(|r| !rows_taken.contains(&r.id) && r.shooter == s.shooter && r.weapon == s.weapon && r.target == target) {
+            rows_taken.insert(row.id);
+            found.insert(e, row.id);
+        }
+    }
     for (e, mut s) in &mut q {
         let age = (now_ticks - s.fired as f64) as f32;
-        if age >= s.life {
+        if let Some(id) = found.get(&e) {
+            s.bound = Some(*id);
+        }
+        // A flown shot lives as long as the sim holds it (its row), whatever the straight line would take.
+        if s.flown && s.bound.is_none() && !s.unbound_fallback && age >= SHOT_ROW_SLACK {
+            s.unbound_fallback = true;
+        }
+        if age >= s.life && s.bound.is_none() && !(s.flown && !s.unbound_fallback) {
             cmds.entity(e).try_despawn();
             continue;
         }
@@ -657,14 +791,50 @@ pub(super) fn update_shots(
                 Target::Point(p) => Some(Body::point(to_bevy(p.to_f32()))),
                 _ => None,
             };
+            // Under `beam_damage_at_end` the sim holds the beam until its life ends and drops it when it is lost
+            // (shooter or target gone, the shooter dying, the target phased, out of range): the drawing follows the
+            // sim, so the beam drawn and the damage that lands agree (#1068). The view and the drawing's clock may
+            // differ by a couple of ticks at the ends of the life, so a beam is judged lost only between them; once
+            // lost it stays lost (a target that comes back does not resume it: not established). The cause is read
+            // from the view, as the sim's own rule reads it. A shooter that is gone or dying, or a target beyond
+            // twice the range, ends the beam at once, as without the switch (read from the executable, static); a
+            // target that is gone or phased is a lost target below: drawn on while the miss timer runs, then ended.
+            // Every other beam is read as before.
+            let at_end_life = ctx.content.as_ref().and_then(|c| c.0.weapon(s.weapon)).filter(|w| ctx.lands_at_end(w)).map(|w| w.duration as f32);
+            if let (Some(life), Target::Entity(id)) = (at_end_life, s.target)
+                && age >= BEAM_VIEW_SLACK
+                && age < life - BEAM_VIEW_SLACK
+                && !link.real_curr().beam_held(s.shooter, s.weapon, id)
+            {
+                s.sim_lost = true;
+            }
+            if s.sim_lost
+                && let Target::Entity(id) = s.target
+            {
+                let view = link.real_curr();
+                let shooter_ends = view.unit(s.shooter).is_none_or(|u| u.flags.contains(sta_sim::view::UnitFlags::DYING));
+                let beyond = match (view.unit(s.shooter), view.unit(id)) {
+                    (Some(a), Some(b)) => {
+                        let (a, b) = (to_bevy(a.pos.to_f32()), to_bevy(b.pos.to_f32()));
+                        s.range > 0.0 && (a - b).with_y(0.0).length_squared() > break_distance_squared(s.range)
+                    }
+                    _ => false,
+                };
+                if shooter_ends || beyond {
+                    cmds.entity(e).try_despawn();
+                    continue;
+                }
+            }
             // A target the shot itself killed on the fire tick is held where it was for the beam's life.
-            let lost = live.is_none() && !s.pinned;
+            let lost = s.sim_lost || (live.is_none() && !s.pinned);
             if let Some(b) = live {
                 s.last_body = Some(b);
             }
             let end = if lost {
-                // A target lost while the miss timer runs: the end goes to the range along the last direction;
-                // lost after it, or with no timer, the beam ends.
+                // A target lost while the miss timer runs: the end goes to the weapon's range; lost after it, or with
+                // no timer, the beam ends (read from the executable, static; not measured). INTERIM: that the end goes
+                // to full range for that time is established, along which line is not: the last aim line is taken. A
+                // target that reappears inside the time does not resume the beam (not established).
                 if !s.miss.is_some_and(|m| age < m) {
                     cmds.entity(e).try_despawn();
                     continue;
@@ -672,8 +842,10 @@ pub(super) fn update_shots(
                 start + (s.last_end - start).try_normalize().unwrap_or(Vec3::Y) * s.range
             } else {
                 let body = s.last_body.clone().expect("a live or held body");
-                // Further than the square root of two times the range: ends at once.
-                if s.range > 0.0 && start.distance_squared(body.centre) > 2.0 * s.range * s.range {
+                // Further than twice the range: ends at once (read from the executable, static; the factor
+                // replaces an earlier reading of the square root of two).
+                // (Under `beam_damage_at_end` the sim's own break distance decides, above.)
+                if at_end_life.is_none() && s.range > 0.0 && start.distance_squared(body.centre) > break_distance_squared(s.range) {
                     cmds.entity(e).try_despawn();
                     continue;
                 }
@@ -691,11 +863,13 @@ pub(super) fn update_shots(
                 s.arrived = true;
                 let spec = s.impact_flare.take();
                 if let (Target::Entity(id), Some(body)) = (s.target, s.last_body.as_ref()) {
-                    // The beam's own `Hit` says whether the shield absorbed it. The sim applies a beam's damage on the fire
-                    // tick, so a beam that emptied the shield finds it down at arrival; in the original its damage lands at the
-                    // end of its life and the shield is still up: an absorbed beam makes a cap, not the impact flare (INTERIM,
-                    // until #1068). No record (no `Hit` delivered): the view decides, as before.
-                    let absorbed = !body.planet && !s.ignore_shield && ctx.shield_hits_stock() && fractions.before(s.shooter, s.weapon, id, s.fired).is_some();
+                    // Under `beam_damage_at_end` the sim has not applied the beam's damage yet, so the view's shield state at
+                    // arrival is the state the original draws it on: the view decides (#1068).
+                    // Otherwise (INTERIM): the beam's own `Hit` says whether the shield absorbed it. The sim applies a beam's
+                    // damage on the fire tick, so a beam that emptied the shield finds it down at arrival; in the original its
+                    // damage lands at the end of its life and the shield is still up: an absorbed beam makes a cap, not the
+                    // impact flare. No record (no `Hit` delivered): the view decides, as before.
+                    let absorbed = at_end_life.is_none() && !body.planet && !s.ignore_shield && ctx.shield_hits_stock() && fractions.before(s.shooter, s.weapon, id, s.fired).is_some();
                     if !absorbed && stock_flares::hull_hit(body, s.ignore_shield) {
                         if let Some(spec) = spec {
                             let flare = Flare {
@@ -729,17 +903,65 @@ pub(super) fn update_shots(
             let (a, b) = beam_segment(start, end, age, s.life, s.travel);
             s.geom = Geom::Segment { a, b };
         } else {
-            // Straight at the target's live place, as the other shots fly (the sim hits on arrival).
+            // Straight at the aim point on the target's live body, as the other shots fly (the sim hits on arrival): the
+            // hull node chosen for the shot, so the shot ends where its hull-hit spark is drawn (`StockShot::aim`).
             let to = match s.target {
-                Target::Entity(id) => point(&link, id, alpha).map(|p| p + shifted(&offsets, id)),
+                Target::Entity(id) => match ctx.body(&link, id, alpha, &offsets, s.target_node) {
+                    Some(body) => Some(s.aim(&body)),
+                    None => point(&link, id, alpha).map(|p| p + shifted(&offsets, id)),
+                },
                 Target::Point(p) => Some(to_bevy(p.to_f32())),
                 _ => None,
             };
             if let Some(t) = to {
                 s.to = t;
             }
-            let pos = s.muzzle.lerp(s.to, (age / s.life).clamp(0.0, 1.0));
-            let dir = (s.to - s.muzzle).normalize_or(Vec3::Z);
+            let (pos, dir) = match s.bound {
+                // Where the sim holds the shot, with two corrections that fade in and out over its flight: it leaves the
+                // hardpoint, not the shooter's centre, and it ends on the aim point, not the target's centre. The drawn
+                // shot's last place is the aim point to within what is left of one step; the sim's own centre-to-centre
+                // rule decides when it arrives (INTERIM: the corrections are STA64's own blend).
+                Some(id) => {
+                    let Some(row) = link.real_curr().shot_row(id) else {
+                        // The sim no longer holds the shot and no hit came for it: it expired (or was lost with
+                        // its shooter's shot-down): it vanishes with no hit effect.
+                        cmds.entity(e).try_despawn();
+                        continue;
+                    };
+                    let now = to_bevy(row.pos.to_f32());
+                    let before = link.prev().shot_row(id).map(|r| to_bevy(r.pos.to_f32()));
+                    let sim_at = before.map_or(now, |b| b.lerp(now, alpha));
+                    let target_at = match s.target {
+                        Target::Entity(t) => point(&link, t, alpha).map(|p| p + shifted(&offsets, t)),
+                        _ => None,
+                    };
+                    if s.start_distance == 0.0 {
+                        s.start_distance = target_at.map_or(1.0, |c| (sim_at - c).with_y(0.0).length()).max(1.0);
+                        s.muzzle_offset = s.muzzle - now;
+                    }
+                    if let (Some(c), Target::Entity(t)) = (target_at, s.target) {
+                        s.progress = (1.0 - (sim_at - c).with_y(0.0).length() / s.start_distance).clamp(0.0, 1.0);
+                        if let Some(body) = ctx.body(&link, t, alpha, &offsets, s.target_node) {
+                            s.aim_offset = s.aim(&body) - body.centre;
+                            s.end_height = Some(s.aim(&body).y);
+                        }
+                    }
+                    let mut pos = sim_at + s.muzzle_offset * (1.0 - s.progress) + s.aim_offset * s.progress;
+                    // The sim moves a shot in the ground plane and keeps its shooter's height: the drawn height runs from
+                    // the hardpoint to the aim point's as the shot closes, so it ends on the node in all three axes.
+                    if let Some(end) = s.end_height {
+                        pos.y = (sim_at.y + s.muzzle_offset.y) * (1.0 - s.progress) + end * s.progress;
+                    }
+                    (pos, Vec3::new(row.heading.0.to_f32(), 0.0, -row.heading.1.to_f32()).normalize_or(Vec3::Z))
+                }
+                // A flown shot waits for its row hidden (up to the slack, then the old line is drawn): INTERIM, STA64's own,
+                // so it does not jump from the straight line to the row's place when it binds.
+                None if s.flown && !s.unbound_fallback => {
+                    s.geom = Geom::None;
+                    continue;
+                }
+                None => (s.muzzle.lerp(s.to, (age / s.life).clamp(0.0, 1.0)), (s.to - s.muzzle).normalize_or(Vec3::Z)),
+            };
             s.geom = match s.path {
                 ShotPath::Sprite => Geom::Billboard { c: pos },
                 _ => {
@@ -747,6 +969,28 @@ pub(super) fn update_shots(
                     Geom::Segment { a: head, b: tail }
                 }
             };
+        }
+        // #1145: a shot of a shooter the client does not draw is drawn only while it is over ground in sight.
+        if s.hidden_shooter {
+            let head = match s.geom {
+                Geom::Billboard { c } => c,
+                Geom::Segment { a, .. } if s.path != ShotPath::Ribbon => a,
+                _ => s.muzzle,
+            };
+            if !ctx.ground_in_sight(head) {
+                s.geom = Geom::None;
+            }
+        }
+    }
+    // Where each beam's hull hit struck: its end on the hull (the hull-hit spark is drawn there, `stock_hull_hits`).
+    for (by, weapon, target) in hull_hits {
+        let end = q
+            .iter()
+            .filter(|(_, s)| s.path == ShotPath::Ribbon && s.shooter == by && s.weapon == weapon && s.target == Target::Entity(target))
+            .max_by_key(|(_, s)| s.fired)
+            .and_then(|(_, s)| s.hull_end());
+        if let Some(end) = end {
+            points.0.push((by, weapon, target, end));
         }
     }
 }
@@ -793,6 +1037,43 @@ pub fn additive_state(d: &mut RenderPipelineDescriptor) {
         for t in f.targets.iter_mut().flatten() {
             t.blend = Some(BlendState { color: one, alpha: one });
         }
+    }
+}
+
+/// The vertex attributes the material's fragment stage reads (its inputs: world position, normal, uv and the colour at
+/// location 5): the ones a mesh drawn with [`StockShotMaterial`] must carry, or its pipeline cannot be built (the
+/// validation error ends the game, #1418). Names of the ones a mesh lacks; empty when it is complete.
+///
+/// Every mesh a stock effect hands to the material, by where it is built (the table test of each module checks them):
+/// shots, flares, hull-hit and death sparks, impact flares (one batch mesh per sprite, [`fill_batch_mesh`]); shield caps
+/// (`stock_shield_hits`); shields-down bands (`stock_shields_down`); explosion ring and cluster quad
+/// (`stock_explosions`). The other users of the unit quad (the warp flash, the sprite nodes of models, the special
+/// effects) draw it with other materials, whose shaders do not need a vertex colour.
+#[cfg(test)]
+pub(super) fn missing_attributes(mesh: &Mesh) -> Vec<&'static str> {
+    [
+        ("position", Mesh::ATTRIBUTE_POSITION.id),
+        ("normal", Mesh::ATTRIBUTE_NORMAL.id),
+        ("uv", Mesh::ATTRIBUTE_UV_0.id),
+        ("colour", Mesh::ATTRIBUTE_COLOR.id),
+    ]
+    .into_iter()
+    .filter(|(_, id)| mesh.attribute(*id).is_none())
+    .map(|(name, _)| name)
+    .collect()
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    /// Every shot, flare and spark of every sprite is drawn from a batch mesh filled by one function: it has all four.
+    #[test]
+    fn a_batch_mesh_carries_the_attributes_the_material_reads() {
+        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        assert_eq!(missing_attributes(&m).len(), 4, "a new batch mesh is empty (and hidden until filled)");
+        fill_batch_mesh(&mut m, vec![[0.0; 3]; 3], vec![[0.0; 2]; 3], vec![[1.0; 4]; 3], vec![0, 1, 2]);
+        assert!(missing_attributes(&m).is_empty());
     }
 }
 
@@ -944,16 +1225,21 @@ fn draw_shots(
         // The batch sorts among the blended things at its centroid; its vertices are relative to it.
         let centre = g.pos.iter().fold(Vec3::ZERO, |a, p| a + Vec3::from(*p)) / g.pos.len() as f32;
         let pos: Vec<[f32; 3]> = g.pos.iter().map(|p| (Vec3::from(*p) - centre).to_array()).collect();
-        let normals = vec![[0.0, 0.0, 1.0]; pos.len()];
         cmds.entity(b.entity).try_insert((Visibility::Inherited, Transform::from_translation(centre)));
         if let Some(mut m) = meshes.get_mut(&b.mesh) {
-            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-            m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, g.uv);
-            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, g.col);
-            m.insert_indices(Indices::U32(g.idx));
+            fill_batch_mesh(&mut m, pos, g.uv, g.col, g.idx);
         }
     }
+}
+
+/// Give a batch's mesh everything the material's fragment stage reads (position, normal, uv, colour) and its indices.
+fn fill_batch_mesh(m: &mut Mesh, pos: Vec<[f32; 3]>, uv: Vec<[f32; 2]>, col: Vec<[f32; 4]>, idx: Vec<u32>) {
+    let normals = vec![[0.0, 0.0, 1.0]; pos.len()];
+    m.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    m.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+    m.insert_indices(Indices::U32(idx));
 }
 
 pub struct StockShotsPlugin;
@@ -962,7 +1248,7 @@ impl Plugin for StockShotsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Shots);
-        app.init_resource::<ShieldCapQueue>();
+        app.init_resource::<ShieldCapQueue>().init_resource::<super::stock_hull_hits::HullHitPoints>();
         app.init_resource::<ShotSprites>().init_resource::<ShotBatches>().init_resource::<NodeParticles>();
         app.add_systems(
             Update,

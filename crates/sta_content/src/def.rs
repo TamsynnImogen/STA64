@@ -446,6 +446,9 @@ pub struct UnitDef {
     /// Armada I Borg-physics keys from the craft's own physics file (CON-52):
     /// `Some` only under `Sta1Classic` for a craft whose `borgPhysics` is set.
     pub a1_borg: Option<crate::A1Borg>,
+    /// Armada I craft-integrator dynamics from this unit's own `physicsFile`.
+    /// Present only for mobile units under the effective A1 profile.
+    pub a1_combat_dynamics: Option<crate::A1Dynamics>,
     /// `miningMultiplier` and `resourcesCanHandle` of a class `p_mining` station
     /// (CON-51). `None` for other classes and for a station with neither key.
     pub station_mining: Option<crate::StationMining>,
@@ -769,6 +772,7 @@ impl UnitDef {
             fleet_cap: None,
             orbit_time: None,
             a1_borg: None,
+            a1_combat_dynamics: None,
             station_mining: None,
             trade_station: None,
             trade_cargo_capacity: None,
@@ -1203,6 +1207,9 @@ pub struct WeaponBaseDef {
     pub omega_turn: Option<Fixed>,
     /// Ordnance `seekTime`, seconds.
     pub seek_time: Option<Fixed>,
+    /// Ordnance `lifeSpan`, seconds: how long a flown shot lives (read by the sim under
+    /// `ordnance_flight`; `WeaponDef::duration` is the life of beams only).
+    pub life_span: Option<Fixed>,
     /// Ordnance `shotAccel`.
     pub shot_accel: Option<Fixed>,
     /// Ordnance `detectRadius` (mines).

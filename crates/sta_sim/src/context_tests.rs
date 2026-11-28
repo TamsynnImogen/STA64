@@ -79,7 +79,7 @@ fn units_that_cannot_carry_the_winning_order_keep_their_own() {
     let mut s = scene();
     let order = |seq, o| Command { player: PlayerId(0), seq, kind: CommandKind::Order(o) };
     let away = Vec3::from_f32([1100.0, 0.0, 9000.0]);
-    s.sim.step(&[order(1, Order::Move { units: vec![s.cruiser], to: away, queue: false })]);
+    s.sim.step(&[order(1, Order::Move { units: vec![s.cruiser], to: away, queue: false, mode: None })]);
     let v = s.sim.view();
     let mine = context_order(Some(&s.db), &v, PlayerId(0), &[s.cruiser, s.miner], s.moon).unwrap();
     s.sim.step(&[order(2, mine)]);

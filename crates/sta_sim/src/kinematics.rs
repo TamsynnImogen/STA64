@@ -236,12 +236,16 @@ pub(crate) struct Plan {
     /// Speed limit in place of `impulseSpeed` (`combatSpeed` on a stock
     /// approach); never above it.
     pub cap: Option<Fixed>,
-    /// In warp: fly straight along the heading toward `warpSpeed`.
+    /// In warp: fly straight along the heading toward `warpSpeed`. Under `warp_shape`: the
+    /// craft is to be at warp (entering it, or flying it), as [`step_shaped`] runs it.
     pub warp: bool,
-    /// Dropping out of warp: straight on, down to the cap.
+    /// Dropping out of warp: straight on, down to the cap. Not used under `warp_shape`, where
+    /// the craft's warp row says that it is leaving.
     pub warp_out: bool,
     /// With no target: turn to face this point while braking.
     pub face: Option<Vec3>,
+    /// Local pursuit point for Armada I Director’s Cut.
+    pub dogfight: Option<Vec3>,
 }
 
 /// Speed change per second in and out of warp, as a multiple of `warpSpeed`:
@@ -250,6 +254,119 @@ pub(crate) struct Plan {
 /// executable's warp-out runs 0.1 to 3 s, static). No ODF key sets it.
 fn warp_rate() -> Fixed {
     Fixed::from_int(2)
+}
+
+/// The ramp between impulse and warp speed as the view reports it: its length
+/// in ticks (rounded up) and how many ticks of it `speed` has covered, going
+/// up (`rising`) or down. Whole ticks of the same rate [`step_planned`] uses;
+/// zero outside the range between impulse and warp speed.
+pub(crate) fn warp_ramp(stats: &sta_content::MoveStats, speed: Fixed, rising: bool) -> (u32, u32) {
+    let (vi, vw) = (stats.max_speed, stats.warp_speed);
+    if vw <= vi {
+        return (0, 0);
+    }
+    let step = vw * warp_rate() * dt();
+    let ticks = |span: Fixed| -> u32 {
+        let bits = (span / step).to_bits().max(0);
+        u32::try_from((bits + Fixed::ONE.to_bits() - 1) >> 32).unwrap_or(u32::MAX)
+    };
+    let len = ticks(vw - vi);
+    let done = if rising { speed - vi } else { vw - speed };
+    (len, ticks(done.max(Fixed::ZERO).min(vw - vi)).min(len))
+}
+
+/// Whether `u` enters, flies and leaves warp by the measured shape: the feature switch
+/// `warp_shape` (the unit's, as `ContentDb::unit_features` resolves it).
+pub(crate) fn warp_shape(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
+    db.is_some_and(|db| db.unit(u.def).map_or(db.features(), |d| db.unit_features(d)).warp_shape)
+}
+
+/// One tick at the speed `v` plus the extra forward `shift`, with the model's own controller
+/// doing the steering as it would at impulse speed: the craft turns (and hands a waypoint on)
+/// as on any move, and its travel along the heading the tick began with is `v` for the tick
+/// and the shift. INTERIM: the turn limits at warp are taken to be the normal ones (not
+/// measured).
+fn steer_at(model: Model, u: &mut Unit, leg: Leg, v: Fixed, shift: Fixed) {
+    let dt = dt();
+    let (from, heading, goal) = (u.pos, u.heading, u.target);
+    u.speed = u.speed.min(u.stats.max_speed);
+    step(model, u, leg);
+    let ds = v * dt + shift;
+    u.pos = Vec3 { x: from.x + heading.0 * ds, y: from.y, z: from.z + heading.1 * ds };
+    if let Some(t) = goal {
+        match model {
+            Model::Smooth => climb_line(u, t, ds, flat_distance(from, t), dt),
+            _ => climb(u, t, dt),
+        }
+    }
+    u.speed = v;
+}
+
+/// The leaving side of a warp under `warp_shape`, for this tick: a craft still faster than its
+/// impulse speed starts its exit here (its speed drops to impulse at once, measured); the
+/// return value is the extra forward shift of the tick, and the row is dropped with the last
+/// tick of its ramp. `forced`: the craft leaves whatever its row says (its engines are off).
+pub(crate) fn leave_step(warp: &mut crate::movement::approach::Warp, u: &mut Unit, now: sta_core::Tick, radius: Fixed, forced: bool) -> Fixed {
+    use crate::movement::approach::{Ramp, WARP_OUT};
+    let (vi, vw) = (u.stats.max_speed, u.stats.warp_speed);
+    if forced {
+        warp.end(u.id);
+    }
+    if warp.ramp(u.id).is_none() {
+        if u.speed <= vi {
+            warp.remove(u.id);
+            return Fixed::ZERO;
+        }
+        warp.set_phase(u.id, WARP_OUT);
+        warp.set_ramp(u.id, Ramp::leaving(now, radius, vw, vi, u.speed));
+    }
+    u.speed = u.speed.min(vi);
+    let Some(ramp) = warp.ramp(u.id) else { return Fixed::ZERO };
+    if ramp.ends_at(now) {
+        warp.remove(u.id);
+    }
+    ramp.shift_at(now, false)
+}
+
+/// One tick of a craft that has a warp phase, under `warp_shape` (#1102 part 2; measured on
+/// stock Armada II unless marked). There is no speed ramp.
+///
+/// - **Entering:** the craft keeps the speed it had; over the later half of its ramp it is
+///   carried forward by the extra shift; with the ramp's last tick it is at warp speed.
+/// - **At warp:** warp speed, steering with the normal controller.
+/// - **Leaving:** the speed drops to impulse at once, the extra shift comes over the first
+///   half of the ramp, and the craft flies on under its plan. A craft whose entry is cut short
+///   leaves on the ramp it has (read from the executable, static; INTERIM).
+pub(crate) fn step_shaped(model: Model, u: &mut Unit, leg: Leg, plan: Option<Plan>, warp: &mut crate::movement::approach::Warp, now: sta_core::Tick, radius: Fixed) {
+    use crate::movement::approach::{ENTERING, IN_WARP, Ramp};
+    let (vi, vw) = (u.stats.max_speed, u.stats.warp_speed);
+    if !(plan.is_some_and(|p| p.warp) && vw > vi) {
+        warp.end(u.id);
+    }
+    match warp.phase(u.id) {
+        Some(ENTERING) => {
+            let ramp = warp.ramp(u.id).unwrap_or_else(|| {
+                let ramp = Ramp::entering(now, radius, vw, vi, u.speed.min(vi));
+                warp.set_ramp(u.id, ramp);
+                ramp
+            });
+            let held = u.speed.min(vi);
+            steer_at(model, u, leg, held, ramp.shift_at(now, true));
+            if ramp.ends_at(now) {
+                warp.set_phase(u.id, IN_WARP);
+                u.speed = vw;
+            }
+        }
+        Some(IN_WARP) => steer_at(model, u, leg, vw, Fixed::ZERO),
+        _ => {
+            let shift = leave_step(warp, u, now, radius, false);
+            let heading = u.heading;
+            let plan = Plan { warp: false, warp_out: false, ..plan.unwrap_or_default() };
+            step_planned(model, u, leg, plan);
+            u.pos.x = u.pos.x + heading.0 * shift;
+            u.pos.z = u.pos.z + heading.1 * shift;
+        }
+    }
 }
 
 /// One tick of `u` under an approach plan: warp, the warp-out down to the
@@ -324,6 +441,49 @@ fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
     }
 }
 
+/// The rate at which a craft that is not under power loses speed, per second: each tick the
+/// speed falls by this rate times the tick's length times itself, a continuous decay at that
+/// rate stepped per tick (so after one second a little more is left than one minus the rate).
+/// The one constant for both drifts, which are the same motion in the original: a craft
+/// coasting with its engines off (`engines_off_drift`; measured, coarse, two repetitions) and a
+/// dying craft (`dying_phase`; measured, repeated), on stock Armada II. INTERIM for the exact
+/// curve.
+pub const DRIFT_DECAY: Fixed = Fixed::from_bits(19 * (1i64 << 32) / 100);
+
+/// Whether `u` coasts this tick: a craft whose engines are offline, that still has speed,
+/// under the feature switch `engines_off_drift` (the unit's, as `ContentDb::unit_features`
+/// resolves it). Measured with the engines switched off by a script; engines destroyed by
+/// damage set the same flag, and the movement code of the original tests the same
+/// condition either way (read from the executable, static), but that case was not staged.
+fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
+    u.kind == crate::world::EntityKind::Craft
+        && u.flags.contains(crate::view::UnitFlags::ENGINES_OFF)
+        && u.speed > Fixed::ZERO
+        && db.is_some_and(|db| db.unit(u.def).map_or(db.features(), |d| db.unit_features(d)).engines_off_drift)
+}
+
+/// One tick of drifting for a craft that is not under power, the one function for a craft
+/// coasting with its engines off and for a dying craft: straight on along the heading at the
+/// present speed, which then falls by [`DRIFT_DECAY`]. No turn and no power: the heading is
+/// left as it is (a spin a script gave an engines-off craft is `step_drifting_spin`'s,
+/// unchanged) and nothing steers towards a target; a coasting craft keeps its target for when
+/// its engines return.
+///
+/// A craft that was at warp is first brought down to its impulse speed and drifts from there
+/// (measured for engines going off: the normal warp exit on the next tick, then the drift).
+/// Under `warp_shape` the caller adds the exit's forward shift ([`leave_step`]); without it the
+/// drop is all there is.
+///
+/// The map's edge needs nothing here: the confinement that holds every unit on the map holds a
+/// drifting craft too (the caller applies it to this step's result).
+pub(crate) fn coast(u: &mut Unit) {
+    let hz = Fixed::from_int(TICK_HZ as i32);
+    u.speed = u.speed.min(u.stats.max_speed);
+    u.pos.x = u.pos.x + u.heading.0 * u.speed / hz;
+    u.pos.z = u.pos.z + u.heading.1 * u.speed / hz;
+    u.speed = u.speed - u.speed * DRIFT_DECAY / hz;
+}
+
 impl Sim {
     /// Step every mobile unit under the content's movement model; units
     /// with an approach plan (ascending id) step under it.
@@ -338,7 +498,30 @@ impl Sim {
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
         self.step_drifting_spin();
         let db = self.content.as_deref();
-        for u in self.units.iter_mut().filter(|u| u.mobile()) {
+        // A dying unit drifts instead (#1100, `Sim::drift_dying`): it is not stepped here, and one
+        // whose engines are off as well is not coasted twice.
+        for u in self.units.iter_mut().filter(|u| (u.mobile() || drifts(db, u)) && !self.dying.contains(u.id)) {
+            if !u.mobile() {
+                // Engines offline and still moving: it coasts, held by the same confinement
+                // as a craft under power.
+                let previous = u.pos;
+                // `warp_shape`: one that was at warp first leaves it the normal way (measured).
+                let shaped = warp_shape(db, u) && (u.speed > u.stats.max_speed || self.approach_warp.phase(u.id).is_some());
+                let shift = if shaped {
+                    let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius);
+                    leave_step(&mut self.approach_warp, u, self.tick, radius, true)
+                } else {
+                    Fixed::ZERO
+                };
+                coast(u);
+                u.pos.x = u.pos.x + u.heading.0 * shift;
+                u.pos.z = u.pos.z + u.heading.1 * shift;
+                if self.confinement.is_active() && u.pos != previous {
+                    let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
+                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));
+                }
+                continue;
+            }
             if self.specials.engines_held(u.id, self.tick) {
                 u.speed = Fixed::ZERO;
                 u.omega = Fixed::ZERO;
@@ -349,8 +532,17 @@ impl Sim {
                 _ => &[],
             };
             let previous = u.pos;
-            let a1 = if model == Model::A1 { db.and_then(|db| a1::params(db, u.def)) } else { None };
             let plan = plans.binary_search_by_key(&u.id, |p| p.0).ok().map(|i| plans[i].1);
+            let dogfight = plan.is_some_and(|p| p.dogfight.is_some());
+            let a1 = db.and_then(|db| {
+                if dogfight {
+                    a1::combat_params(db, u.def)
+                } else if model == Model::A1 {
+                    a1::params(db, u.def)
+                } else {
+                    None
+                }
+            });
             let cap = caps.binary_search_by_key(&u.id, |c| c.0).ok().map(|i| caps[i].1);
             let own = (u.stats.max_speed, u.stats.warp_speed, u.stats.turn_omega);
             if let Some((impulse, warp)) = cap {
@@ -365,6 +557,11 @@ impl Sim {
             match (&a1, plan) {
                 // Armada I (SIM-66): its own step; no warp phase, no drop-out.
                 (Some(p), plan) => a1::step(u, p, queued, plan),
+                // `warp_shape`: a craft with a warp phase enters, flies and leaves by the shape.
+                (None, plan) if self.approach_warp.phase(u.id).is_some() && warp_shape(db, u) => {
+                    let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius);
+                    step_shaped(model, u, Leg { queued, a1: None }, plan, &mut self.approach_warp, self.tick, radius);
+                }
                 (None, Some(plan)) => step_planned(model, u, Leg { queued, a1: None }, plan),
                 // Out of warp with no attack left: the warp-out still runs.
                 (None, None) if u.speed > u.stats.max_speed => step_planned(model, u, Leg { queued, a1: None }, Plan::default()),
@@ -741,7 +938,11 @@ mod smooth {
     pub(super) fn face(u: &mut Unit, err: Fixed, dt: Fixed) {
         let lim = limits(u);
         let (ds, v) = vc(u.speed, Fixed::ZERO, lim.accel, dt);
-        let (dyaw, w) = pc(err, u.omega, lim.alpha, lim.omega, dt);
+        let (dyaw, mut w) = steer_turn(u, &lim, err, dt);
+        // The controller stops within its tolerance of a zero limit; that is at rest.
+        if lim.alpha > Fixed::ZERO && lim.omega <= tol() && w.abs() < tol() {
+            w = Fixed::ZERO;
+        }
         u.speed = v.max(Fixed::ZERO);
         u.omega = w;
         apply(u, dyaw, ds);
@@ -753,6 +954,19 @@ mod smooth {
     /// then takes the full-speed rate. INTERIM: the original's spin-down is not measured.
     fn spin_down_alpha(u: &Unit, lim: &Limits) -> Fixed {
         if lim.alpha > Fixed::ZERO { lim.alpha } else { u.stats.turn_alpha * lim.omega_full }
+    }
+
+    /// The turn toward `err` radians: the time-optimal controller while the craft has turn
+    /// acceleration at its speed; with none (`turnAlphaFractionAtRest` 0 at rest, or a craft
+    /// held at the speed floor) it cannot start a turn, and a rate it still has is braked
+    /// like [`halt`] brakes it, so it is not kept for ever. With turn acceleration this is
+    /// exactly the controller as before.
+    fn steer_turn(u: &Unit, lim: &Limits, err: Fixed, dt: Fixed) -> (Fixed, Fixed) {
+        if lim.alpha > Fixed::ZERO {
+            pc(err, u.omega, lim.alpha, lim.omega, dt)
+        } else {
+            vc(u.omega, Fixed::ZERO, spin_down_alpha(u, lim), dt)
+        }
     }
 
     /// No target: brake to rest and stop turning.
@@ -868,7 +1082,7 @@ mod smooth {
                     aim_err = aim_err * share;
                 }
             }
-            pc(aim_err, u.omega, lim.alpha, lim.omega, dt)
+            steer_turn(u, &lim, aim_err, dt)
         };
 
         u.speed = v.max(Fixed::ZERO);
@@ -881,4 +1095,8 @@ mod smooth {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod a1_tests;
+mod drift_tests;
+#[cfg(test)]
+mod warp_shape_tests;
+#[cfg(test)]
+pub(crate) mod a1_tests;

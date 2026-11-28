@@ -30,8 +30,16 @@ use crate::app::GameSet;
 use crate::clock::AnimClock;
 
 #[cfg(test)]
+#[path = "sim_link_warp_tests.rs"]
+mod warp_tests;
+
+#[cfg(test)]
 #[path = "sim_link_production_tests.rs"]
 mod production_tests;
+
+#[cfg(test)]
+#[path = "sim_link_dying_tests.rs"]
+mod dying_tests;
 
 /// The running world source, its router and the last two views.
 #[derive(Resource)]
@@ -45,7 +53,6 @@ pub struct SimLink {
     /// Resource-node amounts at the same tick as `curr` (UI-48).
     nodes: Vec<sta_sim::economy::view::NodeView>,
     systems: Vec<sta_sim::combat::damage::SystemView>,
-    warp_phases: Vec<(EntityId, bool)>,
     impulse_caps: Vec<(EntityId, sta_sim::Fixed)>,
     /// Who this client's [`CommandQueue`] speaks for.
     player: PlayerId,
@@ -66,6 +73,26 @@ pub struct SimLink {
     /// A read-only client with no player seat. Only presentation views are unrestricted.
     observer: bool,
     pub(crate) mcp: Option<crate::mcp::SeatControl>,
+    /// Commands handed to the router that no tick has taken yet (single player: the router is local).
+    /// A save keeps them with the client's state, so a load applies them on the next tick as the
+    /// uninterrupted game would (UI-55).
+    in_flight: Vec<Command>,
+}
+
+/// What a load gives a link in place of the game it was built with (UI-55, ADR 0010). Used by the
+/// save module; the allows keep this seam change building alone.
+#[allow(dead_code)]
+pub struct Restored {
+    /// The saved sim, at the saved tick.
+    pub sim: sta_sim::Sim,
+    /// The journal from tick 0 to the saved tick; the link goes on logging into it.
+    pub replay: Replay,
+    /// The computer players, restored.
+    pub controllers: Vec<Box<dyn Controller>>,
+    /// Commands that were on their way to the next tick when the game was saved, in submission order.
+    pub in_flight: Vec<Command>,
+    /// The link's next command number at the save (one counter for player and sandbox commands).
+    pub next_seq: u32,
 }
 
 impl SimLink {
@@ -75,9 +102,46 @@ impl SimLink {
         let cargo = source.cargo_view();
         let nodes = source.node_view();
         let systems = source.system_view();
-        let warp_phases = source.warp_phases();
         let impulse_caps = source.impulse_caps();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, warp_phases, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false, mcp: None }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false, mcp: None, in_flight: Vec::new() }
+    }
+
+    /// Commands submitted and not yet taken by a tick, in submission order (UI-55: a save keeps them).
+    #[allow(dead_code)]
+    pub fn in_flight(&self) -> &[Command] {
+        &self.in_flight
+    }
+
+    /// The computer players, for a save to ask each for its record.
+    #[allow(dead_code)]
+    pub fn controller_refs(&mut self) -> &[Box<dyn Controller>] {
+        self.controllers.get().as_slice()
+    }
+
+    /// The next command number: one counter for the player's and the sandbox's commands (a save stores it).
+    #[allow(dead_code)]
+    pub fn next_seq(&self) -> u32 {
+        self.seq
+    }
+
+    /// Replaces the game this link runs with a saved one (UI-55), as the editor's undo swaps the source:
+    /// the views are made again, the journal continues the saved one, the command counter is the saved
+    /// one and the in-flight commands go to a new router in their order. The controllers do not think:
+    /// a save is taken after they thought about the last step, and their commands are in flight.
+    #[allow(dead_code)]
+    pub(crate) fn restore(&mut self, r: Restored) {
+        let Restored { sim, replay, controllers, in_flight, next_seq } = r;
+        *self.source.get() = Box::new(sim);
+        *self.router.get() = Box::new(sta_sim::command::LocalRouter::new());
+        self.seq = next_seq;
+        self.in_flight.clear();
+        for c in in_flight {
+            self.in_flight.push(c.clone());
+            self.router.get().submit(c);
+        }
+        self.controllers = SyncCell::new(controllers);
+        self.refresh_views();
+        self.log = Some(replay);
     }
 
     pub(crate) fn with_mcp_seat(mut self, player: PlayerId, bounds: (sta_sim::Vec3, sta_sim::Vec3)) -> Self {
@@ -108,6 +172,13 @@ impl SimLink {
     }
 
     fn refresh_editor_views(&mut self) {
+        self.refresh_views();
+        // A command replay cannot represent a placement edit between ticks.
+        self.log = None;
+        self.refresh_lifted();
+    }
+
+    fn refresh_views(&mut self) {
         let source = self.source.get();
         self.curr = source.view();
         self.prev = self.curr.clone();
@@ -115,10 +186,7 @@ impl SimLink {
         self.cargo = source.cargo_view();
         self.nodes = source.node_view();
         self.systems = source.system_view();
-        self.warp_phases = source.warp_phases();
         self.impulse_caps = source.impulse_caps();
-        // A command replay cannot represent a placement edit between ticks.
-        self.log = None;
         self.refresh_lifted();
     }
 
@@ -182,9 +250,11 @@ impl SimLink {
         &self.curr
     }
 
-    /// A live movement phase at the same tick as `real_curr`, when the source supplies one.
+    /// The craft's warp phase in the sim's own view (`real_curr`), when it has one: `true` while
+    /// entering or at warp, `false` while dropping out. A view without warp rows (a recorded or
+    /// fed view) leaves motion classification to the view's speed.
     pub(crate) fn warp_phase(&self, id: EntityId) -> Option<bool> {
-        self.warp_phases.binary_search_by_key(&id, |row| row.0).ok().map(|i| self.warp_phases[i].1)
+        self.curr.warp_of(id).map(|row| row.phase != sta_sim::view::WarpPhase::Leaving)
     }
 
     /// The source's live impulse cap, including ship upgrades and overrides.
@@ -259,6 +329,7 @@ impl SimLink {
         }
         let cmd = Command { player: self.player, seq: self.seq, kind };
         self.seq += 1;
+        self.in_flight.push(cmd.clone());
         self.router.get().submit(cmd);
     }
 
@@ -272,6 +343,7 @@ impl SimLink {
         }
         let cmd = Command { player: PlayerId::BENCH, seq: self.seq, kind };
         self.seq += 1;
+        self.in_flight.push(cmd.clone());
         self.router.get().submit(cmd);
     }
 
@@ -305,7 +377,6 @@ impl SimLink {
         self.prev = std::mem::replace(&mut self.curr, view);
         self.production = production;
         self.cargo = cargo;
-        self.warp_phases.clear();
         self.impulse_caps.clear();
         self.refresh_lifted();
     }
@@ -313,6 +384,7 @@ impl SimLink {
     /// Run one tick if the router has its commands; `None` on a stall.
     pub(crate) fn tick(&mut self) -> Option<Vec<SimEvent>> {
         let mut batch = self.router.get().take_ready(self.curr.tick + 1)?;
+        self.in_flight.clear();
         let submitted = self.mcp.as_mut().map(|seat| seat.merge_orders(&mut batch)).unwrap_or_default();
         let before = self.curr.tick;
         let out = self.source.get().step(&batch);
@@ -323,7 +395,6 @@ impl SimLink {
         self.cargo = self.source.get().cargo_view();
         self.nodes = self.source.get().node_view();
         self.systems = self.source.get().system_view();
-        self.warp_phases = self.source.get().warp_phases();
         self.impulse_caps = self.source.get().impulse_caps();
         if let Some(log) = &mut self.log {
             log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
@@ -344,6 +415,7 @@ impl SimLink {
             if self.controller_commands == 1 || self.controller_commands.is_multiple_of(50) {
                 info!("ai: command {} at tick {}: seat {} {:?}", self.controller_commands, self.curr.tick, cmd.player.0, cmd.kind);
             }
+            self.in_flight.push(cmd.clone());
             self.router.get().submit(cmd);
         }
         Some(out.events)
@@ -528,6 +600,7 @@ impl Plugin for SimLinkPlugin {
             .init_resource::<SimEntities>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_removals)
             .add_systems(OnExit(crate::app::AppState::InGame), forget_removals)
+            .add_systems(Update, drop_dying_from_selection.in_set(GameSet::Interpolate).run_if(resource_exists::<SimLink>))
             .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)).run_if(crate::editor::play_mode));
     }
 }
@@ -563,6 +636,57 @@ fn step_sim(
         out.write_batch(events.into_iter().map(SimMsg));
     }
     clock.end_frame();
+}
+
+/// A unit in its dying phase (the sim's `dying_phase` switch, stock Armada II profile only) leaves the local
+/// selection and the control groups.
+///
+/// Grades: a selected unit leaves the local selection when it starts to die (read from the executable, static;
+/// measured once: the selected craft is deselected on the tick its hull reaches zero). INTERIM, STA64's own
+/// guard and not measured: a unit that is picked again while the phase lasts goes again, and a control group
+/// keeps no dying member (the original's handling of both is not read). With the switch off no unit is ever
+/// flagged dying, so nothing here runs on any other profile.
+///
+/// No `SelectionChanged` is sent: its reader plays the first selected unit's select voice, which a death must
+/// not trigger. The interface follows the `Selection` resource itself.
+///
+/// Contract: it runs in [`GameSet::Interpolate`], after the sim step and before every reader in `Render`, `Ui`
+/// and `Audio`, so a pick made earlier in the same frame is gone before anything is drawn or heard from it
+/// (declared gap: the pick paths in `input/` do not test the flag themselves, and the orders they issue in that
+/// frame name a dying unit, which the sim refuses). The test `the_prune_runs_after_the_input_and_before_the_interface`
+/// pins the placement.
+fn drop_dying_from_selection(link: Res<SimLink>, mut selection: ResMut<Selection>, groups: Option<ResMut<crate::input::select::ControlGroups>>) {
+    let view = link.curr();
+    // Touch a resource mutably only when something goes: change detection of the selection must stay quiet.
+    if selection.0.iter().any(|id| is_dying(view, *id)) {
+        prune_dying(view, &mut selection.0);
+    }
+    if let Some(mut groups) = groups
+        && groups.groups.iter().flatten().any(|id| is_dying(view, *id))
+    {
+        for group in &mut groups.groups {
+            prune_dying(view, group);
+        }
+    }
+}
+
+fn is_dying(view: &WorldView, id: EntityId) -> bool {
+    view.unit(id).is_some_and(|u| u.flags.contains(sta_sim::view::UnitFlags::DYING))
+}
+
+/// Remove from `ids` every unit the view flags as dying.
+fn prune_dying(view: &WorldView, ids: &mut Vec<EntityId>) {
+    ids.retain(|id| !is_dying(view, *id));
+}
+
+/// Whether warp is on offer to the player: the mission switch the view carries, the content's own warp switch
+/// (`Rules::warp_enabled`) and the match option (`GameOptions::allow_warp`, shown by the view as
+/// `attrs.match_warp_off`, counted only under the profile that offers it) must all allow it: the same three
+/// conditions the sim ANDs into every warp decision (`Sim::warp_allowed`). STA64's own rule (#1102): with warp
+/// off the client gives no warp cursor and sends no warp move; the sim would not warp such a craft either, so
+/// this only keeps the offer honest. A view without content has warp.
+pub fn warp_allowed(view: &WorldView, content: Option<&ContentDb>) -> bool {
+    view.attrs.mission_switches.allow_warp && !view.attrs.match_warp_off && content.is_none_or(|db| db.rules().warp_enabled())
 }
 
 /// Follow replacement events in their emitted order, then validate the final
@@ -632,20 +756,25 @@ mod tests {
 
     #[test]
     fn externally_fed_view_drops_cached_live_warp_phase() {
+        use sta_sim::view::{WarpPhase, WarpRow};
         struct Phased(Arc<WorldView>);
         impl WorldSource for Phased {
             fn step(&mut self, _: &[Command]) -> sta_sim::view::TickOutput {
                 sta_sim::view::TickOutput { view: self.0.clone(), events: Vec::new() }
             }
             fn view(&self) -> Arc<WorldView> { self.0.clone() }
-            fn warp_phases(&self) -> Vec<(EntityId, bool)> { vec![(EntityId(7), true)] }
             fn impulse_caps(&self) -> Vec<(EntityId, sta_sim::Fixed)> { vec![(EntityId(7), sta_sim::Fixed::from_int(80))] }
         }
-        let view = Arc::new(WorldView::default());
-        let mut link = SimLink::new(Box::new(Phased(view.clone())), Box::new(LocalRouter::new()), PlayerId(0));
+        let row = |phase| WarpRow { id: EntityId(7), phase, ramp_start: 0, ramp_len: 10, stretch: sta_sim::Fixed::from_int(3) };
+        let warping = Arc::new(WorldView { warp_rows: vec![row(WarpPhase::Entering)], ..WorldView::default() });
+        let mut link = SimLink::new(Box::new(Phased(warping.clone())), Box::new(LocalRouter::new()), PlayerId(0));
+        // The phase comes from the view itself: entering and at warp read as in warp, leaving as dropping out.
         assert_eq!(link.warp_phase(EntityId(7)), Some(true));
+        assert_eq!(link.warp_phase(EntityId(8)), None);
         assert_eq!(link.impulse_cap(EntityId(7)), Some(sta_sim::Fixed::from_int(80)));
-        link.feed(view);
+        link.feed(Arc::new(WorldView { warp_rows: vec![row(WarpPhase::Leaving)], ..WorldView::default() }));
+        assert_eq!(link.warp_phase(EntityId(7)), Some(false));
+        link.feed(Arc::new(WorldView::default()));
         assert_eq!(link.warp_phase(EntityId(7)), None);
         assert_eq!(link.impulse_cap(EntityId(7)), None);
     }
@@ -692,6 +821,38 @@ mod tests {
         assert!(matches!(&queued[0].kind, CommandKind::Edit(sta_sim::command::Edit::Kill(killed)) if *killed == id));
     }
 
+    /// UI-55: a restore takes the saved counter and the commands in flight in order, and no controller thinks.
+    #[test]
+    fn a_restore_takes_the_saved_counter_and_in_flight_commands_and_does_not_think() {
+        struct Thinks(Arc<std::sync::atomic::AtomicU32>);
+        impl Controller for Thinks {
+            fn think(&mut self, _: &WorldView, _: &[SimEvent], _: &mut Vec<Command>) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let cmd = |player: u8, seq: u32| Command { player: PlayerId(player), seq, kind: CommandKind::Order(Order::Stop { units: vec![EntityId(1)] }) };
+        let replay = Replay::new(&sta_sim::setup::GameSetup {
+            seed: 1,
+            map: Arc::new(sta_content::fake::two_bases()),
+            content: Arc::new(sta_content::fake::db()),
+            players: Vec::new(),
+            options: Default::default(),
+        });
+        let thinks = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut link = SimLink::new(Box::new(Sim::new(1)), Box::new(LocalRouter::new()), PlayerId(0));
+        let flight = vec![cmd(0, 5), cmd(255, 6), cmd(0, 7)];
+        link.restore(Restored { sim: Sim::new(1), replay, controllers: vec![Box::new(Thinks(thinks.clone()))], in_flight: flight.clone(), next_seq: 8 });
+        assert_eq!(thinks.load(std::sync::atomic::Ordering::SeqCst), 0, "no think on restore");
+        assert_eq!((link.next_seq(), link.in_flight()), (8, flight.as_slice()));
+        link.submit(CommandKind::Order(Order::Stop { units: vec![EntityId(1)] }));
+        assert_eq!(link.next_seq(), 9);
+        assert_eq!(link.in_flight().len(), 4);
+        link.tick().unwrap();
+        assert!(link.in_flight().is_empty(), "a tick takes them");
+        assert_eq!(link.replay().unwrap().commands.len(), 4, "the journal logged them when they were stepped");
+        assert_eq!(thinks.load(std::sync::atomic::Ordering::SeqCst), 1, "the controller thinks after the step");
+    }
+
     #[derive(Resource, Default)]
     struct Seen(Vec<SimEvent>);
 
@@ -712,7 +873,7 @@ mod tests {
             .init_resource::<Seen>()
             .add_systems(Update, collect.after(GameSet::SimLink));
         let to = SimVec3::from_f32([0.0, 0.0, 1000.0]);
-        app.world_mut().resource_mut::<CommandQueue>().0.push(CommandKind::Order(Order::Move { units: vec![id], to, queue: false }));
+        app.world_mut().resource_mut::<CommandQueue>().0.push(CommandKind::Order(Order::Move { units: vec![id], to, queue: false, mode: None }));
         for _ in 0..121 {
             app.update();
         }

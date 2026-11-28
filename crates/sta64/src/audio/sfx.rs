@@ -14,6 +14,7 @@
 //!   at the impact point. (`WeaponDef` has no `hitSound` yet; until CON-03 maps it these
 //!   are the stock `xhit_*` files.)
 //! - `Destroyed`: the unit's `sounds.explode`, at its last known position.
+//! - A craft's warp row turning to entering or leaving: the stock warp sounds (`warp_sfx`).
 //! - `Built`: [`SfxNames::built_ship`] / [`SfxNames::built_facility`] (stock advisor events)
 //!   at the new unit, for the local player's own builds only.
 //!
@@ -113,6 +114,7 @@ impl VoiceLimiter {
 /// A new sim's ids begin again: nothing seen of the last one may answer for them.
 fn forget_units(mut st: ResMut<SfxState>) {
     st.seen.clear();
+    st.warp = Default::default();
 }
 
 #[derive(Resource, Default)]
@@ -121,6 +123,8 @@ struct SfxState {
     /// Last known position, definition and owner of every unit seen, for events
     /// whose unit is already gone from the view.
     seen: HashMap<EntityId, (SimVec3, ContentKey, PlayerId)>,
+    /// The warp phases of the units in view (the stock warp sounds, `warp_sfx`).
+    warp: super::warp_sfx::WarpWatch,
 }
 
 /// Adds the sim-event to [`PlaySound`] mapping with its config and voice limits.
@@ -162,6 +166,8 @@ fn run_sfx(
     script_sounds: Option<Res<crate::ui::presentation::ScriptSounds>>,
     movies: Option<Res<crate::media::Movies>>,
     mut out: MessageWriter<PlaySound>,
+    profile: Option<Res<crate::render::profile::RenderProfile>>,
+    effects: Option<Res<crate::render::profile::ProfileEffects>>,
 ) {
     // The advisor lines ("construction complete") are speech: dropped, not replayed, while a
     // cutscene runs, a script's message or music plays or a movie plays. Weapons, hits and
@@ -229,6 +235,9 @@ fn run_sfx(
             _ => {}
         }
     }
+    // The stock warp sounds: the look is the Stock look and the content's profile plays them (`warp_sfx`).
+    let play_warp = super::warp_sfx::profile_plays(db.profile()) && crate::render::fx::warp_flash::stock_warp(profile.as_deref(), effects.as_deref());
+    want.extend(st.warp.wanted(view, play_warp, &sees));
     for shot in mining.read() {
         let (Some(&(pos, _, owner)), Some(name)) = (st.seen.get(&shot.shooter), db.weapon(shot.weapon).and_then(|w| w.fire_sound.clone())) else { continue };
         if sees(shot.shooter, owner) {
@@ -431,5 +440,77 @@ mod tests {
         let said: Vec<_> = after.iter().filter(|p| p.0.contains("ConstructionComplete")).collect();
         assert_eq!(said.len(), 1, "only the later one: {after:?}");
         assert_eq!(said[0].2, Some([0.0, 0.0, 60.0]));
+    }
+
+    /// A source whose views carry one craft and its warp row from tick `at` on: entering, then at warp, then leaving.
+    struct WarpSource {
+        tick: sta_sim::Tick,
+        def: ContentKey,
+    }
+
+    impl WarpSource {
+        fn view(&self) -> Arc<sta_sim::WorldView> {
+            use sta_sim::view::{WarpPhase, WarpRow};
+            let mut unit = sta_sim::world::Entity::new(sta_sim::world::EntityKind::Craft, self.def, PlayerId(0), SimVec3::ZERO, (Fixed::ZERO, Fixed::ONE), sta_content::MoveStats::default()).view();
+            unit.id = EntityId(1);
+            let phase = match self.tick {
+                3..=4 => Some(WarpPhase::Entering),
+                5..=7 => Some(WarpPhase::AtWarp),
+                8..=9 => Some(WarpPhase::Leaving),
+                _ => None,
+            };
+            let rows = phase.map(|phase| WarpRow { id: EntityId(1), phase, ramp_start: 3, ramp_len: 2, stretch: Fixed::from_int(2) }).into_iter().collect();
+            Arc::new(sta_sim::WorldView { tick: self.tick, units: vec![unit], warp_rows: rows, ..Default::default() })
+        }
+    }
+
+    impl sta_sim::WorldSource for WarpSource {
+        fn step(&mut self, _: &[sta_sim::command::Command]) -> sta_sim::view::TickOutput {
+            self.tick += 1;
+            sta_sim::view::TickOutput { view: self.view(), events: Vec::new() }
+        }
+        fn view(&self) -> Arc<sta_sim::WorldView> {
+            self.view()
+        }
+    }
+
+    /// The sound requests of a craft's warp, under `look` and the content's `profile`: no audio output, the null mixer.
+    fn warp_requests(profile: sta_content::Profile, look: Option<crate::render::profile::RenderProfile>) -> Vec<String> {
+        use crate::render::profile::{Effect, ProfileEffects};
+        let db = sta_content::ContentDb::builder().profile(profile).unit(sta_content::UnitDef::new("warper", "craft")).build().unwrap();
+        let def = db.key("warper").unwrap();
+        let (null, log) = NullAudio::new();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+            .configure_sets(Update, (GameSet::SimLink, GameSet::Audio).chain())
+            .insert_non_send(Mixer::new(Box::new(null)))
+            .add_plugins((crate::sim_link::SimLinkPlugin, AudioPlugin::default()))
+            .insert_resource(Resolver(Box::new(Any)))
+            .insert_resource(ContentRes(Arc::new(db)))
+            .insert_resource(LocalPlayer(Some(PlayerId(0))))
+            .insert_resource(SimLink::new(Box::new(WarpSource { tick: 0, def }), Box::new(LocalRouter::new()), PlayerId(0)));
+        let mut effects = ProfileEffects::default();
+        effects.register_stock(Effect::Warp);
+        app.insert_resource(effects);
+        if let Some(look) = look {
+            app.insert_resource(look);
+        }
+        app.update();
+        log.drain();
+        run(&mut app, &log, 60).into_iter().map(|p| p.0).collect()
+    }
+
+    #[test]
+    fn the_stock_look_asks_for_the_entry_and_the_exit_sound_once_each_and_other_looks_and_armada_i_none() {
+        use crate::render::profile::RenderProfile;
+        use super::super::warp_sfx::{STOCK_A2_WARP_ENTRY, STOCK_A2_WARP_EXIT};
+        let both = vec![STOCK_A2_WARP_ENTRY.to_owned(), STOCK_A2_WARP_EXIT.to_owned()];
+        assert_eq!(warp_requests(sta_content::Profile::Sta2Classic, Some(RenderProfile::Stock)), both);
+        // The mod family follows the stock reading (INTERIM, not read for the profile; a later reading changes this on purpose).
+        assert_eq!(warp_requests(sta_content::Profile::Fo4, Some(RenderProfile::Stock)), both);
+        assert!(warp_requests(sta_content::Profile::Sta1Classic, Some(RenderProfile::Stock)).is_empty(), "Armada I: none");
+        assert!(warp_requests(sta_content::Profile::Sta2Classic, Some(RenderProfile::Refit)).is_empty(), "the Remaster look: none");
+        assert!(warp_requests(sta_content::Profile::Sta2Classic, None).is_empty(), "no profile resources: none");
     }
 }

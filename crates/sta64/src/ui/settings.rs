@@ -8,12 +8,14 @@
 //! - `max_selection`, Refit's `MaxSelection` with its range ([`MaxSelection`], 17..=120);
 //! - `ui_profile = lcars | stock` ([`UiPreference`]);
 //! - the options screen's volumes (`master`, `music`, `effects`, `voice`, `0..=100`),
-//!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
+//!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps`, `cinematic_window` ([`Settings`]);
 //! - optional graphics choices (`msaa`, `graphics_detail`, `shadows`, `bloom`);
 //! - `cursor_scale = 0.5 ..= 3` (UI-45), the mouse cursor's size factor; out-of-range values clamp;
 //! - `hud_layout = centred | stretched`, how the stock-look HUD sits on a window that is not its sheet's aspect
 //!   (ADR 0008 H7; case-insensitive, `centered` accepted; unknown or missing: centred);
 //! - `player_name` and `relay`, the multiplayer name and relay address last used (UI-11);
+//! - `stock_folder`, a stock Armada II folder whose engine files a mod's mission conversion reads when the
+//!   install's own root has none (set by hand; no picker; empty or absent: none);
 //! - `intro = true | false` ([`IntroSettings`]);
 //! - `version = 1`.
 //!
@@ -78,7 +80,7 @@ impl Default for Stored {
 }
 
 const NUMBERS: [&str; 5] = ["master", "music", "effects", "voice", "scroll_speed"];
-const FLAGS: [&str; 3] = ["fullscreen", "vsync", "show_fps"];
+const FLAGS: [&str; 4] = ["fullscreen", "vsync", "show_fps", "cinematic_window"];
 
 fn parse_bool(v: &str) -> Option<bool> {
     match v.trim().to_ascii_lowercase().as_str() {
@@ -150,6 +152,10 @@ impl Stored {
                     s.settings.relay = value.chars().filter(|c| !c.is_control()).take(80).collect();
                     true
                 }
+                "stock_folder" => {
+                    s.settings.stock_folder = value.chars().filter(|c| !c.is_control()).take(400).collect();
+                    true
+                }
                 "window_size" => crate::frontend::screens::WindowSize::from_key(value)
                     .map(|size| s.settings.window_size = size).is_some(),
                 "hud_layout" => crate::ui::hud::stock::layout::HudFit::from_key(value)
@@ -209,7 +215,7 @@ impl Stored {
         for (name, key) in [("master", K::MasterVolume), ("music", K::MusicVolume), ("effects", K::EffectsVolume), ("voice", K::VoiceVolume), ("scroll_speed", K::ScrollSpeed)] {
             let _ = writeln!(t, "{name} = {}", st.number(key).unwrap_or(0.0));
         }
-        for (name, v) in [("fullscreen", st.fullscreen), ("vsync", st.vsync), ("show_fps", st.show_fps)] {
+        for (name, v) in [("fullscreen", st.fullscreen), ("vsync", st.vsync), ("show_fps", st.show_fps), ("cinematic_window", st.cinematic_window)] {
             let _ = writeln!(t, "{name} = {v}");
         }
         let _ = writeln!(t, "msaa = {}", st.msaa.map_or("auto".to_owned(), |v| v.to_string()));
@@ -224,6 +230,9 @@ impl Stored {
         }
         if !st.relay.is_empty() {
             let _ = writeln!(t, "relay = {}", st.relay);
+        }
+        if !st.stock_folder.is_empty() {
+            let _ = writeln!(t, "stock_folder = {}", st.stock_folder);
         }
         t += &self.bindings.to_text();
         t
@@ -246,6 +255,7 @@ fn flag_key(name: &str) -> crate::frontend::screens::SettingKey {
     match name {
         "fullscreen" => K::Fullscreen,
         "vsync" => K::Vsync,
+        "cinematic_window" => K::CinematicWindow,
         _ => K::ShowFps,
     }
 }
@@ -550,6 +560,23 @@ mod tests {
         app
     }
 
+    /// The Armada II window's switch is on by default, is read and written as `cinematic_window`, and a bad value keeps
+    /// the default.
+    #[test]
+    fn the_cinematic_window_switch_is_stored_and_defaults_on() {
+        assert!(Stored::default().settings.cinematic_window);
+        let (off, warnings) = Stored::parse("cinematic_window = off\n");
+        assert!(!off.settings.cinematic_window && warnings.is_empty(), "{warnings:?}");
+        assert!(off.to_text().contains("cinematic_window = false"));
+        let (back, _) = Stored::parse(&off.to_text());
+        assert!(!back.settings.cinematic_window);
+        let (bad, warnings) = Stored::parse("cinematic_window = maybe\n");
+        assert!(bad.settings.cinematic_window && warnings.iter().any(|w| w.contains("cinematic_window")), "{warnings:?}");
+        let mut s = Settings::default();
+        s.set_flag(SettingKey::CinematicWindow, false);
+        assert_eq!(s.flag(SettingKey::CinematicWindow), Some(false));
+    }
+
     #[test]
     fn changes_survive_a_restart() {
         let dir = temp_dir("restart");
@@ -742,6 +769,7 @@ mod tests {
         s.settings.window_size = WindowSize::R1920x1080;
         s.settings.master = 12.5;
         s.settings.lcars_ui = true;
+        s.settings.stock_folder = "/stock/folder with spaces".into();
         s.intro = false;
         let (back, w) = Stored::parse(&s.to_text());
         assert!(w.is_empty(), "{w:?}");

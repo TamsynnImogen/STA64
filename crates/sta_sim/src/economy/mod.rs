@@ -227,9 +227,10 @@ fn work_distance(db: &ContentDb, miner: ContentKey, node: ContentKey) -> Fixed {
 /// executable, static; the on-screen direction and speed are not measured.
 ///
 /// Exception: when that point is closer to the miner than its ODF `tooCloseToTurn` plus
-/// [`PURSUIT_MARGIN`], it is pushed outward along the miner-to-point line to that distance. Stock
-/// miners (`tooCloseToTurn` 50) never meet it, so they keep the point bit for bit. The push-out is
-/// STA64's adaptation to the movement model, not measured.
+/// [`PURSUIT_MARGIN`], it is pushed outward along the miner-to-point line to that distance. A
+/// miner whose `tooCloseToTurn` plus the margin is no more than the distance to the point (about
+/// half the weapon's range on the circle) never meets it and keeps the point bit for bit. The
+/// push-out is STA64's adaptation to the movement model, not measured.
 fn orbit_point(db: &ContentDb, id: EntityId, miner: ContentKey, pos: Vec3, node_def: ContentKey, node: Vec3, range: Fixed) -> Option<Vec3> {
     let (dx, dz) = (pos.x - node.x, pos.z - node.z);
     let len = (dx * dx + dz * dz).sqrt();

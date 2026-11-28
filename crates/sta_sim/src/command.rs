@@ -58,7 +58,11 @@ pub enum Target {
 #[non_exhaustive]
 pub enum Order {
     /// `queue`: append a waypoint instead of replacing the course (Shift).
-    Move { units: Vec<EntityId>, to: Vec3, queue: bool },
+    /// `mode`: the move mode of ADR 0011 G4 (SIM-76); `None` takes the content's
+    /// default (see [`MoveMode::resolve`]). Carried and stored only: no movement
+    /// rule reads it yet. Build with [`Order::move_to`] so a later field does not
+    /// break the caller.
+    Move { units: Vec<EntityId>, to: Vec3, queue: bool, mode: Option<MoveMode> },
     Stop { units: Vec<EntityId> },
     Attack { units: Vec<EntityId>, target: EntityId },
     /// `at`: where to place a station; `None` for a ship from a yard.
@@ -130,6 +134,44 @@ pub enum Order {
     /// Cancel the job currently at this zero-based queue slot, including the head.
     /// The job identity must still match when applied. Appended Order tag 24.
     CancelBuild { builder: EntityId, slot: u32, job: BuildQueueId },
+}
+
+impl Order {
+    /// A plain move with the content's default move mode. New code builds moves
+    /// through this (or sets the mode with [`Order::with_move_mode`]) so that a
+    /// field added to `Move` later changes one place.
+    pub fn move_to(units: Vec<EntityId>, to: Vec3, queue: bool) -> Order {
+        Order::Move { units, to, queue, mode: None }
+    }
+
+    /// This order with an explicit move mode; any order but `Move` is returned unchanged.
+    pub fn with_move_mode(self, mode: MoveMode) -> Order {
+        match self {
+            Order::Move { units, to, queue, .. } => Order::Move { units, to, queue, mode: Some(mode) },
+            other => other,
+        }
+    }
+}
+
+/// How a group of craft ordered to move travels (ADR 0011 G4; the originals
+/// offer both to the player; evidence: read from the executable, static, not
+/// measured, TOOL-26). Appended to `Order::Move` by SIM-76; no rule reads it yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum MoveMode {
+    /// Followers hold their slot relative to the leader for the whole trip.
+    Formation,
+    /// Followers fly the leader's route shifted by their slot offset, each at its own speed.
+    Group,
+}
+
+impl MoveMode {
+    /// The mode an order takes: its own, else the content's default
+    /// (`cfgDEFAULT_TO_FORMATION_MOVE`, `DEFAULT_TO_FORMATION_MOVE` in Armada I,
+    /// resolved per profile by `sta_content::GroupRules`; read from data).
+    pub fn resolve(order_mode: Option<MoveMode>, rules: &sta_content::GroupRules) -> MoveMode {
+        order_mode.unwrap_or(if rules.default_to_formation_move { MoveMode::Formation } else { MoveMode::Group })
+    }
 }
 
 /// A production job's identity, stable until it is removed or completed.
@@ -282,7 +324,7 @@ pub enum Edit {
     MaxOfficers(PlayerId, Fixed),
     /// Mission `SetCrew` / `Entity.crew` (SIM-54): a craft's or station's
     /// current crew, negative read as 0 and clamped to the unit's own current
-    /// maximum crew (`Craft::SetCrew`, read from the executable, static; it is
+    /// maximum crew (read from the executable, static; it is
     /// not clamped to the global `MAX_CREW`). Where the casualty model runs
     /// (the unit's features have `crew_loss_on_hit`) the derelict check of
     /// SIM-39 follows: crew under 1 latches the unit derelict and a later edit
@@ -531,7 +573,7 @@ mod tests {
         let c = Command {
             player: PlayerId(3),
             seq: 9,
-            kind: CommandKind::Order(Order::Move { units: vec![EntityId(4), EntityId(5)], to: Vec3::from_f32([1.5, 0.0, -2.0]), queue: true }),
+            kind: CommandKind::Order(Order::Move { units: vec![EntityId(4), EntityId(5)], to: Vec3::from_f32([1.5, 0.0, -2.0]), queue: true, mode: None }),
         };
         let bytes = postcard::to_allocvec(&c).unwrap();
         assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);

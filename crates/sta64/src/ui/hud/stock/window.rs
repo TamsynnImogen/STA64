@@ -18,7 +18,10 @@
 //! **Subject and framing are interim for Armada II.** The picture is the existing action camera,
 //! unchanged: the subject choice, framing and gating are the Armada I window's. The original's
 //! rules for Armada II differ (read from the executable, static; not measured) and are a later
-//! package; nothing of them is built here. The double click into another view is not built.
+//! package; nothing of them is built here. The double click on the picture swaps the views (`buttons.rs`); the
+//! "Cinematic window" setting ([`CinematicSwitch`]) shows the live picture or only the still. The interface-mode
+//! rule (shown only in one interface mode) is not built: STA64 has no such mode (INTERIM, read from the executable,
+//! static; not measured).
 //!
 //! **Fits.** The panel, its frame pieces, the still and the picture are placed through the one
 //! [`StockLayout`] the rest of the HUD uses, so they move as a whole with the sheet: `Centred`
@@ -57,19 +60,43 @@ pub(in crate::ui::hud) fn spawn(
             commands.entity(root).with_child((node(r), Pickable::IGNORE, GuiImage::new(name)));
         }
         if let Some(view) = view {
-            commands.entity(root).with_child((
+            let mut picture = commands.spawn((
                 ActionPicture,
                 PanelButton::ActionView,
                 UiButton,
                 WidgetState::Normal,
                 node(r),
                 ImageNode::new(view.image.clone()),
+                ChildOf(root),
             ));
+            // Armada II's window (the one with the still under it) has the performance switch.
+            if still {
+                picture.insert(CinematicSwitch);
+            }
         }
     }
     // The one call site of the frame pieces for the window.
     frame_pieces(commands, root, layout, "cinematic", origin);
     Some(origin)
+}
+
+/// Marks the live picture of the Armada II window: the "Cinematic window" setting shows or hides it. Hidden, the
+/// still picture under it shows and the second render stops (the cameras run only while the picture is visible,
+/// `render::action_camera`). Read from the executable, static: with the option off the engine draws the still
+/// picture over the display area instead of the live one, and the window's clicks are handled only while it is shown
+/// and live. INTERIM: how the still looks in the original is not established (one frame is needed); STA64 shows the
+/// layout's still as it already does under the live picture.
+#[derive(Component)]
+pub(in crate::ui::hud) struct CinematicSwitch;
+
+/// Show or hide the live picture as the setting says (no setting resource: shown).
+pub(in crate::ui::hud) fn apply_switch(settings: Option<Res<crate::frontend::screens::Settings>>, mut pictures: Query<&mut Visibility, With<CinematicSwitch>>) {
+    let want = if settings.is_none_or(|s| s.cinematic_window) { Visibility::Inherited } else { Visibility::Hidden };
+    for mut v in &mut pictures {
+        if *v != want {
+            *v = want;
+        }
+    }
 }
 
 /// The Armada II window: the shared parts with the still picture, and no buttons.

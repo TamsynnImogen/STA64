@@ -1,0 +1,605 @@
+# Authored cases of the Armada I front end (LUA-15e): invented DLL shapes, no game data.
+# Read by gen_cases.py (the ORIGINAL tools/a1_to_lua.py) and by tests/a1.rs.
+#
+# Global directives:
+#   const NAME <addr>            a named address; `{NAME}` is `0x..`, `{NAME+20}` adds decimal 20
+#   import <dll> <symbol>        an import-table slot, 4 bytes apart from 0x10060000; `{iat:key}` is
+#                                `DWORD PTR ds:0x<slot>` (key: plain name, or the symbol for `??..`)
+#   export <symbol> <expr>       an export of the mission DLL
+#   string <addr> <text>         a string in the image
+#   base <addr>                  code of every mission DLL built by `run` (instructions follow)
+#   rbase <addr>                 code of every rule DLL
+# Per case: `case <name>` ... `end`, `code <addr>` / `rcode <addr>` (instructions, 2 spaces),
+# `run lift <addr>` (lift one function of the mission DLL, then render it),
+# `run mission` (convert the pair; the rule DLL exists when an `rcode` block does).
+
+const BASE 0x10000000
+const ALPHA 0x10050000
+const WAIT 0x10050040
+const SHIP 0x10050080
+const SPOT 0x10050090
+const DLLMAIN 0x10002000
+const STEP 0x10003000
+const ACTION 0x10004000
+const INIT 0x10005000
+const COND 0x10007000
+const CHAIN 0x10010000
+const COND2 0x10007100
+const ACT2 0x10007200
+const EP 0x10001100
+const FUNC 0x10008000
+const LOW 0x10009000
+const HIGH 0x10009100
+
+string 0x10040000 ship_label
+string 0x10040010 the_script
+string 0x10040020 rule_one
+string 0x10040030 a_path
+
+import Armada.exe ?WORLD@@3Vcharacter@@A
+import Armada.exe ?new_script@character@@QAEPAVscript@@PAD@Z
+import Armada.exe ?add_step@script@@QAEXP6AHPAV1@@Z@Z
+import Armada.exe ??4hot_int@@QAEXH@Z
+import Armada.exe ??Bhot_int@@QAEHXZ
+import Armada.exe ?start@timer_int@@UAEXM@Z
+import Armada.exe ?GetHandle@@YAHPAD@Z
+import Armada.exe ?Foo@@YAXHH@Z
+import Armada.exe ?Bar@@YAXH@Z
+import Armada.exe ?Attack@@YAXHVVector3@@@Z
+import Armada.exe ?GetAttackLocation@@YA?AVVector3@@HH@Z
+import Armada.exe ?GetDistance@@YAMAAH0@Z
+import Armada.exe ?Count@@YAHHPAD@Z
+import Armada.exe ?Mark@@YAXABHAB_N@Z
+import Armada.exe ?create_rule@IIIE@@QAEPAVrule@@P6AHXZP6AXXZPAD@Z
+import Armada.exe ?add_dependent_rule@hot_type@@UAEXPAVrule@@@Z
+import Armada.exe ?isCineractiveDone@@3Vhot_int@@A
+import Test1S.dsl ?ALPHA@@3Vhot_int@@A
+import Test1S.dsl ?ship@@3HA
+import Test1S.dsl ?DoIt@@YAXXZ
+import Armada.exe ?trash_rule@IIIE@@QAEXPAVrule@@@Z
+import Armada.exe ?Add_Data@linked_list@@QAEXPAX@Z
+import Armada.exe ?time@timer_int@@UAEMXZ
+
+export ?ALPHA@@3Vhot_int@@A {ALPHA}
+export ?tWait@@3Vtimer_int@@A {WAIT}
+export ?ship@@3HA {SHIP}
+export ?spot@@3VVector3@@A {SPOT}
+export ?DoIt@@YAXXZ 0x10001004
+
+# the jump table of the switch case
+words 0x10040100 {STEP+16} {STEP+28} {STEP+32}
+
+base 0x10001000
+  jmp    0x10002000
+  jmp    0x10004000
+  jmp    0x10003000
+  jmp    0x10005000
+base 0x10001100
+  push   ebx
+  push   esi
+  push   edi
+  call   0x10001000
+  ret    0xc
+base 0x10002000
+  ret    0xc
+base 0x10004000
+  ret
+base 0x10003000
+  ret
+base 0x10005000
+  ret
+
+rbase 0x10001100
+  push   ebx
+  push   esi
+  push   edi
+  call   0x10001000
+  ret    0xc
+
+case variables_handles_and_deferred_cleanup
+code {STEP}
+  push   0x1
+  mov    ecx,{ALPHA}
+  call   {iat:??4hot_int@@QAEXH@Z}
+  push   0x40e00000
+  mov    ecx,{WAIT}
+  call   {iat:start}
+  mov    esi,{iat:GetHandle}
+  push   0x10040000
+  call   esi
+  mov    ds:{SHIP},eax
+  push   0x2
+  push   eax
+  call   {iat:Foo}
+  add    esp,0xc
+  xor    eax,eax
+  ret
+run lift {STEP}
+end
+
+case a_value_that_differs_between_paths_goes_through_a_slot
+code {STEP}
+  mov    eax,DWORD PTR ds:{SHIP}
+  test   eax,eax
+  je     {STEP+20}
+  push   0x1
+  jmp    {STEP+24}
+  push   0x0
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+run lift {STEP}
+end
+
+case a_value_passes_through_a_block_that_does_not_read_it
+code {STEP}
+  mov    ecx,DWORD PTR ds:{SHIP}
+  test   ecx,ecx
+  je     {STEP+20}
+  mov    eax,0x1
+  jmp    {STEP+24}
+  mov    eax,0x2
+  cmp    ecx,0x5
+  je     {STEP+44}
+  push   eax
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+run lift {STEP}
+end
+
+case a_register_proved_zero_by_the_branch
+code {STEP}
+  mov    eax,DWORD PTR ds:{SHIP}
+  test   eax,eax
+  jne    {STEP+28}
+  push   eax
+  push   0x3
+  call   {iat:Count}
+  add    esp,0x8
+  ret
+run lift {STEP}
+end
+
+case a_register_proved_equal_to_a_constant
+code {STEP}
+  mov    eax,DWORD PTR ds:{SHIP}
+  cmp    eax,0x7
+  jne    {STEP+24}
+  push   eax
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+run lift {STEP}
+end
+
+case the_taken_edge_of_je_proves_the_value
+code {STEP}
+  mov    eax,DWORD PTR ds:{SHIP}
+  test   eax,eax
+  je     {STEP+24}
+  ret
+  ret
+  ret
+  push   eax
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+run lift {STEP}
+end
+
+case a_loop_is_not_decoded_but_its_calls_are_listed
+code {STEP}
+  call   {iat:Bar}
+  jmp    {STEP}
+run lift {STEP}
+end
+
+case an_unbalanced_return
+code {STEP}
+  push   0x1
+  call   {iat:Bar}
+  ret
+run lift {STEP}
+end
+
+case an_unreadable_argument_is_an_undecoded_call
+code {STEP}
+  sub    esp,0x8
+  call   {iat:Foo}
+  add    esp,0x8
+  ret
+run lift {STEP}
+end
+
+case vectors_by_value_struct_results_and_references
+code {STEP}
+  sub    esp,0xc
+  push   0x2
+  push   0x1
+  lea    eax,[esp+0x8]
+  push   eax
+  call   {iat:GetAttackLocation}
+  add    esp,0xc
+  mov    eax,esp
+  mov    ecx,DWORD PTR ds:{SPOT}
+  push   ecx
+  push   ecx
+  push   ecx
+  mov    eax,esp
+  mov    edx,DWORD PTR [esp+0xc]
+  mov    DWORD PTR [eax],edx
+  mov    edx,DWORD PTR [esp+0x10]
+  mov    DWORD PTR [eax+0x4],edx
+  mov    edx,DWORD PTR [esp+0x14]
+  mov    DWORD PTR [eax+0x8],edx
+  push   DWORD PTR ds:{SHIP}
+  call   {iat:Attack}
+  add    esp,0x1c
+  push   {SHIP}
+  push   {SHIP}
+  call   {iat:GetDistance}
+  add    esp,0x8
+  fstp   st(0)
+  ret
+run lift {STEP}
+end
+
+case const_reference_temporaries_are_their_values
+code {STEP}
+  sub    esp,0x8
+  lea    eax,[esp+0x3]
+  lea    ecx,[esp+0x4]
+  push   eax
+  push   ecx
+  mov    BYTE PTR [esp+0xb],0x1
+  mov    DWORD PTR [esp+0xc],0x4
+  call   {iat:Mark}
+  add    esp,0x10
+  ret
+run lift {STEP}
+end
+
+case a_null_name_is_nil
+code {STEP}
+  push   0x0
+  push   0x3
+  call   {iat:Count}
+  add    esp,0x8
+  ret
+run lift {STEP}
+end
+
+case first_offending_helper_call_is_the_lowest_address
+code {FUNC}
+  call   {HIGH}
+  call   {LOW}
+  ret
+code {LOW}
+  mov    eax,DWORD PTR [esp+0x4]
+  ret
+code {HIGH}
+  mov    eax,DWORD PTR [esp+0x4]
+  ret
+run lift {FUNC}
+end
+
+case a_stack_frame_with_ebp_and_a_tail_call
+code {STEP}
+  push   ebp
+  mov    ebp,esp
+  push   0x5
+  call   {iat:Bar}
+  add    esp,0x4
+  pop    ebp
+  jmp    {iat:Bar}
+run lift {STEP}
+end
+
+case a_switch_and_an_indirect_call
+code {STEP}
+  call   {iat:Foo}
+  call   DWORD PTR [eax+0x4]
+  ret
+run lift {STEP}
+end
+
+case a_mission_with_rules_actions_steps_and_init
+code {DLLMAIN}
+  mov    eax,DWORD PTR [esp+0x8]
+  cmp    eax,0x1
+  jne    {DLLMAIN+16}
+  call   0x1000100c
+  mov    eax,0x1
+  ret    0xc
+code {INIT}
+  push   0x0
+  mov    ecx,{ALPHA}
+  call   {iat:??4hot_int@@QAEXH@Z}
+  push   0x10040000
+  call   {iat:GetHandle}
+  add    esp,0x4
+  mov    ds:{SHIP},eax
+  ret
+code {ACTION}
+  mov    ecx,{iat:WORLD}
+  push   0x10040010
+  call   {iat:new_script}
+  push   0x10001008
+  mov    ecx,eax
+  call   {iat:add_step}
+  ret
+code {STEP}
+  push   0x1
+  mov    ecx,{ALPHA}
+  call   {iat:??4hot_int@@QAEXH@Z}
+  xor    eax,eax
+  ret
+rcode {DLLMAIN}
+  mov    eax,DWORD PTR [esp+0x8]
+  cmp    eax,0x1
+  jne    {DLLMAIN+16}
+  call   0x1000100c
+  mov    eax,0x1
+  ret    0xc
+rcode {INIT}
+  mov    eax,{iat:WORLD}
+  push   esi
+  mov    esi,{iat:create_rule}
+  push   0x10040020
+  push   0x10001004
+  push   0x10001008
+  lea    ecx,[eax+0x38]
+  call   esi
+  mov    ds:0x10050100,eax
+  push   eax
+  mov    ecx,{iat:ALPHA}
+  call   {iat:add_dependent_rule}
+  pop    esi
+  ret
+rcode 0x10001000
+  jmp    0x10002000
+  jmp    0x10001010
+  jmp    {COND}
+  jmp    0x10005000
+  jmp    {iat:DoIt}
+rcode {COND}
+  mov    ecx,{iat:ALPHA}
+  call   {iat:??Bhot_int@@QAEHXZ}
+  test   eax,eax
+  je     {COND+28}
+  mov    eax,{iat:ship}
+  mov    ecx,DWORD PTR [eax]
+  jmp    {COND+36}
+  xor    eax,eax
+  ret
+  mov    ecx,{iat:isCineractiveDone}
+  jmp    {iat:??Bhot_int@@QAEHXZ}
+run mission
+end
+
+# a dependency wired inside a condition (the Python's rule dicts share their deps list)
+case a_dependency_wired_in_a_condition
+rcode {DLLMAIN}
+  mov    eax,DWORD PTR [esp+0x8]
+  cmp    eax,0x1
+  jne    {DLLMAIN+16}
+  call   0x1000100c
+  mov    eax,0x1
+  ret    0xc
+rcode {INIT}
+  mov    eax,{iat:WORLD}
+  push   esi
+  mov    esi,{iat:create_rule}
+  push   0x10040020
+  push   0x10001004
+  push   0x10001008
+  lea    ecx,[eax+0x38]
+  call   esi
+  mov    ds:0x10050100,eax
+  pop    esi
+  ret
+rcode 0x10001000
+  jmp    0x10002000
+  jmp    0x10001010
+  jmp    {COND}
+  jmp    0x10005000
+  jmp    {iat:DoIt}
+rcode {COND}
+  push   DWORD PTR ds:0x10050100
+  mov    ecx,{iat:ALPHA}
+  call   {iat:add_dependent_rule}
+  xor    eax,eax
+  ret
+run mission
+end
+
+# two rules of one name, conditions of one name, an action wrapper that calls two imports, a trash
+case rule_names_collide_and_an_action_does_not_resolve
+rcode {DLLMAIN}
+  mov    eax,DWORD PTR [esp+0x8]
+  cmp    eax,0x1
+  jne    {DLLMAIN+16}
+  call   0x1000100c
+  mov    eax,0x1
+  ret    0xc
+rcode {INIT}
+  mov    eax,{iat:WORLD}
+  push   esi
+  mov    esi,{iat:create_rule}
+  push   0x10040020
+  push   0x10001014
+  push   0x10001004
+  lea    ecx,[eax+0x38]
+  call   esi
+  mov    ds:0x10050100,eax
+  mov    eax,{iat:WORLD}
+  push   0x10040020
+  push   0x10001010
+  push   0x10001008
+  lea    ecx,[eax+0x38]
+  call   esi
+  mov    eax,{iat:WORLD}
+  push   DWORD PTR ds:0x10050100
+  lea    ecx,[eax+0x38]
+  call   {iat:trash_rule}
+  pop    esi
+  ret
+rcode 0x10001000
+  jmp    0x10002000
+  jmp    {COND}
+  jmp    {COND2}
+  jmp    0x10005000
+  jmp    {ACT2}
+  jmp    {iat:DoIt}
+rcode {COND}
+  xor    eax,eax
+  ret
+rcode {COND2}
+  xor    eax,eax
+  ret
+rcode {ACT2}
+  push   0x1
+  call   {iat:Bar}
+  add    esp,0x4
+  push   0x2
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+run mission
+end
+
+case a_rule_is_trashed_by_name
+code {STEP}
+  mov    eax,{iat:WORLD}
+  push   0x10040020
+  lea    ecx,[eax+0x38]
+  call   {iat:trash_rule}
+  ret
+run lift {STEP}
+end
+
+case a_rule_dll_without_dllmain
+code {STEP}
+  ret
+rcode {COND}
+  xor    eax,eax
+  ret
+run mission
+end
+
+case a_mission_without_a_rule_dll
+code {ACTION}
+  push   0x1
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+run mission
+end
+
+# the renderer refuses the address of a stack slot passed on as a value: the function is a stub
+case a_function_the_renderer_cannot_render
+code {ACTION}
+  sub    esp,0x4
+  lea    eax,[esp]
+  mov    ds:{SHIP},eax
+  add    esp,0x4
+  ret
+run mission
+end
+
+case variable_queries_and_the_linked_list_callback
+code {STEP}
+  mov    ecx,{WAIT}
+  call   {iat:time}
+  fstp   st(0)
+  mov    ecx,{ALPHA}
+  call   {iat:??Bhot_int@@QAEHXZ}
+  push   eax
+  call   {iat:Bar}
+  add    esp,0x4
+  push   0x1
+  call   {iat:Add_Data}
+  ret
+run lift {STEP}
+end
+
+case a_switch_in_a_function
+code {STEP}
+  mov    eax,DWORD PTR ds:{SHIP}
+  cmp    eax,0x2
+  ja     {STEP+36}
+  jmp    DWORD PTR [eax*4+0x10040100]
+  push   0x1
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+  ret
+  ret
+run lift {STEP}
+end
+
+case a_frame_left_with_leave
+code {STEP}
+  push   ebp
+  mov    ebp,esp
+  push   0x1
+  call   {iat:Bar}
+  add    esp,0x4
+  leave
+  ret
+run lift {STEP}
+end
+
+case a_frame_left_with_mov_esp_ebp
+code {STEP}
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x4
+  mov    DWORD PTR [ebp-0x4],0x7
+  push   DWORD PTR [ebp-0x4]
+  call   {iat:Bar}
+  add    esp,0x4
+  mov    esp,ebp
+  pop    ebp
+  ret
+run lift {STEP}
+end
+
+case or_minus_one_and_and_zero
+code {STEP}
+  or     eax,0xffffffff
+  and    ecx,0x0
+  push   eax
+  push   ecx
+  call   {iat:Foo}
+  add    esp,0x8
+  ret
+run lift {STEP}
+end
+
+case a_tail_jump_to_an_internal_function
+code {FUNC}
+  jmp    0x10001008
+run lift {FUNC}
+end
+
+# CPython's limit of 1000 frames, five of them below the first nested visit: 995 nested blocks
+# are the most the Python follows; one more fails the mission with RecursionError
+case a_chain_of_blocks_just_below_the_recursion_limit
+code {ACTION}
+  jmp    {CHAIN}
+code {CHAIN}
+  @chain 993
+  ret
+run try_convert
+end
+
+case a_chain_of_blocks_just_above_the_recursion_limit
+code {ACTION}
+  jmp    {CHAIN}
+code {CHAIN}
+  @chain 994
+  ret
+run try_convert
+end

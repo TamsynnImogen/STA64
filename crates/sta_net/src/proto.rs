@@ -45,7 +45,21 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// 19 appends `Order::Trade` (tag 23) and cargo routes to the snapshot.
 /// 20 appends `Order::CancelBuild` (tag 24) and build job identities to the snapshot.
 /// 22 adds Armada II special-weapon state, and 23 adds Federation ability state.
-pub const PROTOCOL_VERSION: u16 = 23;
+/// 24 adds the Armada I Director's Cut match option to `GameOptions`.
+/// 25 adds the move mode to `Order::Move` (SIM-76, ADR 0011 G4) and to the transferred
+/// snapshot (its move-mode record).
+/// 26 adds the beams in flight to the transferred snapshot and marks the rule change of
+/// `beam_damage_at_end` (#1068): peers of both versions would compute different games.
+/// 27 adds the dying phases to the transferred snapshot and marks the rule change of
+/// `dying_phase` (#1100), for the same reason.
+/// 29 adds the warp ramps to the transferred snapshot and marks the rule change of
+/// `warp_shape` (#1102), for the same reason. (28 is not used here: the number is reserved.)
+/// 31 adds the match option "warp allowed" to `GameOptions` (#1102), which the lobby state
+/// and the start message carry, and to the transferred snapshot. (30 is not used here: the
+/// number is reserved.)
+/// 32 adds the flights of torpedoes to the transferred snapshot and marks the rule change of
+/// `ordnance_flight` (#1068), for the same reason.
+pub const PROTOCOL_VERSION: u16 = 32;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1668,6 +1682,7 @@ mod tests {
                 units: vec![EntityId(4), EntityId(5)],
                 to: Vec3::from_f32([1.5, 0.0, -2.0]),
                 queue: true,
+                mode: None,
             }),
         }
     }
@@ -1805,7 +1820,13 @@ mod tests {
                 name: "a2_borg01".into(),
                 digest: 42,
             },
-            options: GameOptions::default(),
+            options: {
+                let mut options = GameOptions::default();
+                options.directors_cut = true;
+                // not the default, so the golden pins the field (#1102)
+                options.allow_warp = false;
+                options
+            },
             seats: vec![
                 seat(0, Occupant::Peer),
                 seat(1, Occupant::Peer),
@@ -2161,7 +2182,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 23);
+        assert_eq!(PROTOCOL_VERSION, 32);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2169,7 +2190,9 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 14809612972772128274;
+    /// Pinned with protocol 32 (#1068): the header carries the number, so a new number
+    /// changes this value too (run the test, copy the left side).
+    const GOLDEN: u64 = 12778985215870054580;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2276,8 +2299,9 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 23, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 23, 0, 0, 0, 0, 0]);
+        let [v0, v1] = PROTOCOL_VERSION.to_le_bytes();
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', v0, v1, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', v0, v1, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2737,6 +2761,53 @@ mod tests {
         assert_eq!(s.turn.tick_of(10), 30);
         assert_eq!(s.turn.turn_of(32), 10);
         assert_eq!(s.turn.turn_of(Tick::MAX), u32::MAX);
+    }
+
+    /// The match option "warp allowed" (#1102) travels in the lobby state and in the start
+    /// message, and peers that build their game from the same start message agree on it.
+    #[test]
+    fn the_warp_option_travels_in_the_lobby_and_the_start_and_peers_agree() {
+        use sta_sim::WorldSource;
+        let wire = |m: &Message| decode(&encode(m).unwrap()).unwrap();
+        let lobby = |allow_warp: bool| {
+            let mut options = GameOptions::default();
+            options.allow_warp = allow_warp;
+            Message::Lobby(LobbyState { map: MapRef { name: "m".into(), digest: 1 }, options, seats: Vec::new(), closed: false })
+        };
+        for allow in [true, false] {
+            let Message::Lobby(l) = wire(&lobby(allow)) else { panic!("a lobby") };
+            assert_eq!(l.options.allow_warp, allow);
+        }
+        assert_ne!(encode(&lobby(true)).unwrap(), encode(&lobby(false)).unwrap(), "the option is on the wire");
+
+        // the start sample has the option off; every peer builds its game from what it received
+        let sent = start();
+        assert!(!sent.options.allow_warp);
+        let Message::Start(got) = wire(&Message::Start(sent.clone())) else { panic!("a start") };
+        assert_eq!(got, sent);
+        let content = std::sync::Arc::new(sta_content::ContentDb::builder().profile(sta_content::Profile::Sta2Classic).build().unwrap());
+        let game_of = |me: PlayerId| {
+            let setup = sta_sim::setup::GameSetup {
+                seed: got.seed,
+                map: std::sync::Arc::new(MapDef::empty()),
+                content: std::sync::Arc::clone(&content),
+                players: got.player_setups(me),
+                options: got.options.clone(),
+            };
+            let mut sim = sta_sim::Sim::from_setup(&setup);
+            sim.step(&[]);
+            sim
+        };
+        let (host, joiner) = (game_of(PlayerId(0)), game_of(PlayerId(1)));
+        assert!(host.match_warp_off() && joiner.match_warp_off());
+        assert_eq!(host.digest(), joiner.digest());
+        // a peer that had the option the other way would not be in the same game
+        let mut other = got.clone();
+        other.options.allow_warp = true;
+        let setup = sta_sim::setup::GameSetup { seed: other.seed, map: std::sync::Arc::new(MapDef::empty()), content, players: other.player_setups(PlayerId(1)), options: other.options };
+        let mut on = sta_sim::Sim::from_setup(&setup);
+        on.step(&[]);
+        assert_ne!(on.digest(), host.digest());
     }
 
     #[test]

@@ -162,7 +162,7 @@ fn a_ship_inside_a_nebula_darkens_the_gas_behind_it() {
     ));
     let (lo, hi) = (Vec3::new(-400.0, -200.0, -300.0), Vec3::new(400.0, 200.0, 300.0));
     let cube = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(1.0, 1.0, 1.0));
-    let nebula = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: gas(eye, lo, hi), noise: None, envelope: None, shadow: None });
+    let nebula = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: gas(eye, lo, hi), noise: None, envelope: None, shadow: None, light: None });
     app.world_mut().spawn((Mesh3d(cube.clone()), MeshMaterial3d(nebula), Transform::from_translation((lo + hi) * 0.5).with_scale(hi - lo)));
     // A ship above the gas, on a layer the camera does not draw: only its shadow (cast by
     // the proxy, which the shadow camera does draw) shows.

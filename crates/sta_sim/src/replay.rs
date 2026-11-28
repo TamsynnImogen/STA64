@@ -46,8 +46,13 @@ pub const MAGIC: [u8; 4] = *b"STAR";
 /// format 5 adds `ControlRec::RemoteAi` and digests the AI seats, so the
 /// digests of a replay with a computer player differ from format 4's.
 /// Format 6 adds single-job cancellation and digests production job identities.
-/// Older formats are refused ([`ReplayError::FormatVersion`]).
-pub const FORMAT_VERSION: u16 = 6;
+/// Format 7 records the Armada I Director's Cut match option.
+/// Format 8 (SIM-76) logs the move mode of `Order::Move` (a new field in the
+/// middle of the command bytes): formats 6 and 7 are refused, not migrated, as
+/// their commands no longer decode alike.
+/// Format 9 (#1102) records the match option "warp allowed" (a new field of the options in the
+/// header): format 8 is refused, not migrated.
+pub const FORMAT_VERSION: u16 = 9;
 /// Digest every this many ticks unless the recorder is told otherwise.
 pub const DEFAULT_DIGEST_EVERY: Tick = 30;
 
@@ -84,7 +89,7 @@ impl std::fmt::Display for ReplayError {
         match self {
             ReplayError::BadMagic => write!(f, "not a replay file"),
             ReplayError::FormatVersion { found } if *found < FORMAT_VERSION => {
-                write!(f, "replay format {found} is from an older STA64 and cannot be read (this build reads format {FORMAT_VERSION} only)")
+                write!(f, "replay format {found} is from an older STA64 and cannot be read (this build reads format {FORMAT_VERSION})")
             }
             ReplayError::FormatVersion { found } => {
                 write!(f, "replay format {found}, expected {FORMAT_VERSION}")
@@ -202,6 +207,7 @@ pub struct Replay {
     pub end_tick: Tick,
 }
 
+
 impl Replay {
     /// The header of a game started from `setup`: no commands yet, no digests
     /// and `end_tick` 0. A recorder fills in the rest ([`Recorder`], or a
@@ -296,10 +302,14 @@ impl Replay {
         Ok(r)
     }
 
+    fn matches_pre_directors_cut_content(&self, content: &ContentDb) -> bool {
+        !self.options.directors_cut && content.matches_pre_directors_cut_hash(self.content_hash)
+    }
+
     /// The setup the game started from, on `content`, which must be the
     /// content it was recorded with.
     pub fn setup(&self, content: Arc<ContentDb>) -> Result<GameSetup, ReplayError> {
-        if content.hash() != self.content_hash {
+        if content.hash() != self.content_hash && !self.matches_pre_directors_cut_content(&content) {
             return Err(ReplayError::ContentMismatch {
                 expected: self.content_hash,
                 found: content.hash(),
@@ -364,6 +374,9 @@ impl Replay {
     /// tick `until` (a capture stops before the log ends). Recorded digests
     /// at or before `until` are checked, tick 0's included.
     pub fn play_from(&self, mut sim: Sim, until: Tick) -> Result<Sim, ReplayError> {
+        let legacy_hash = sim.content.as_deref().filter(|db| {
+            !sim.directors_cut && db.hash() != self.content_hash && self.matches_pre_directors_cut_content(db)
+        }).map(|_| self.content_hash);
         let mut next_digest = 0;
         let mut next_cmd = 0;
         loop {
@@ -373,7 +386,7 @@ impl Replay {
                     break;
                 }
                 next_digest += 1;
-                let found = sim.digest();
+                let found = legacy_hash.map_or_else(|| sim.digest(), |hash| sim.digest_with_content_hash(hash));
                 if t == tick && found != expected {
                     return Err(ReplayError::Desync {
                         tick,
@@ -530,6 +543,7 @@ mod tests {
                         units,
                         to,
                         queue: false,
+                        mode: None,
                     }),
                 }]
             } else {
@@ -683,18 +697,52 @@ mod tests {
     }
 
     #[test]
+    fn replays_before_the_move_mode_are_refused() {
+        // Formats 6 and 7 logged `Order::Move` without its mode (SIM-76): their commands do not decode alike.
+        let replay = Recorder::with_interval(&setup(), 1).finish();
+        for old in [6u16, 7] {
+            let mut bytes = replay.encode();
+            bytes[4..6].copy_from_slice(&old.to_le_bytes());
+            assert_eq!(Replay::decode(&bytes), Err(ReplayError::FormatVersion { found: old }));
+        }
+        assert_eq!(Replay::decode(&replay.encode()), Ok(replay));
+    }
+
+    #[test]
     fn historical_native_commands_retain_their_default_simulation_golden() {
         // Test-only extraction of known old commands, not a public replay
         // migration path. The real decoder above correctly rejects revision 1.
+        // The commands of the file as they were written, before `Order::Move` gained its mode
+        // (SIM-76): only the two order tags the file uses, and the edits it holds.
+        #[derive(Deserialize)]
+        enum LegacyOrder { Move { units: Vec<EntityId>, to: Vec3, queue: bool }, Stop { units: Vec<EntityId> } }
+        #[derive(Deserialize)]
+        enum LegacyKind { Order(LegacyOrder), Edit(Edit) }
+        #[derive(Deserialize)]
+        struct LegacyCommand { player: PlayerId, seq: u32, kind: LegacyKind }
+        #[derive(Deserialize)]
+        struct LegacyLogged { tick: Tick, command: LegacyCommand }
         #[derive(Deserialize)]
         struct LegacyReplay {
             seam_rev: u32, content_hash: u64, seed: u64, map: MapDef,
-            players: Vec<SeatRec>, commands: Vec<Logged>, digests: Vec<(Tick,u64)>, end_tick: Tick,
+            players: Vec<SeatRec>, commands: Vec<LegacyLogged>, digests: Vec<(Tick,u64)>, end_tick: Tick,
         }
         let (old, rest): (LegacyReplay, _) = postcard::take_from_bytes(&NATIVE_V1[6..]).unwrap();
+        let commands = old.commands.into_iter().map(|l| Logged {
+            tick: l.tick,
+            command: Command {
+                player: l.command.player,
+                seq: l.command.seq,
+                kind: match l.command.kind {
+                    LegacyKind::Order(LegacyOrder::Move { units, to, queue }) => CommandKind::Order(Order::Move { units, to, queue, mode: None }),
+                    LegacyKind::Order(LegacyOrder::Stop { units }) => CommandKind::Order(Order::Stop { units }),
+                    LegacyKind::Edit(e) => CommandKind::Edit(e),
+                },
+            },
+        }).collect();
         let mut replay = Replay { seam_rev: old.seam_rev, content_hash: old.content_hash,
             lineage: String::new(), packs: Vec::new(), peers: Vec::new(),
-            seed: old.seed, map: old.map, players: old.players, commands: old.commands,
+            seed: old.seed, map: old.map, players: old.players, commands,
             digests: old.digests, end_tick: old.end_tick, options: GameOptions::default(), starts: StartRec::Bare };
         assert!(rest.is_empty());
         assert_eq!(replay.seam_rev, 1);
@@ -734,7 +782,7 @@ mod tests {
                 vec![Command {
                     player: PlayerId(0),
                     seq: t as u32,
-                    kind: CommandKind::Order(Order::Move { units: mine, to: Vec3::from_f32([t as f32, 0.0, 40.0]), queue: false }),
+                    kind: CommandKind::Order(Order::Move { units: mine, to: Vec3::from_f32([t as f32, 0.0, 40.0]), queue: false, mode: None }),
                 }]
             } else {
                 vec![]
@@ -812,10 +860,11 @@ mod tests {
             Replay::decode(&bytes[..bytes.len() - 3]),
             Err(ReplayError::Corrupt(_))
         ));
-        bytes[4] = 9;
+        let other = FORMAT_VERSION + 1;
+        bytes[4] = other as u8;
         assert_eq!(
             Replay::decode(&bytes).unwrap_err(),
-            ReplayError::FormatVersion { found: 9 }
+            ReplayError::FormatVersion { found: other }
         );
         let mut other = replay.clone();
         other.seam_rev = SEAM_REV + 1;

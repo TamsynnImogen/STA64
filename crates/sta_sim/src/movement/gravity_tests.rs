@@ -7,7 +7,7 @@ use sta_content::{ContentDb, MoveStats, Profile, Rules, UnitDef};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 
 use crate::command::{Command, CommandKind, Order};
-use crate::movement::approach::{IN_WARP, WARP_OUT};
+use crate::movement::approach::{ENTERING, IN_WARP, WARP_OUT};
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use crate::{Sim, WorldSource};
 
@@ -131,10 +131,9 @@ fn assert_warp_is_suppressed_inside_authored_field(well_class: &str) {
             previous_phase = phase;
         }
         if inside {
-            assert_ne!(
-                phase,
-                Some(IN_WARP),
-                "in warp inside {well_class} at {position:?}"
+            assert!(
+                !sim.approach_warp.contains(craft),
+                "at warp or entering it inside {well_class} at {position:?}"
             );
             reached_impulse_inside |= unit.speed <= unit.stats.max_speed;
         }
@@ -146,7 +145,7 @@ fn assert_warp_is_suppressed_inside_authored_field(well_class: &str) {
         reached_impulse_inside,
         "craft never reached impulse inside {well_class}"
     );
-    assert_eq!(transitions, [IN_WARP, WARP_OUT, IN_WARP, WARP_OUT]);
+    assert_eq!(transitions, [ENTERING, IN_WARP, WARP_OUT, ENTERING, IN_WARP, WARP_OUT]);
 }
 
 #[test]
@@ -162,7 +161,7 @@ fn black_hole_field_suppresses_move_warp_and_allows_reentry_after_exit() {
 #[test]
 fn warp_entry_checks_altitude_and_hull_overlap() {
     // (120, 288, 0) lies exactly 312 units from the well's centre.
-    for (height, expected_phase) in [(287, None), (288, Some(IN_WARP))] {
+    for (height, expected_phase) in [(287, None), (288, Some(ENTERING))] {
         let (mut sim, craft) = authored_fixture("planet");
         let ship = sim.units.get_mut(craft).unwrap();
         ship.pos = at(120, height, 0);

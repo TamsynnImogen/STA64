@@ -11,8 +11,8 @@
 //! | near clip plane | `NEAR_CLIPPING_PLANE` | 20 |
 //! | LOD distances | `DETAIL_2_LOD_0..3_DISTANCE` (middle detail level) | 1000, 500, 300, 100 |
 //!
-//! The fade is not a configuration value in the games: it is the engine's
-//! `GameObjectInstance::ComputeFadeOut` (Refit `render3d/README.md`, "View
+//! The fade is not a configuration value in the games: it is the engine's own rule (read
+//! from the executable, static; Refit `render3d/README.md`, "View
 //! distance"): an object fades from [`FADE_FROM`] (0.9) of the culling distance to
 //! all of it, by its distance from the camera with the vertical scaled by a quarter
 //! ([`VERTICAL_SCALE`]). Stock also scales the distance by the object's radius for

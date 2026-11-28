@@ -14,12 +14,15 @@
 // lights, the wave light, near/far fade, cloaks, holograms, the build ghost and the
 // sprite pass; the vertex stage is Bevy's own.
 
+// The camera of the view being drawn (Bevy's view uniform), not a material value: its world position is the eye.
+import bevy_pbr::render::mesh_view_bindings::view;
+import bevy_pbr::render::mesh_functions::get_tag;
+
 struct HullParams {
     amb: vec4<f32>,   // ambient rgb; a: self-illumination (0: none; above 1 brighter than the texture)
     tint: vec4<f32>,  // the diffuse colour (team colour on team groups, else white)
     misc: vec4<f32>,  // x: alpha out; y: specular strength; z: its exponent; w: the Key's strength
     rim: vec4<f32>,   // rim light colour; a: its exponent
-    eye: vec4<f32>,   // the camera, world
     cut: vec4<f32>,   // x: 1 to cut out at texture alpha 0.5; y: the normal map's strength (0: none); z: the highlight knee; w: 1 draws a Stock model 0 material unlit
     uv: vec4<f32>,    // xy: the flipbook's UV offset
     dvec: array<vec4<f32>, 4>,  // towards each directional light
@@ -57,6 +60,22 @@ struct FragIn {
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
 };
+
+// The colour pass's input: the same, with the instance (the emissive mask pass has no instance output).
+struct FragInInstance {
+    @builtin(position) position: vec4<f32>,
+    @builtin(front_facing) front: bool,
+    @location(0) world_position: vec4<f32>,
+    @location(1) world_normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(6) @interpolate(flat) instance_index: u32,
+};
+
+// A model out of sight carries the factor on its light as its mesh tag (the bits of the f32; 0: none, #1146).
+fn ghost_light(instance_index: u32) -> f32 {
+    let tag = get_tag(instance_index);
+    return select(1.0, bitcast<f32>(tag), tag != 0u);
+}
 
 fn glint(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>) -> f32 {
     let h = normalize(l + v);
@@ -133,7 +152,7 @@ fn from_srgb(c: vec3<f32>) -> vec3<f32> {
 // facing, times the highlight colour and the
 // map's RGB. The lights are the look's own (`dvec`, `dcol`).
 fn mapped_highlight(n: vec3<f32>, wp: vec3<f32>, mask: vec3<f32>) -> vec3<f32> {
-    let v = normalize(k.eye.xyz - wp);
+    let v = normalize(view.world_position - wp);
     // The mapped defaults, or the authored Phong values when enabled.
     let col = k.mhl.rgb;
     let pw = k.mhl.w;
@@ -161,7 +180,7 @@ fn add_emissive(c: vec3<f32>, em: vec3<f32>) -> vec3<f32> {
 // Stock: the original engine's fixed-function lighting from the SOD material, per light
 // diffuse colour times N.L, specular added after the texture, the lit colour clipped at 1.
 fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec3<f32>) -> vec4<f32> {
-    let v = normalize(k.eye.xyz - wp);
+    let v = normalize(view.world_position - wp);
     // mamb.a 2 (Armada I): the vertex starts from scene ambient + material ambient; else their product.
     var sum = select(k.mamb.rgb * k.amb.rgb, k.mamb.rgb + k.amb.rgb, k.mamb.a > 1.5);
     var sum_diffuse = vec3<f32>(0.0);
@@ -210,7 +229,7 @@ fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec3<f32>
     if k.mamb.a > 0.5 {
         return shade_stock(n, wp, t, sm, em);
     }
-    let v = normalize(k.eye.xyz - wp);
+    let v = normalize(view.world_position - wp);
     var sum = k.amb.rgb;
     var spec = vec3<f32>(0.0);
     let key = mix(1.0, map_shadow(wp, n), k.shp.w);
@@ -269,7 +288,7 @@ fn emissive_mask(i: FragIn) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fragment(i: FragIn) -> @location(0) vec4<f32> {
+fn fragment(i: FragInInstance) -> @location(0) vec4<f32> {
     let uv = i.uv + k.uv.xy;
     let wp = i.world_position.xyz;
     var nn = normalize(i.world_normal);
@@ -309,5 +328,6 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
             n = nb / l;
         }
     }
-    return shade(n, wp, t, sm, em);
+    let c = shade(n, wp, t, sm, em);
+    return vec4<f32>(c.rgb * ghost_light(i.instance_index), c.a);
 }

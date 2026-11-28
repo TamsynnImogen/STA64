@@ -107,10 +107,29 @@ impl Sim {
         true
     }
 
-    /// May a craft warp at all (`AllowWarp`): ANDed into the approach and
-    /// warp-move decisions.
+    /// May a craft warp at all: the mission switch (`AllowWarp`), the content's warp switch
+    /// (`Rules::warp_enabled`, #1102) and the match option (`GameOptions::allow_warp`) must
+    /// all allow it. A script cannot turn warp back on for content that has none or in a match
+    /// that has it off (the three are separate in the original: read from the executable,
+    /// static). ANDed into every decision that asks for warp: the warp move (also the one a
+    /// plain move of a keyed craft becomes), the attack approach, and the gravity wells that
+    /// only matter to warp. A sim without content has warp.
     pub(crate) fn warp_allowed(&self) -> bool {
-        self.mission_switches.allow_warp
+        self.mission_switches.allow_warp && !self.match_warp_off && self.content.as_deref().is_none_or(|db| db.rules().warp_enabled())
+    }
+
+    /// Whether the match option "warp allowed" is off for this match (always false outside the
+    /// profile it counts for).
+    pub fn match_warp_off(&self) -> bool {
+        self.match_warp_off
+    }
+
+    /// The match option in the digest: a marker only when it is off, so a match with warp
+    /// allowed keeps every digest it had before the option existed.
+    pub(crate) fn hash_match_warp(&self, hash: &mut crate::world::Fnv) {
+        if self.match_warp_off {
+            hash.str("match-warp-off");
+        }
     }
 
     /// The switches as the view shows them.

@@ -44,7 +44,7 @@ fn a_scout_crossing_a_map_warps_and_a_short_move_stays_at_impulse() {
         let to = Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: n(dist) };
         let (mut top, mut arrived) = (Fixed::ZERO, None);
         for i in 0..secs * TICK_HZ {
-            let cmds = if i == 0 { vec![Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![s], to, queue: false }) }] } else { vec![] };
+            let cmds = if i == 0 { vec![Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![s], to, queue: false, mode: None }) }] } else { vec![] };
             WorldSource::step(&mut sim, &cmds);
             let u = sim.unit(s).unwrap();
             top = top.max(u.speed);

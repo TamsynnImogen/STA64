@@ -79,6 +79,8 @@ with its own claim; an agent does not hold claims it is not working on.
 - Push early and often. A pushed branch shows the claim is alive.
 - Blocked, need a seam change, or found the plan wrong: comment on the issue
   first, then open the seam PR or ask. Don't work around a seam locally.
+  Touching paths another claim owns follows "Idle claims and mechanical
+  edits" below.
 - Don't start from another package's unmerged branch; use the fakes.
 
 ## Freezes
@@ -105,12 +107,20 @@ paths fall under an open freeze wait; ones elsewhere carry on.
 - CI on a PR runs `core crates` on `ubuntu-latest` always, and `sta64` on
   `ubuntu-latest` only when the PR touches `crates/sta64/`, `assets/`,
   `bench/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or the CI
-  workflow. The full 4-OS matrix (Linux x86-64 and ARM, macOS, Windows) runs on
-  every non-docs-only push to `main`, one run at a time (later pushes collapse into one
-  pending run). Add the `full-ci` label to a PR that touches file paths or
-  line endings, platform code, determinism (digests, RNG, float or hash
-  ordering, goldens) or file formats (saves, snapshots, network protocol,
-  content formats), so all four OSes run (including `sta64`) before the merge.
+  workflow. `core crates` runs the tests, clippy and the `sta-bench` report;
+  `sta64` runs `cargo check --all-targets`, clippy, the sim-only bench smoke
+  and the release tests (a PR that only touches `docs/` runs no CI). Linux
+  only is the default for a pull request, and is enough to merge. The full
+  4-OS matrix (Linux x86-64 and ARM, macOS, Windows) runs on every
+  non-docs-only push to `main`, one run at a time (later pushes collapse into
+  one pending run), and is where platform differences are caught. The `full-ci`
+  label is optional: it runs all four OSes, including `sta64`, on the PR
+  (each such run takes 30 to 60 minutes, by STA64's own observation). Add it
+  only when the risk of the change is the platform itself: path handling, line
+  endings, platform-specific code, linking or vendored native code, build
+  scripts, the CI workflow. Not for determinism or file formats as such.
+- Whoever merged a PR that turns `main` red on another OS fixes it or reverts
+  it first, before other work. This binds agents and people alike.
 - Because a PR that does not touch `sta64` no longer builds it, run
   `cargo check --workspace --all-targets` and the tests of every crate you
   changed locally before pushing (see "Builds"), whatever CI will run.
@@ -129,6 +139,43 @@ paths fall under an open freeze wait; ones elsewhere carry on.
   questioned with a comment on the issue. If nobody answers within 24 hours,
   a new session may take it over: comment, reassign, replace the claim line.
 
+## Idle claims and mechanical edits
+
+The "Stale" rule above is about taking a package over. This section is about
+touching the paths of a claim without taking it over. It does not weaken the
+"Stale" rule, and the 48-hour question and 24-hour takeover stay as they are.
+
+A claim is **idle** when it is open and has had no push to its branch or
+branches, no PR and no comment on its issue for seven days. A claim that is
+not idle keeps the rule in "While working": comment on its issue first, then
+open the seam PR or ask.
+
+**Mechanical edits.** Any PR may make mechanical, behaviour-free edits in the
+paths an idle claim owns: a field added with its default at call sites, a
+rename a seam change forces, an import. Nothing that changes what that
+package's code does. The PR:
+
+- lists every such file under "files touched outside owns" and says the edits
+  are mechanical,
+- links the claim issue and leaves a comment there when the PR opens,
+- requests the claim holder as reviewer.
+
+The claim holder may ask on the PR for a different shape. Until they do, the
+claim does not block the PR.
+
+**Work an accepted ADR assigns elsewhere.** When an accepted ADR moves state
+or code that an idle claim owns into another package, that package may
+proceed after a notice on the claim issue and 24 hours without objection.
+Tests that the claim's merged PRs added stay unchanged and count as the
+contract; a test that would have to change is raised on the claim issue first.
+The claim's still-open parts stay with it. The issue is not reassigned or
+edited.
+
+**Seam PRs.** A seam PR that adds a field or variant fixes every caller on
+`main` in the same PR, including callers under open claims. Those fixes are
+mechanical edits under the conditions above. For a claim that is not idle, the
+holder agrees first, on the issue or on the PR.
+
 ## Packages not in the plan
 
 Every claimed ID must be in WORKPLAN. New work gets the next free number in
@@ -136,6 +183,38 @@ its lane (`CON-15`) through a small PR that adds the row to WORKPLAN's lane
 table, with *owns*, *needs* and *done when*. That PR may be the package's own
 first commit, but the issue body says `Not in WORKPLAN yet: added by #NN.`
 until it merges.
+
+## Decisions: ADRs and experiments
+
+An ADR (`docs/adr/`) records a technical decision that is hard to reverse:
+one that other work, stored data, a file or wire format, mod-facing behaviour
+or a stated promise will come to depend on, so that undoing it later costs far
+more than making it now. Examples by topic: the engine choice, the
+deterministic simulation rules, the modding rules.
+
+A decision that is easy to reverse needs no ADR. Try it, measure it, and back
+it out if it is wrong: a small PR that can be reverted on its own, the
+evidence in the PR body, open points as `TODO.md` lines. Fail fast; do not
+wait for a decision record. An experiment is still ordinary work: claims,
+freezes, review, evidence grades, the content rules and every accepted ADR
+apply to it. It skips only the record, not the process.
+
+Is it easy to reverse? Ask: can one revert undo it; does any save, replay,
+protocol, content or mod format change; has other work been built on it. If
+unsure, say so in the PR and ask.
+
+Keep ADRs true. When a change alters what an existing ADR says, amend the ADR
+in the same PR or a companion docs PR, even when the change itself is easy to
+revert. An out-of-date ADR is worse than none.
+
+Quick experiments do not lower the bar for code that stays. What is merged is
+meant to be maintained for years: tests that fail without the change, no
+leftover switches, dead paths or measurement code from the experiment, names
+and comments that explain the rule. An experiment that did not work out is
+removed, not left behind.
+
+Who approves is unchanged (see "Modding decisions" below and
+[docs/adr/README.md](docs/adr/README.md)).
 
 ## Modding decisions
 
@@ -169,6 +248,25 @@ Recorded as [ADR 0003](docs/adr/0003-clean-room-content-policy.md); the rules be
   hand, count as game content and are never committed or released. Conversion
   happens on the player's machine from their own install into the user data
   directory (WORKPLAN LUA-15 and the note under the LUA table).
+- A fixed lookup name by which the original engine selects an entry that the
+  install's own data defines may be a named constant in code, where the code
+  needs it to find that entry at run time, with a one-line comment (rule and
+  evidence grade); a mod may define the entry under that name. Lookup names
+  only: definitions, values and every other name from game assets stay under
+  the rules above, and these names appear in code only, never in issues, PR
+  bodies, review comments, commit messages, docs, WORKPLAN or TODO.md. The
+  same holds for a fixed file path by which the original engine opens data the
+  player's install provides (a shell background picture, an intro movie): a
+  named constant in code only, with a one-line comment (rule and evidence
+  grade), identifiable by name, module or comment as belonging to its game or
+  profile where it is specific to one; the file and anything read from it are
+  never committed, and a mod may provide its own file.
+- A description, in our own words, of how a stock mission plays (what the
+  player is asked to do, in what order, what ends it) may be committed as a
+  hand-written playthrough plan for tests or as descriptive lines in docs.
+  Names from game files (units, maps, files, objects), measured thresholds and
+  timings, map positions, caption and dialogue texts and anything copied or
+  converted from the mission files stay out, as do the converted scripts.
 
 ## Builds
 
@@ -219,6 +317,14 @@ at once. Bevy makes `sta64` heavy.
   serialised and this protection does not hold). Never `touch` source files or run
   the check against a stale directory to work around odd errors: if a check
   error does not match your source, report it.
+- Incremental builds are opt-in: `tools/agent-cargo --incremental check -p
+  sta_sim` (or `STA64_INCREMENTAL=1`) leaves `CARGO_INCREMENTAL` unset, so the
+  workspace crates compile incrementally (measured 3.5 to 9 times faster edit
+  cycles; dependencies stay cached in sccache). It costs 2 to 3 GB of
+  `incremental/` per worktree `target/`, leaves job counts and every other
+  policy as they are, and is ignored (with a notice) for the shared workspace
+  check directory. Use it while iterating on one crate in one worktree, not
+  for one-off checks.
 - One cargo command at a time per agent, in the foreground; no background
   builds, no `pkill`.
 - Scope to the packages you changed (`-p`). Prefer `cargo check` while

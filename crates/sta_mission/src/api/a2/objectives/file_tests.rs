@@ -15,7 +15,7 @@ fn runtime(script: &str) -> MissionRuntime {
             b"Second heading\nSecond briefing.\n*Gamma\n*New goal\n*Alpha\nSecond notes.\n".to_vec(),
         ),
         ("objectives/bad.txt", b"Broken heading\n*\n".to_vec()),
-        ("objectives/encoded.txt", vec![0xff]),
+        ("objectives/headless.txt", b"* a goal before any heading\n".to_vec()),
     ]
     .into_iter()
     .map(|(name, bytes)| (name.to_owned(), bytes))
@@ -90,7 +90,7 @@ fn missing_malformed_path_and_argument_failures_preserve_host_state() {
             function() A2.ObjectivesDisplay_Set_Text_From_File('../escape.txt', false) end,
             function() A2.ObjectivesDisplay_Set_Text_From_File('/absolute.txt', false) end,
             function() A2.ObjectivesDisplay_Set_Text_From_File('bad.txt', false) end,
-            function() A2.ObjectivesDisplay_Set_Text_From_File('encoded.txt', false) end
+            function() A2.ObjectivesDisplay_Set_Text_From_File('headless.txt', false) end
         }
         for _, call in ipairs(bad) do
             assert(not pcall(call))

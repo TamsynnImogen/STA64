@@ -49,6 +49,9 @@ pub enum Act {
     SaveSetup,
     LoadSetup,
     CycleOfficerLimit,
+    ToggleDirectorsCut,
+    /// The match option "warp allowed" (#1102, #1402): shown only where the content offers it.
+    ToggleWarp,
     CycleMatchSpeed,
     PickTeamColour(usize),
     RandomTeamColour,
@@ -226,7 +229,7 @@ fn single_player(ctx: &Ctx) -> impl Bundle {
                 }
             }
         }
-        p.spawn(disabled_button(&t, &tr("Load game"), w));
+        p.spawn((button(&t, &tr("Load game"), w), crate::ui::save_menu::OpenSaveButton(crate::ui::save_menu::SaveMode::Load)));
         p.spawn((button(&t, &tr("Previous menu"), w), Act::Goto(Screen::Main)));
     })
 }
@@ -345,6 +348,8 @@ fn advanced(ctx: &Ctx) -> impl Bundle {
     let resources = ctx.strings.and_then(|s| s.native_label(resources.0))
         .filter(|s| !s.trim().is_empty()).map(str::to_owned).unwrap_or_else(|| tr(resources.1));
     let officer = officer_caption(ctx);
+    let directors = directors_caption(ctx);
+    let warp = warp_caption(ctx);
     content(ctx.theme, move |p| {
         p.spawn((button(&t, &resources, 360.0), Act::CycleResources));
         if let Some(caption) = &officer {
@@ -353,11 +358,55 @@ fn advanced(ctx: &Ctx) -> impl Bundle {
             p.spawn(disabled_button(&t, &tr("Officer limit unavailable"), 360.0));
         }
         p.spawn((button(&t, &speed, 360.0), Act::CycleMatchSpeed));
+        if let Some(caption) = &directors {
+            p.spawn((button(&t, caption, 360.0), Act::ToggleDirectorsCut));
+        }
+        if let Some(caption) = &warp {
+            p.spawn((button(&t, caption, 360.0), Act::ToggleWarp));
+        }
         p.spawn(row(t.gap)).with_children(|r| {
             r.spawn((button(&t, &tr("OK"), 140.0), Act::CloseAdvanced(true)));
             r.spawn((button(&t, &tr("Cancel"), 140.0), Act::CloseAdvanced(false)));
             r.spawn((button(&t, &tr("Default"), 170.0), Act::DefaultOptions));
         });
+    })
+}
+
+/// The label keys of the match option "warp allowed" and STA64's own wording for a mount whose label data lacks
+/// them. The texts themselves are the install's, read at run time through the keys.
+pub(crate) const WARP_ON_KEY: &str = "warp_enabled";
+pub(crate) const WARP_OFF_KEY: &str = "warp_disabled";
+pub(crate) const WARP_ON_FALLBACK: &str = "Warp: On";
+pub(crate) const WARP_OFF_FALLBACK: &str = "Warp: Off";
+
+/// The key and the fallback of the option's caption for the state `on`.
+pub(crate) fn warp_label(on: bool) -> (&'static str, &'static str) {
+    if on { (WARP_ON_KEY, WARP_ON_FALLBACK) } else { (WARP_OFF_KEY, WARP_OFF_FALLBACK) }
+}
+
+/// The caption of the "warp allowed" control, or `None` where the content does not offer the option (anything but
+/// the stock Armada II profile with content that has warp: `GameOptions::warp_offered`). STA64's own, INTERIM: it is
+/// offered in the skirmish as in the lobby (whether the original offers it outside a network match is not
+/// established), the control sits in the slot of Director's Cut (the two belong to different profiles, so they never
+/// show together), and the default is on.
+pub(crate) fn warp_caption(ctx: &Ctx) -> Option<String> {
+    sta_sim::setup::GameOptions::warp_offered(&ctx.data.content).then(|| {
+        let (key, fallback) = warp_label(ctx.draft.options.allow_warp);
+        ctx.strings.and_then(|s| s.native_label(key)).filter(|s| !s.trim().is_empty()).map_or_else(|| tr(fallback), str::to_owned)
+    })
+}
+
+/// Armada I label.map reverses the state key names: directors_on reads Off.
+pub(crate) fn directors_caption(ctx: &Ctx) -> Option<String> {
+    (ctx.data.content.profile() == sta_content::Profile::Sta1Classic).then(|| {
+        let (key, fallback) = if ctx.draft.options.directors_cut {
+            ("directors_off", "Director's Cut: On")
+        } else {
+            ("directors_on", "Director's Cut: Off")
+        };
+        ctx.strings.and_then(|s| s.native_label(key))
+            .filter(|s| !s.trim().is_empty())
+            .map_or_else(|| tr(fallback), str::to_owned)
     })
 }
 

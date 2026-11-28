@@ -309,14 +309,14 @@ fn another_order_leaves_the_landed_colonists_and_frees_the_planet() {
     let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(300, 0));
     assert!(colonize(&mut sim, 0, s, planet));
     run(&mut sim, 150 * 3);
-    assert!(run_cmd(&mut sim, PlayerId(0), CommandKind::Order(Order::Move { units: vec![s], to: at(2000, 2000), queue: false })));
+    assert!(run_cmd(&mut sim, PlayerId(0), CommandKind::Order(Order::Move { units: vec![s], to: at(2000, 2000), queue: false, mode: None })));
     assert_eq!(pop(&sim, planet), n(400));
     assert_eq!(sim.colonies().row(planet).unwrap().colonizer, None);
     assert!(sim.colonies().process(s).is_none());
     // A queued move does not replace the colonization.
     let t = spawn(&mut sim, "fx_colony", PlayerId(1), at(-300, 0));
     assert!(colonize(&mut sim, 1, t, planet));
-    assert!(run_cmd(&mut sim, PlayerId(1), CommandKind::Order(Order::Move { units: vec![t], to: at(-2000, 0), queue: true })));
+    assert!(run_cmd(&mut sim, PlayerId(1), CommandKind::Order(Order::Move { units: vec![t], to: at(-2000, 0), queue: true, mode: None })));
     assert!(sim.colonies().process(t).is_some());
 }
 
@@ -719,7 +719,7 @@ fn landed_pods_then_damage_to_zero_then_the_order_ends_keeps_the_row_and_neutral
     apply_hits(&mut sim, from);
     assert_eq!(pop(&sim, planet), Fixed::ZERO);
     round_trips(&sim, &db);
-    assert!(run_cmd(&mut sim, PlayerId(0), CommandKind::Order(Order::Move { units: vec![s], to: at(900, 0), queue: false })));
+    assert!(run_cmd(&mut sim, PlayerId(0), CommandKind::Order(Order::Move { units: vec![s], to: at(900, 0), queue: false, mode: None })));
     assert!(sim.colonies().process(s).is_none());
     assert_eq!(sim.colonies().row(planet).map(|r| r.population), Some(Fixed::ZERO), "the row stays");
     round_trips(&sim, &db);

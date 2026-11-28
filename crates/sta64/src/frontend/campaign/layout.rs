@@ -28,6 +28,12 @@ pub enum CSlot {
     ListDetails,
     ListBack,
     ListPlay,
+    /// The conversion's progress or result line under the rows (LUA-15k); only while it has text.
+    ListStatus,
+    /// The conversion's button (Prepare missions, Convert again, Cancel); only where it applies.
+    ListConvert,
+    /// The button that replaces the scripts the player edited; only while there are some.
+    ListReplace,
     // Briefing.
     BriefTitle,
     BriefText,
@@ -51,15 +57,17 @@ const fn a(x: f32, y: f32, w: f32, h: f32) -> Region {
 pub fn region(slot: CSlot) -> Region {
     match slot {
         CSlot::ListTitle | CSlot::BriefTitle | CSlot::DebTitle => a(0.0, 0.0, 800.0, 30.0),
-        CSlot::ListRows => a(40.0, 50.0, 360.0, 480.0),
-        CSlot::ListDetails => a(430.0, 50.0, 330.0, 480.0),
+        CSlot::ListRows => a(40.0, 50.0, 360.0, 440.0),
+        CSlot::ListDetails => a(430.0, 50.0, 330.0, 440.0),
         CSlot::ListBack | CSlot::BriefBack | CSlot::DebList => a(24.0, 560.0, 200.0, 34.0),
         CSlot::ListPlay | CSlot::BriefStart | CSlot::DebNext => a(576.0, 560.0, 200.0, 34.0),
         CSlot::BriefText => a(40.0, 50.0, 720.0, 310.0),
         CSlot::BriefGoals => a(40.0, 370.0, 720.0, 170.0),
         CSlot::DebResult => a(40.0, 50.0, 720.0, 60.0),
         CSlot::DebText => a(40.0, 120.0, 720.0, 410.0),
-        CSlot::DebRetry => a(300.0, 560.0, 200.0, 34.0),
+        CSlot::DebRetry | CSlot::ListConvert => a(300.0, 560.0, 200.0, 34.0),
+        CSlot::ListStatus => a(40.0, 494.0, 720.0, 24.0),
+        CSlot::ListReplace => a(576.0, 520.0, 200.0, 34.0),
     }
 }
 

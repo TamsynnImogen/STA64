@@ -70,6 +70,12 @@ pub enum SimEvent {
     OrderAbandoned { id: EntityId },
     /// A replacement weapon or Evolution retired one object and created its successor.
     Replaced { old: EntityId, new: EntityId, select: bool },
+    /// A craft or station's hull reached zero and its dying phase began (`dying_phase`,
+    /// #1100): it stays in the world, drawn, until its [`SimEvent::Destroyed`], which names
+    /// the same `by` (the first lethal hitter). Without the switch a unit at zero hull is
+    /// destroyed on the same tick and no `Dying` is sent. Appended to preserve every
+    /// existing postcard event tag.
+    Dying { id: EntityId, by: Option<EntityId> },
 }
 
 /// Where a freighter is in `ToNode -> Mining -> ToDock -> Unloading` ([`SimEvent::MinerPhase`]).

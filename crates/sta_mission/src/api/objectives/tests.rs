@@ -13,7 +13,7 @@ fn runtime(script: &str) -> MissionRuntime {
         ("objectives/two.txt", b"Next heading\n*Survey the field\n".to_vec()),
         ("objectives/empty.txt", b"No briefing\n".to_vec()),
         ("objectives/bad.txt", b"Broken heading\n*\n".to_vec()),
-        ("objectives/encoded.txt", vec![0xff]),
+        ("objectives/headless.txt", b"* a goal before any heading\n".to_vec()),
     ].into_iter().map(|(k,v)| (k.to_owned(),v)).collect();
     MissionRuntime::load("missions/T.lua", 1, move |path| files.get(path).cloned())
 }
@@ -78,7 +78,7 @@ fn malformed_missing_or_invalid_loads_preserve_existing_goals() {
         Objectives:load('one.txt')
         local old = Objectives.objectives[1].id
         assert(not pcall(function() Objectives:load('bad.txt') end))
-        assert(not pcall(function() Objectives:load('encoded.txt') end))
+        assert(not pcall(function() Objectives:load('headless.txt') end))
         for _, name in ipairs({'../escape.txt', '/absolute.txt', 'C:\\file.txt', '', 'a//b.txt'}) do
             assert(not pcall(function() Objectives:load(name) end))
         end

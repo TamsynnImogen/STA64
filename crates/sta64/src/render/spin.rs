@@ -35,6 +35,12 @@ pub const PLANET_DEFAULT_RATE: f32 = 0.07;
 /// Share of planets that turn the other way (read from the executable, static).
 const PLANET_REVERSED: f32 = 0.1;
 
+/// An object that turns or spins stands still while this is on it: a still copy of a thing out of sight does not
+/// animate (rule: read from the executable, static; #1146). A [`Turn`] is a function of game time, so it resumes at
+/// the angle game time gives.
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct SpinPaused;
+
 /// A turn about `axis` (in the parent's frame) at `rate` rad/s of game time, applied on top of
 /// `base`.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
@@ -110,7 +116,7 @@ pub fn game_seconds(tick: u64, alpha: f32) -> f64 {
 }
 
 /// Turn every [`Turn`] to the match's game time. Without a sim (a viewer) the animation clock's own tick stands in.
-pub fn turn(clock: Res<AnimClock>, link: Option<Res<SimLink>>, mut q: Query<(&Turn, &mut Transform)>) {
+pub fn turn(clock: Res<AnimClock>, link: Option<Res<SimLink>>, mut q: Query<(&Turn, &mut Transform), Without<SpinPaused>>) {
     let now = match link {
         Some(l) => game_seconds(l.curr().tick, clock.alpha()),
         None => clock.now(),

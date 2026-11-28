@@ -237,16 +237,26 @@ fn two_clients_host_join_choose_launch_and_play_in_step() {
     // The host's settings reach the guest, and take a ready mark back.
     let mut o = host.view().options;
     o.starting_resources = sta_content::StartingResources::Lots;
+    o.directors_cut = true;
     host.set_options(o);
     guest.set_ready(true);
     pump(&mut [&mut host, &mut guest], "options arrive and the ready mark lands", |s| {
-        s[1].view().options.starting_resources == sta_content::StartingResources::Lots && find(s[0], 1).ready
+        s[1].view().options.starting_resources == sta_content::StartingResources::Lots
+            && s[1].view().options.directors_cut
+            && find(s[0], 1).ready
     });
     assert_eq!(host.launch_block(), None);
     assert_eq!(find(&host, 1).race, "kli", "the refused side did not change the seat");
 
+    let mut guest_change = guest.view().options;
+    guest_change.directors_cut = false;
+    guest.set_options(guest_change);
+    assert!(guest.view().options.directors_cut, "the host owns this setting");
+
     // A change of the host's settings takes the ready marks back (the guest must agree to the new ones).
-    host.set_options(GameOptions::default());
+    let mut launch_options = GameOptions::default();
+    launch_options.directors_cut = true;
+    host.set_options(launch_options);
     assert!(!find(&host, 1).ready);
     assert!(host.launch_block().unwrap().contains("Riker"));
     pump(&mut [&mut host, &mut guest], "options change reaches the guest", |s| !find(s[1], 1).ready);
@@ -260,6 +270,7 @@ fn two_clients_host_join_choose_launch_and_play_in_step() {
     assert_same_game(&[&mh, &mg]);
     assert_eq!((mh.me, mg.me), (PlayerId(0), PlayerId(1)));
     assert_eq!(mh.start.options.starting_resources, sta_content::StartingResources::Normal);
+    assert!(mh.start.options.directors_cut && mg.start.options.directors_cut);
     assert_eq!(mh.start.seats.iter().map(|x| (x.slot.0, x.race.as_str(), x.team.0)).collect::<Vec<_>>(), [(0, "rom", 0), (1, "kli", 1)]);
 
     // The match runs through the lockstep router: equal digests tick for tick.
@@ -764,6 +775,44 @@ fn two_apps_host_join_choose_launch_and_play_in_step() {
     // The names and the relay are remembered for next time.
     let s = h.world().resource::<crate::frontend::screens::Settings>();
     assert_eq!((s.player_name.as_str(), s.relay.as_str()), ("Picard", r.local_addr().to_string().as_str()));
+}
+
+#[test]
+fn the_host_sets_warp_allowed_while_the_room_is_open_and_the_joiner_only_sees_it() {
+    let r = relay();
+    let mut d = data();
+    d.content = Arc::new(sta_content::ContentDb::builder().profile(sta_content::Profile::Sta2Classic).build().unwrap());
+    let (mut h, mut g) = (app_with(d.clone(), None, 1.0), app_with(d, None, 1.0));
+    host_through_screens(&mut h, &r, "Picard", "");
+    pump_apps(&mut [&mut h], "the host is in the lobby", |a| in_screen(a[0], Screen::Lobby));
+    let code = session_of(&h).code().to_string();
+    join_through_screens(&mut g, &r, "Riker", &code.to_lowercase(), "");
+    pump_apps(&mut [&mut h, &mut g], "both lobbies show both players", |a| {
+        in_screen(a[1], Screen::Lobby) && session_of(a[1]).view().seats.len() == 2 && session_of(a[1]).view().seats[1].kind == Kind::Human
+    });
+    assert!(has_text(&mut h, "Warp: On") && has_text(&mut g, "Warp: On"), "on by default");
+    assert!(act_entity(&mut h, MpAct::ToggleWarp).is_some(), "the host may set it");
+    assert!(act_entity(&mut g, MpAct::ToggleWarp).is_none(), "the joiner may not");
+    press(&mut h, MpAct::ToggleWarp);
+    pump_apps(&mut [&mut h, &mut g], "the host's choice reaches the joiner", |a| !session_of(a[1]).view().options.allow_warp);
+    assert!(has_text(&mut h, "Warp: Off") && has_text(&mut g, "Warp: Off"), "both screens show the choice");
+    assert!(act_entity(&mut g, MpAct::ToggleWarp).is_none(), "still read-only for the joiner");
+    // A change of the host's settings takes the ready marks back; ready again, then launch: the option is in both starts.
+    press(&mut g, MpAct::ToggleReady);
+    pump_apps(&mut [&mut h, &mut g], "the host may launch", |a| act_entity(a[0], MpAct::Launch).is_some());
+    press(&mut h, MpAct::Launch);
+    pump_apps(&mut [&mut h, &mut g], "both apps have a match", |a| a[0].world().resource::<NetLaunch>().0.is_some() && a[1].world().resource::<NetLaunch>().0.is_some());
+    let (mh, mg) = (h.world_mut().resource_mut::<NetLaunch>().0.take().unwrap(), g.world_mut().resource_mut::<NetLaunch>().0.take().unwrap());
+    assert!(!mh.start.options.allow_warp && !mg.start.options.allow_warp);
+}
+
+#[test]
+fn warp_allowed_is_not_offered_in_the_lobby_where_the_content_lacks_it() {
+    let r = relay();
+    let mut h = app();
+    host_through_screens(&mut h, &r, "Picard", "");
+    pump_apps(&mut [&mut h], "the host is in the lobby", |a| in_screen(a[0], Screen::Lobby));
+    assert!(act_entity(&mut h, MpAct::ToggleWarp).is_none() && !has_text(&mut h, "Warp:"));
 }
 
 fn app_has_no_drop(app: &mut App, slot: usize, col: DropCol) -> bool {

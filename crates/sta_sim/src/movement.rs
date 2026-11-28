@@ -25,12 +25,16 @@
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 
 pub mod approach;
+mod directors_cut;
 pub(crate) mod gravity;
 #[cfg(test)]
 #[path = "movement/approach_tests.rs"]
 pub(crate) mod approach_tests;
 #[cfg(test)]
 mod gravity_tests;
+#[cfg(test)]
+#[path = "movement/order_burst_tests.rs"]
+mod order_burst_tests;
 #[cfg(test)]
 #[path = "movement/formation_leader_tests.rs"]
 mod formation_leader_tests;
@@ -79,6 +83,11 @@ impl Movement {
     /// Drop the queued legs of `id`, keeping its formation.
     pub(crate) fn clear_waypoints(&mut self, id: EntityId) {
         self.edit(id, |c| c.waypoints.clear());
+    }
+
+    /// Add a leg after the queued ones.
+    pub(crate) fn push_waypoint(&mut self, id: EntityId, leg: Vec3) {
+        self.edit(id, |c| c.waypoints.push(leg));
     }
 
     /// Replace the legs after the current target (a patrol's lap).
@@ -176,17 +185,8 @@ impl Sim {
         // Players order their own units; scripts and the bench any unit.
         // Units that are gone, not the player's or unable to move are
         // skipped; the order is rejected only when none is left.
-        let mut ids: Vec<EntityId> = units
-            .iter()
-            .copied()
-            .filter(|&id| {
-                (matches!(order, Order::Stop { .. }) || !self.production.is_welding(id))
-                    && self.unit(id)
-                    .is_some_and(|u| u.orderable() && (!player.is_player() || u.owner == player))
-            })
-            .collect();
-        ids.sort();
-        ids.dedup();
+        // (`movers` in `move_mode.rs` is this filter, shared with the move-mode record.)
+        let ids = self.movers(player, units, matches!(order, Order::Stop { .. }));
         if ids.is_empty() {
             return false;
         }
@@ -392,6 +392,7 @@ mod tests {
                     units: ids(&[a]),
                     to: v(0, 0, 600),
                     queue: false,
+                    mode: None,
                 },
             ),
             order(
@@ -401,6 +402,7 @@ mod tests {
                     units: ids(&[a]),
                     to: v(500, 20, 600),
                     queue: true,
+                    mode: None,
                 },
             ),
             order(
@@ -410,6 +412,7 @@ mod tests {
                     units: ids(&[a]),
                     to: v(500, 0, -200),
                     queue: true,
+                    mode: None,
                 },
             ),
         ];
@@ -455,6 +458,7 @@ mod tests {
                     units: ids(&[1]),
                     to: v(0, 0, 300),
                     queue: true,
+                    mode: None,
                 },
             ), // idle: starts at once
             order(
@@ -464,6 +468,7 @@ mod tests {
                     units: ids(&[1]),
                     to: v(300, 0, 300),
                     queue: true,
+                    mode: None,
                 },
             ),
         ];
@@ -488,6 +493,7 @@ mod tests {
                     units: ids(&[1]),
                     to,
                     queue,
+                    mode: None,
                 },
             )
         };
@@ -535,6 +541,7 @@ mod tests {
                     units: ids(&[1, 2, 3]),
                     to: v(0, 0, 1000),
                     queue: false,
+                    mode: None,
                 },
             ),
         ];
@@ -627,6 +634,7 @@ mod tests {
                     units: ids(&[1]),
                     to,
                     queue: true,
+                    mode: None,
                 },
             )
         };

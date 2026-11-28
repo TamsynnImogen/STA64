@@ -40,6 +40,9 @@ pub enum MpAct {
     PickMap,
     CycleResources,
     CycleOfficers,
+    ToggleDirectorsCut,
+    /// The match option "warp allowed" (#1102, #1402): the host's, read-only for a joiner.
+    ToggleWarp,
     /// Leave the room.
     Leave,
 }
@@ -439,6 +442,22 @@ fn map_window(p: &mut Box_, ctx: &Ctx, s: &Session, view: &LobbyView) {
     match officer {
         Some(c) => act_button(p, ctx, MSlot::Officers, &c, MpAct::CycleOfficers, host && open),
         None => act_button(p, ctx, MSlot::Officers, &tr("Officer limit unavailable"), MpAct::CycleOfficers, false),
+    }
+    if ctx.data.content.profile() == sta_content::Profile::Sta1Classic {
+        // Armada I label.map reverses the state key names: directors_on reads Off.
+        let caption = if view.options.directors_cut {
+            cap(ctx, "directors_off", "Director's Cut: On")
+        } else {
+            cap(ctx, "directors_on", "Director's Cut: Off")
+        };
+        act_button(p, ctx, MSlot::DirectorsCut, &caption, MpAct::ToggleDirectorsCut, host && open);
+    }
+    // The same slot as Director's Cut (different profiles, never together). Where the content offers the option the
+    // host sets it while the room is open; a joiner sees the host's choice and cannot change it. STA64's own, INTERIM:
+    // offered here as in the skirmish, in the slot of Director's Cut.
+    if sta_sim::setup::GameOptions::warp_offered(&ctx.data.content) {
+        let (key, fallback) = crate::frontend::screens::view::warp_label(view.options.allow_warp);
+        act_button(p, ctx, MSlot::DirectorsCut, &cap(ctx, key, fallback), MpAct::ToggleWarp, host && open);
     }
 }
 

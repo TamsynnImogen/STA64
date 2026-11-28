@@ -371,6 +371,27 @@ class Steps(unittest.TestCase):
         self.assertIn("A('Count', 3, nil)", render(d, f))
 
 
+class ReversedSet(set):
+    """A set that iterates from the highest element: stands in for any other
+    iteration order an interpreter may choose for a set of integers."""
+
+    def __iter__(self):
+        return iter(sorted(set.__iter__(self), reverse=True))
+
+
+class HelperCheckOrder(unittest.TestCase):
+    def test_first_offending_call_site_is_the_lowest_address(self):
+        # the error names the call site and is written into the Lua: it must not
+        # depend on how the set of visited addresses happens to iterate
+        func, low, high = 0x10008000, 0x10009000, 0x10009100
+        read_arg = ["mov    eax,DWORD PTR [esp+0x4]", "ret"]
+        d = make({func: [f"call   {high:#x}", f"call   {low:#x}", "ret"], low: read_arg, high: read_arg})
+        seen = ReversedSet(a for a, _ in program({func: [0, 0, 0]}))
+        with self.assertRaises(a1.DecodeError) as cm:
+            a1.A1Lifter(d).check_helpers(func, seen)
+        self.assertIn(f"call at {func:#x} ", str(cm.exception))
+
+
 class Prelude(unittest.TestCase):
     def test_every_table_the_shared_engine_indexes_is_created(self):
         # the shared prelude and engine of tools/dsl_to_lua.py index Mission.<x>[...]:

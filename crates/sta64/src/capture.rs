@@ -294,6 +294,7 @@ mod tests {
             units: mine,
             to: SimVec3::from_f32([0.0, 0.0, 1200.0]),
             queue: false,
+            mode: None,
         }));
         for _ in 0..90 {
             app.update();

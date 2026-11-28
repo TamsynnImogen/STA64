@@ -213,6 +213,8 @@ impl Plugin for ScreensPlugin {
             .add_message::<StartGame>()
             .add_message::<ModChosen>()
             .add_message::<crate::frontend::campaign::StartMission>()
+            .add_message::<crate::frontend::campaign::RequestConversion>()
+            .add_message::<crate::game::mission_convert::CancelConversion>()
             .add_plugins(crate::frontend::lobby::LobbyPlugin)
             .add_systems(Startup, make_draft)
             .add_systems(OnEnter(AppState::FrontEnd), enter_front_end)
@@ -234,6 +236,13 @@ impl Plugin for ScreensPlugin {
                 .after(rebuild)
                 .after(crate::ui::theme::WidgetPaint)
                 .after(crate::ui::theme::KitSet)
+                .run_if(in_state(AppState::FrontEnd)))
+            .init_resource::<crate::frontend::campaign::shell_art::ShellArt>()
+            .add_systems(Update, (crate::frontend::campaign::shell_art::load_art, crate::frontend::campaign::shell_art::sync_backdrop)
+                .chain()
+                .in_set(GameSet::Ui)
+                .after(rebuild)
+                .after(crate::frontend::campaign::rebuild)
                 .run_if(in_state(AppState::FrontEnd)))
             .add_systems(Update, preview::sync_preview
                 .in_set(GameSet::Ui)
@@ -492,6 +501,14 @@ pub(crate) fn on_buttons(
             Act::Cycle(row, Col::Team) => draft.cycle_team(row),
             Act::CycleResources => draft.cycle_resources(),
             Act::CycleOfficerLimit => draft.cycle_officer_limit(&data),
+            Act::ToggleDirectorsCut if data.content.profile() == sta_content::Profile::Sta1Classic => {
+                draft.options.directors_cut = !draft.options.directors_cut;
+            }
+            Act::ToggleDirectorsCut => {}
+            Act::ToggleWarp if sta_sim::setup::GameOptions::warp_offered(&data.content) => {
+                draft.options.allow_warp = !draft.options.allow_warp;
+            }
+            Act::ToggleWarp => {}
             Act::CycleMatchSpeed => draft.speed = draft.speed.next(),
             Act::CycleFog => draft.fog = draft.fog.next(),
             Act::ToggleRandomPlacement => draft.toggle_placement(),

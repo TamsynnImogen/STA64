@@ -61,14 +61,14 @@ fn set_caps_speed_on_a_move_and_above_the_definition_raises_it() {
     let a = spawn(&mut sim, "fx_cruiser", 0, 0);
     let def = class(&sim, a);
     assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::from_int(30)))));
-    order(&mut sim, 0, Order::Move { units: vec![a], to: at(20000), queue: false });
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(20000), queue: false, mode: None });
     let top = peak(&mut sim, a, 300);
     assert!(top <= Fixed::from_int(30) && top > Fixed::from_int(25), "{top:?}");
 
     let mut fast = game();
     let b = spawn(&mut fast, "fx_cruiser", 0, 0);
     assert!(edit(&mut fast, Edit::MaxSpeed(b, Some(def * Fixed::from_int(2)))));
-    order(&mut fast, 0, Order::Move { units: vec![b], to: at(40000), queue: false });
+    order(&mut fast, 0, Order::Move { units: vec![b], to: at(40000), queue: false, mode: None });
     assert!(peak(&mut fast, b, 600) > def);
 }
 
@@ -89,10 +89,10 @@ fn reset_restores_the_definition_and_the_override_persists_across_orders() {
     let a = spawn(&mut sim, "fx_cruiser", 0, 0);
     let def = class(&sim, a);
     assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::from_int(30)))));
-    order(&mut sim, 0, Order::Move { units: vec![a], to: at(5000), queue: false });
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(5000), queue: false, mode: None });
     peak(&mut sim, a, 30);
     order(&mut sim, 0, Order::Stop { units: vec![a] });
-    order(&mut sim, 0, Order::Move { units: vec![a], to: at(-5000), queue: false });
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(-5000), queue: false, mode: None });
     assert_eq!(speed(&sim, a), Fixed::from_int(30));
     assert!(edit(&mut sim, Edit::MaxSpeed(a, None)));
     assert_eq!(speed(&sim, a), def);
@@ -166,7 +166,7 @@ fn speed_zero_holds_a_craft_that_still_takes_orders_and_a_reset_frees_it() {
     let mut sim = game();
     let a = spawn(&mut sim, "fx_cruiser", 0, 0);
     let def = class(&sim, a);
-    order(&mut sim, 0, Order::Move { units: vec![a], to: at(40000), queue: false });
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(40000), queue: false, mode: None });
     assert!(peak(&mut sim, a, 120) > Fixed::from_int(50));
     assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::ZERO))));
     assert_eq!(speed(&sim, a), crate::speed_override::HELD_SPEED);
@@ -174,7 +174,7 @@ fn speed_zero_holds_a_craft_that_still_takes_orders_and_a_reset_frees_it() {
     assert!(sim.unit(a).unwrap().speed <= crate::speed_override::HELD_SPEED, "{:?}", sim.unit(a).unwrap().speed);
     let held_at = sim.unit(a).unwrap().pos;
     // Held: it crawls, and an order is still accepted.
-    order(&mut sim, 0, Order::Move { units: vec![a], to: at(-40000), queue: false });
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(-40000), queue: false, mode: None });
     assert!(sim.unit(a).unwrap().target.is_some());
     peak(&mut sim, a, 60);
     assert!((sim.unit(a).unwrap().pos.x - held_at.x).abs() < Fixed::from_int(5));
@@ -189,7 +189,7 @@ fn a_huge_value_is_kept_below_the_ceiling() {
     let a = spawn(&mut sim, "fx_cruiser", 0, 0);
     assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::from_int(1_000_000)))));
     assert_eq!(speed(&sim, a), crate::speed_override::MAX_OVERRIDE);
-    order(&mut sim, 0, Order::Move { units: vec![a], to: at(100000), queue: false });
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(100000), queue: false, mode: None });
     for _ in 0..600 {
         sim.step(&[]);
         assert!(sim.unit(a).unwrap().pos.x >= Fixed::ZERO && sim.unit(a).unwrap().speed <= crate::speed_override::MAX_OVERRIDE);
@@ -214,7 +214,7 @@ fn far_attack(held: bool, keyed: bool) -> Fixed {
         assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::ZERO))));
     }
     if keyed {
-        order(&mut sim, 0, Order::Move { units: vec![a], to: at(30000), queue: false });
+        order(&mut sim, 0, Order::Move { units: vec![a], to: at(30000), queue: false, mode: None });
     } else {
         order(&mut sim, 0, Order::Attack { units: vec![a], target });
     }
@@ -240,7 +240,7 @@ fn the_stuck_order_timer_leaves_a_held_craft_alone() {
     let mut sim = game();
     let a = spawn(&mut sim, "fx_cruiser", 0, 0);
     assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::ZERO))));
-    order(&mut sim, 0, Order::Move { units: vec![a], to: at(40000), queue: false });
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(40000), queue: false, mode: None });
     for _ in 0..(30 * 150) {
         sim.step(&[]);
     }
@@ -265,8 +265,8 @@ fn snapshot_round_trip_keeps_the_override_and_the_pinned_digest() {
     let a = spawn(&mut sim, "fx_cruiser", 0, 0);
     let b = spawn(&mut sim, "fx_frigate", 1, 800);
     assert!(edit(&mut sim, Edit::MaxSpeed(a, Some(Fixed::from_int(30)))));
-    order(&mut sim, 0, Order::Move { units: vec![a], to: at(3000), queue: false });
-    order(&mut sim, 1, Order::Move { units: vec![b], to: at(-3000), queue: false });
+    order(&mut sim, 0, Order::Move { units: vec![a], to: at(3000), queue: false, mode: None });
+    order(&mut sim, 1, Order::Move { units: vec![b], to: at(-3000), queue: false, mode: None });
     for _ in 0..120 {
         sim.step(&[]);
     }

@@ -13,9 +13,10 @@
 //! argument semantics: `()` gives `[0,1)`, `(m)` gives `[1,m]`, `(m,n)` gives
 //! `[m,n]`; integers are drawn by rejection sampling (no modulo bias).
 //!
-//! Limit: the `^` operator is compiled into Lua's VM and calls C `pow`; it cannot
-//! be replaced from the `math` table. Scripts that need cross-platform exactness
-//! must use `math.pow(x, y)` (provided here although Lua 5.3 dropped it).
+//! The `^` operator is compiled into Lua's VM; the bundled Lua lets the host give
+//! it a power function (`lua_sta64_setpow`, #1300), and [`crate::sandbox::new_lua`]
+//! gives it the same `libm::pow` as `math.pow(x, y)` (provided here although Lua
+//! 5.3 dropped it), so `x ^ y` is platform-independent too.
 
 use mlua::{Lua, MultiValue, Result, Table, Value};
 use std::cell::RefCell;

@@ -71,6 +71,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
     // TOOL-14 playtest capture (Ctrl+F12 in a match)
     if map_view {
         app.add_plugins(crate::capture::CapturePlugin);
+        // UI-55 save and load path
+        app.add_plugins(crate::save::SavePlugin);
     }
 
     // game — the match flow (INT-M3)
@@ -119,6 +121,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
             app.add_plugins(crate::ui::hud::HudPlugin);
             // UI-34: Esc opens the in-game menu over the match (Resume, Options, Exit, Quit).
             app.add_plugins(crate::ui::ingame_menu::InGameMenuPlugin);
+            // UI-56: the Save and Load screens (in-game menu entries; the front end's Load game).
+            app.add_plugins(crate::ui::save_menu::SaveMenuPlugin);
         }
 
         // audio —

@@ -138,7 +138,6 @@ fn moon_shell_look(
 pub struct RockParams {
     pub amb: Vec4,
     pub shine: Vec4,
-    pub eye: Vec4,
     pub rim: Vec4,
     pub ddir0: Vec4,
     pub dcol0: Vec4,
@@ -153,6 +152,32 @@ pub struct RockParams {
     pub ext: Vec4,
     pub core: Vec4,
     pub spill: Vec4,
+    /// The game's out-of-sight lighting material (#1146, `light.odf`'s `ghost*` keys; read from data): rgb ambient,
+    /// w 1 when all three colours are given (else the mesh tag's factor scales the light).
+    pub ghost_a: Vec4,
+    pub ghost_d: Vec4,
+    pub ghost_s: Vec4,
+}
+
+/// `params` with the out-of-sight lighting keys put in; incomplete or no keys clear them (the mesh tag's factor then
+/// applies).
+pub fn with_ghost_keys(mut p: RockParams, keys: Option<&sta_content::GhostLighting>) -> RockParams {
+    (p.ghost_a, p.ghost_d, p.ghost_s) = (Vec4::ZERO, Vec4::ZERO, Vec4::ZERO);
+    if let Some(sta_content::GhostLighting { ambient: Some(a), diffuse: Some(d), specular: Some(s), .. }) = keys {
+        p.ghost_a = Vec3::from(*a).extend(1.0);
+        p.ghost_d = Vec3::from(*d).extend(0.0);
+        p.ghost_s = Vec3::from(*s).extend(0.0);
+    }
+    p
+}
+
+/// The out-of-sight lighting keys of the mounted layers, kept in `cache` and read again when the mount changed
+/// (another mod or game mounted in the same session must not keep the first one's keys).
+fn ghost_keys(cache: &mut Option<Option<sta_content::GhostLighting>>, mount_changed: bool, vfs: &sta_vfs::Vfs) -> Option<sta_content::GhostLighting> {
+    if mount_changed {
+        *cache = None;
+    }
+    *cache.get_or_insert_with(|| sta_content::GhostLighting::load(vfs, &sta_content::OdfIndex::build(vfs).0).0)
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -238,7 +263,20 @@ fn apply(
     mut shared: ResMut<RockMaterials>,
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
+    mut ghost_keys: Local<Option<Option<sta_content::GhostLighting>>>,
 ) {
+    // A new mount brings its own keys: the cache is dropped and the materials made under the old one are updated.
+    if vfs.is_changed() {
+        *ghost_keys = None;
+        if !shared.0.is_empty() {
+            let keys = self::ghost_keys(&mut ghost_keys, true, &vfs.0);
+            for h in shared.0.values() {
+                if let Some(mut m) = materials.get_mut(h) {
+                    m.params = with_ghost_keys(m.params, keys.as_ref());
+                }
+            }
+        }
+    }
     let stock = nimbus_drawn(profile.as_deref(), effects.as_deref());
     if stock {
         return;
@@ -267,6 +305,9 @@ fn apply(
             spill: Vec4::new(1.0, CRACK_CORE, if cut { CRACK_DEPTH } else { 0.0 }, CRACK_FALLOFF),
             ..default()
         };
+        // The game's out-of-sight lighting, read once from the mounted layers (#1146).
+        let keys = self::ghost_keys(&mut ghost_keys, false, &vfs.0);
+        let params = with_ghost_keys(params, keys.as_ref());
         let m = materials.add(RockMaterial {
             params,
             albedo: Some(b.albedo.clone()),
@@ -307,13 +348,13 @@ fn revert_to_stock(
     }
 }
 
-/// What the shared materials were last written with: the eye, the lights, how many materials.
-type LastWrite = Option<(Vec3, Vec<[f32; 7]>, usize)>;
+/// What the shared materials were last written with: the lights, how many materials.
+type LastWrite = Option<(Vec<[f32; 7]>, usize)>;
 
-/// Each frame: the camera and the lights, into the shared materials, when they changed (a
-/// write re-uploads a material: there are a few dozen, not one per rock).
+/// Each frame: the lights, into the shared materials, when they changed (a write re-uploads a
+/// material: there are a few dozen, not one per rock). The eye is not written: the shader reads
+/// the world position of the view being drawn (#1251), so a camera move touches no material.
 fn update(
-    camera: Query<&GlobalTransform, crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     shared: Res<RockMaterials>,
     mut materials: ResMut<Assets<RockMaterial>>,
@@ -323,7 +364,6 @@ fn update(
     if switches.is_some_and(|s| s.freeze_rock_materials) {
         return;
     }
-    let Ok(cam) = camera.single() else { return };
     let mut ls: Vec<(Vec3, Vec3, f32)> = lights
         .iter()
         .map(|(t, l)| {
@@ -333,21 +373,19 @@ fn update(
         .collect();
     ls.sort_by(|a, b| b.2.total_cmp(&a.2));
     let sig: Vec<[f32; 7]> = ls.iter().map(|l| [l.0.x, l.0.y, l.0.z, l.1.x, l.1.y, l.1.z, l.2]).collect();
-    let eye = cam.translation();
     let moved = match &*last {
-        Some((e, s, n)) => e.distance(eye) > 0.01 || *s != sig || *n != shared.0.len(),
+        Some((s, n)) => *s != sig || *n != shared.0.len(),
         None => true,
     };
     if !moved {
         return;
     }
-    *last = Some((eye, sig, shared.0.len()));
+    *last = Some((sig, shared.0.len()));
     let key = ls.first().copied().unwrap_or((Vec3::NEG_Y, Vec3::ONE, 1.0));
     let fill = ls.get(1).map(|f| (f.0, f.1 * (f.2 / key.2.max(1e-3)))).unwrap_or((Vec3::Y, Vec3::ZERO));
     for h in shared.0.values() {
         let Some(mut m) = materials.get_mut(h) else { continue };
         let p = &mut m.params;
-        p.eye = eye.extend(1.0);
         p.ddir0 = key.0.extend(1.0);
         p.dcol0 = key.1.extend(0.0);
         p.ddir1 = fill.0.extend(0.0);
@@ -512,12 +550,95 @@ mod tests {
         assert!(app.world().get::<MoonDark>(shell).is_none());
     }
 
+    #[derive(Resource, Default)]
+    struct ModifiedCount(usize);
+
+    fn count_modified(mut events: MessageReader<AssetEvent<RockMaterial>>, mut count: ResMut<ModifiedCount>) {
+        count.0 += events.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count();
+    }
+
+    /// Moving the camera rewrites no rock material: the shader reads the eye from the view being drawn
+    /// (#1251). The control is a light change, which still rewrites them.
+    #[test]
+    fn moving_the_camera_changes_no_rock_material() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<RockMaterial>().init_asset::<Image>().init_resource::<RockMaterials>().init_resource::<ModifiedCount>();
+        app.add_systems(PostUpdate, (update.after(TransformSystems::Propagate), count_modified).chain());
+        let camera = app.world_mut().spawn((Camera3d::default(), GlobalTransform::default())).id();
+        let light = app.world_mut().spawn((DirectionalLight::default(), GlobalTransform::default())).id();
+        let handle = app.world_mut().resource_mut::<Assets<RockMaterial>>().add(RockMaterial { params: RockParams::default(), albedo: None, relief: None });
+        app.world_mut().resource_mut::<RockMaterials>().0.insert(("rock".into(), [0; 3], [0; 3]), handle);
+        for _ in 0..4 {
+            app.update();
+        }
+        app.world_mut().resource_mut::<ModifiedCount>().0 = 0;
+        for step in 1..=5 {
+            app.world_mut().entity_mut(camera).insert(GlobalTransform::from(Transform::from_xyz(40.0 * step as f32, 7.0, -3.0)));
+            app.update();
+        }
+        app.update();
+        assert_eq!(app.world().resource::<ModifiedCount>().0, 0, "a camera move marked a rock material changed");
+        app.world_mut().entity_mut(light).insert(GlobalTransform::from(Transform::from_xyz(1.0, 2.0, 3.0).looking_at(Vec3::ZERO, Vec3::Y)));
+        app.update();
+        app.update();
+        assert!(app.world().resource::<ModifiedCount>().0 > 0, "a light change should still rewrite the materials");
+    }
+
+    /// #1146: the out-of-sight lighting keys go into the rock material only when all three colours are given;
+    /// without them the shader falls back on the mesh tag's factor.
+    #[test]
+    fn the_ghost_keys_go_into_the_material_only_when_all_three_colours_are_given() {
+        use sta_content::GhostLighting;
+        let full = GhostLighting { ambient: Some([0.25, 0.5, 0.75]), diffuse: Some([1.0, 2.0, 3.0]), specular: Some([4.0, 5.0, 6.0]), team_factor: Some(0.5) };
+        let p = with_ghost_keys(RockParams::default(), Some(&full));
+        assert_eq!((p.ghost_a, p.ghost_d.truncate(), p.ghost_s.truncate()), (Vec4::new(0.25, 0.5, 0.75, 1.0), Vec3::new(1.0, 2.0, 3.0), Vec3::new(4.0, 5.0, 6.0)));
+        let partial = GhostLighting { specular: None, ..full };
+        for keys in [Some(&partial), None] {
+            let p = with_ghost_keys(RockParams::default(), keys);
+            assert_eq!((p.ghost_a, p.ghost_d, p.ghost_s), (Vec4::ZERO, Vec4::ZERO, Vec4::ZERO), "{keys:?}: the factor of the tag applies");
+        }
+    }
+
+    /// #1146 (review D1): the keys are read again when the mount changes, so a mod or game mounted later in the same
+    /// session does not keep the first one's keys (or their absence); an unchanged mount reads nothing again.
+    #[test]
+    fn the_ghost_keys_are_read_again_when_the_mount_changes() {
+        use sta_content::GhostLighting;
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch/ghost-keys-remount");
+        let mount = |name: &str, light: Option<&str>| {
+            let root = base.join(name);
+            let dir = root.join("odf/other");
+            std::fs::create_dir_all(&dir).unwrap();
+            if let Some(text) = light {
+                std::fs::write(dir.join("light.odf"), text).unwrap();
+            }
+            std::fs::write(dir.join("keep.odf"), "x = 1\n").unwrap();
+            let mut vfs = sta_vfs::Vfs::default();
+            vfs.push_dir(name.into(), root).unwrap();
+            vfs
+        };
+        let first = mount("first", Some("ghostAmbient = 0.25 0.25 0.25\nghostDiffuse = 0.5 0.5 0.5\nghostSpecular = 0 0 0\n"));
+        let second = mount("second", Some("ghostAmbient = 0.75 0.75 0.75\nghostDiffuse = 1 1 1\nghostSpecular = 0 0 0\n"));
+        let none = mount("none", None);
+        let mut cache: Option<Option<GhostLighting>> = None;
+        let a = ghost_keys(&mut cache, true, &first).expect("the first mount's keys");
+        assert_eq!(a.ambient, Some([0.25; 3]));
+        // The same mount, not changed: the cache answers (a second mount given here is not looked at).
+        assert_eq!(ghost_keys(&mut cache, false, &second), Some(a));
+        // A new mount: its own keys, and then none at all for a mount without the file.
+        assert_eq!(ghost_keys(&mut cache, true, &second).unwrap().ambient, Some([0.75; 3]));
+        assert_eq!(ghost_keys(&mut cache, true, &none), None);
+        assert_eq!(ghost_keys(&mut cache, false, &first), None, "and that is kept until the mount changes again");
+    }
+
     #[test]
     fn rock_shader_validates() {
-        // The mesh transform comes from Bevy's own shader library: a stub stands in for it.
+        // The mesh transform and the view come from Bevy's own shader library: stubs stand in for them.
         let src = include_str!("rock.wesl")
             .replace("constants::MATERIAL_BIND_GROUP", "3")
-            .replace("import bevy_pbr::render::mesh_functions::get_world_from_local;", "fn get_world_from_local(i: u32) -> mat4x4<f32> { return mat4x4<f32>(); }");
+            .replace("import bevy_pbr::render::mesh_functions::{get_world_from_local, get_tag};", "fn get_world_from_local(i: u32) -> mat4x4<f32> { return mat4x4<f32>(); }\nfn get_tag(i: u32) -> u32 { return 0u; }")
+            .replace("import bevy_pbr::render::mesh_view_bindings::view;", "struct ViewStub { world_position: vec3<f32> }\nvar<private> view: ViewStub;");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)

@@ -7,12 +7,13 @@
 // The moons' cracks show the light inside them, at the bottom of a ravine: the view's
 // ray is marched down into it (parallax), so its walls hide the light at an angle.
 
-import bevy_pbr::render::mesh_functions::get_world_from_local;
+import bevy_pbr::render::mesh_functions::{get_world_from_local, get_tag};
+// The camera of the view being drawn (Bevy's view uniform), not a material value: its world position is the eye.
+import bevy_pbr::render::mesh_view_bindings::view;
 
 struct RockParams {
     amb: vec4<f32>,       // ambient rgb
     shine: vec4<f32>,     // x specular strength, y its exponent, z rim exponent, w the key's strength
-    eye: vec4<f32>,       // the camera, world
     rim: vec4<f32>,       // the rim light's colour
     ddir0: vec4<f32>,     // the key: the way its light travels
     dcol0: vec4<f32>,
@@ -27,6 +28,9 @@ struct RockParams {
     ext: vec4<f32>,       // xyz 1 / the mesh's extent per object axis; w the highlight's strength
     core: vec4<f32>,      // rgb the light inside the cracks (0: holes); w the cut's level
     spill: vec4<f32>,     // x the glow's scale; y the white at a crack's core, z the ravine's depth (0: flat), w the light's falloff up the walls
+    ghost_a: vec4<f32>,   // out of sight (#1146): rgb the lighting material's ambient; w 1 when the game's keys are given (0: the mesh tag's factor)
+    ghost_d: vec4<f32>,   // rgb its diffuse
+    ghost_s: vec4<f32>,   // rgb its specular
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: RockParams;
@@ -68,7 +72,7 @@ fn glint(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>) -> f32 {
 }
 
 fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, gk: f32) -> vec3<f32> {
-    let v = normalize(k.eye.xyz - wp);
+    let v = normalize(view.world_position - wp);
     var sum = k.amb.rgb;
     var spec = vec3<f32>(0.0);
     let l0 = -k.ddir0.xyz;
@@ -81,6 +85,16 @@ fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, gk: f32) -> vec3<f32> {
     sum += k.rim.rgb * pow(1.0 - saturate(dot(n, v)), k.shine.z);
     let gloss = dot(t.rgb, vec3<f32>(0.299, 0.587, 0.114)) * gk;
     return t.rgb * max(sum, vec3<f32>(0.0)) + spec * k.shine.x * gloss;
+}
+
+// The lighting of a copy out of sight: the game's own ghost lighting material in place of the scene's (the key's
+// direction only; no fill, no rim).
+fn shade_ghost(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec3<f32> {
+    let v = normalize(view.world_position - wp);
+    let l0 = -k.ddir0.xyz;
+    let sum = k.ghost_a.rgb + k.ghost_d.rgb * max(0.0, dot(n, l0));
+    let spec = k.ghost_s.rgb * glint(n, l0, v);
+    return t.rgb * sum + spec;
 }
 
 @fragment
@@ -104,7 +118,7 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     // The ravine's view direction and the gradients its taps need, in uniform control
     // flow. A tap at q - vq * t has the gradient ddx(q) - ddx(vq) * t.
     let far_k = saturate((k.spill.z / max(length(fwidth(q)), 1e-6) - 2.0) / 3.0);
-    var vq = mirror(to_obj(k.eye.xyz - wp)) * k.ext.xyz;
+    var vq = mirror(to_obj(view.world_position - wp)) * k.ext.xyz;
     vq /= max(length(vq), 1e-12);
     let qx = dpdx(q);
     let qy = dpdy(q);
@@ -147,7 +161,11 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let pf = mirror(p);
     let pw = (pf.x * row0 + pf.y * row1 + pf.z * row2) * inverseSqrt(s2);
     let n = normalize(normalize(i.world_normal) + pw);
-    var c = shade(n, wp, a, k.ext.w);
+    // A rock out of sight carries a mesh tag (the bits of an f32; 0: none, #1146): with the game's ghost lighting keys
+    // given it is lit by them, else its light is scaled by the tag's factor.
+    let tag = get_tag(i.instance_index);
+    let ghost_lit = tag != 0u && k.ghost_a.w > 0.5;
+    var c = select(shade(n, wp, a, k.ext.w), shade_ghost(n, wp, a), ghost_lit);
     c += k.glow.rgb * b.a * k.spill.x;
     var hot = saturate((b.a - k.core.w) / max(k.core.w, 1e-3));
     var lit = 1.0;
@@ -186,5 +204,5 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     var core = k.core.rgb * (1.0 + hot) + dot(k.core.rgb, vec3<f32>(0.333)) * hot * hot * k.spill.y;
     core = mix(wall, core, lit);
     c = mix(c, core, (1.0 - a.a) * inside);
-    return vec4<f32>(c, 1.0);
+    return vec4<f32>(c * select(1.0, bitcast<f32>(tag), tag != 0u && !ghost_lit), 1.0);
 }

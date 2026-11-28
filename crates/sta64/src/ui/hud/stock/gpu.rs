@@ -1317,11 +1317,11 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
             .filter_map(|unit| db.unit(unit.def)?.a1_base_officers)
             .map(|base| base.gain).sum();
         let cap = db.a1_starting_officers().expect("officer cap") + base_gain;
-        let available = whole((Fixed::from_int(cap) - player.officers[0]).max(Fixed::ZERO));
+        let in_use = whole(player.officers[0]);
         let expected = [
             (2_usize, start.dilithium.expect("legacy start dilithium").to_string()),
             (0, start.crew.expect("legacy start crew").to_string()),
-            (1, format!("{available}/{cap}")),
+            (1, format!("{in_use}/{cap}")),
         ];
         assert!(expected.iter().all(|(_, v)| !v.is_empty()));
         eprintln!("{label}: expected readouts {expected:?}");
@@ -1415,9 +1415,10 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
         }
         let shot = frames.lock().unwrap().first().cloned().unwrap_or_else(|| panic!("{label}: no GPU capture"));
         let rgba = shot.try_into_dynamic().expect("GPU image conversion").to_rgba8();
-        // The numerals are drawn in the text colour inside each text rectangle (panel art
-        // there is dark or not that colour), so lost text fails.
-        let text_colour = UiProfile::Armada2.theme().text.to_srgba();
+        // The numerals are drawn in the separate readouts' own colour (not the theme's text
+        // colour) inside each text rectangle (panel art there is dark or not that colour),
+        // so lost text fails.
+        let text_colour = super::info::SEPARATE_READOUT_TEXT.to_srgba();
         let want = [text_colour.red, text_colour.green, text_colour.blue].map(|v| (v * 255.0).round() as i16);
         for prefix in ["officer", "crew", "dilithium"] {
             let area = stock.panel(prefix).expect("panel");

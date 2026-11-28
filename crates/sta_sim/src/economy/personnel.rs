@@ -34,7 +34,7 @@ impl Economy {
     }
 
     /// The officer cap: `floor(maxOfficerMultiplier * limit)` of the seat's
-    /// current race (`Team::GetMaxOfficers`, read from the executable, static;
+    /// current race (read from the executable, static;
     /// the multiplier is 1 unless the race ODF sets it), so a re-race takes effect at once.
     pub fn officer_limit(&self, player: PlayerId) -> Option<Fixed> {
         let base = self.officer_base(player)?;

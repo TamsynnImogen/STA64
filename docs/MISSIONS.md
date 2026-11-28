@@ -14,10 +14,12 @@ including Windows. So STA64 never loads `.drl`, `.dsl`, `.dll` or
 
 Legacy compiled scripts (A2 and A1 mission DLLs) reach the player by conversion
 to Lua on their own machine from their own install, never committed or
-shipped (STA64 ships no mission content); the interim route is the Python
-converter, the release target a Rust port run by the game (WORKPLAN LUA-15 and
-the note under the LUA table). Hand-written ports are a separate download kept
-outside the repository and the release.
+shipped (STA64 ships no mission content). The route is the Rust converter,
+`sta_mission_convert` (WORKPLAN LUA-15 and the note under the LUA table); see
+"Converting an install's missions". The Python tools it was ported from are
+kept as its reference only and are superseded as a way to convert.
+Hand-written ports are a separate download kept outside the repository and the
+release.
 
 ## How MMM picks a script (from its source)
 
@@ -571,32 +573,215 @@ mission's ending from a mid-mission state (headless, stand-in host).
 
 ## Playing stock Armada II missions (experimental)
 
-Why the menu cannot start them out of the box: a stock mission is a compiled DLL
-(`*R.drl` rules, `*S.dsl` script) that STA64 never loads (D2), so the resolver
-finds no Lua and the campaign book blocks the mission as "legacy DLL only": the
-menu lists it "(cannot run yet)". The conversion makes the Lua the resolver wants.
+A stock mission is a compiled DLL (`*R.drl` rules, `*S.dsl` script) that STA64
+never loads (D2), so the resolver finds no Lua and the campaign book blocks
+the mission as "legacy DLL only": the mission list shows it "(cannot run
+yet)". The conversion makes the Lua the resolver wants, and the game runs it
+itself, from the player's own install, with the converter library
+("Converting an install's missions" below is the same converter on the command
+line). Nothing has to be run by hand.
 
-Two steps, the first only once per install (about 30 s; needs `python3` and
-`objdump`, never at game run time):
+**When it runs.** By itself, once a session, the first time the campaign cards
+of Single Player are shown for the base game of an install whose missions wait
+for a conversion. Later runs are the player's, with the buttons under the
+mission list:
 
-```sh
-python3 tools/convert_install_missions.py --install "<Armada II root>"
-cargo run --release -- --install-root "<Armada II root>"
-```
+| Button | When it is offered | What it does |
+|---|---|---|
+| Prepare missions | nothing is converted yet and no run has just ended | a normal run; a mission whose inputs are unchanged comes from the cache, and a run whose inputs and output are those of the last complete run is skipped |
+| Convert again | something is converted, or a normal run ended without doing more | converts everything again, ignoring the cache and the record of the last run; scripts the player edited are kept |
+| Replace 1 edited script / Replace N edited scripts | at least one converted script was edited | as Convert again, and each edited script is moved aside as `<name>.old` (`.old2`, `.old3` and so on when that name is taken) and a fresh conversion is written in its place |
+| Cancel | while a run is going | stops the run between two missions. Before the first one the earlier conversion is left untouched. Later, only what this run has written so far is left: a full run replaces the earlier set, so the missions it had not reached are gone until the next run |
 
-The tool runs `tools/dsl_to_lua.py` and writes `missions/<map>.lua` into
-`<user data dir>/sta64/converted/<key>/` (`~/.local/share/sta64/...` on Linux;
-`$STA64_DATA_DIR` overrides; `<key>` is the install folder's name, so each install keeps its own; two installs with the same folder name share one, `sta_mission::converted`). The output is
-derived from game files and is refused inside the repository or an install. Only the base install's own `missions` folder is converted and only for a game started without `--mod` (a mod's chain is not converted). When
-that folder holds `missions/`, the game mounts it *below* the install (D6: a script at the same path in the install wins; a differently named script the resolver tries later loses to the converted one, a known limit),
-and the campaign menu marks those missions "(experimental)". When it is absent
-and missions wait for a conversion, the mission details show the command to run.
+While a run is going the line under the list reads "Preparing missions N of
+M". The run is on its own thread and the game stays usable.
+
+**How a run ends.** A notice and the line under the mission list say how many
+missions are ready (marked experimental), how many could not be converted, and
+how many edited scripts were kept. A mission whose conversion failed stays
+"(cannot run yet)" and its details give the converter's reason for that
+mission. When the files may have changed the campaigns are loaded again, so the
+converted scripts are mounted and the missions marked, and the player stays on
+the screen, campaign and mission they were on; during a match this waits until
+the player is back in the front end. A run can also end as cancelled, as
+stopped by a fault (with its text), as refused, or because another STA64 is
+already preparing the same install: a lock beside the output keeps two game
+processes from converting one install at once.
+
+**Edited scripts.** A converted script the player has changed since the
+converter wrote it is the player's: the mission list marks it "(edited)", a
+run keeps it as it is, and so does Convert again. Only the Replace button
+writes over it, and the edit is then moved aside under the `.old` name (or the
+next free one) in the same folder, never deleted or overwritten.
+
+**Where it applies.** What is offered follows the install and the mod that is
+active (ADR 0004 D6: a conversion layer follows the install and the mod it was
+made for).
+
+- A plain stock install, no mod: its own missions, as before; the first run of
+  a session also starts by itself when missions wait.
+- The mod family's own base game (the mount detects Roots or Fleet Operations
+  3.x) with no mod active: nothing. Its missions are scripts already, and the
+  stock campaign found at the root of a hand-made install is not converted under
+  it; nothing converted is mounted for it either. A player who wants that
+  campaign mounts the stock game as its own install, where the first rule applies.
+- A mod is active: the compiled missions of that mod, through the install's mount
+  with that mod (the mod, its parents, the base data unless a mod of the chain is
+  standalone: the converter's `--mod`, see "The missions of a mod"). Only from
+  the mission list's buttons, never by itself. The output and the cache are keyed
+  to the install and the mod, and are mounted only while that mod is active on
+  that install. Such a run has no stamp and relies on the cache, which skips every
+  unchanged mission.
+
+The conversion of a mod's missions needs the engine files that name the engine's
+calls (`Armada2.exe` and `armada2.map`). They are looked for at the install's own
+root first (a hand-made install has them there). Only when they are missing there is
+the stock folder looked at: the `stock_folder` line of the settings file
+(`settings.cfg`, set by hand; there is no picker) names a stock Armada II folder
+that has them; it is only read. The line must be an absolute path (a relative one is
+refused, as the folder it would mean depends on where the game was started). When
+neither has them the run is refused, and the mission list says which files are
+missing, from which folder, and which line of which file (its full path) to set.
+Engine files at the install's root that the converter does not accept do not block the
+setting: the run then goes on with the `stock_folder` when it is set, and says so
+when it is not.
+
+The run is refused, with its reason shown, when no user data folder is known,
+when the folder is not an install the converter can read missions from, when the
+active mod cannot be opened with the install (the mount's own reason), when the
+engine files are missing as above, or when the output or cache folder is one the
+converter does not accept (inside an install, a game folder or the checkout). An
+install with no mission DLL has nothing to convert and nothing is shown.
+
+**Where the scripts go.** `missions/<map>.lua` in
+`<user data dir>/converted/<key>/` (see the next section for the folder and
+the key), with the cache in `convert-cache/<key>/` and the record of the last
+complete run and the lock as `<key>.stamp` and `<key>.lock` beside the output
+folder. The game mounts the output *below* the install (D6: a script at the
+same path in the install wins; a differently named script the resolver tries
+later loses to the converted one, a known limit), and the mission list marks
+those missions "(experimental)". The DLLs are only read as bytes, never loaded
+or run (D2), and converted Lua runs in the same restricted state as every
+script (D13).
 
 Experimental means: the conversion reproduces the rules and steps of the DLL but not
 every engine call (see "Converted Armada II missions: progress"); a mission can stop
 advancing or end early. A script that raises on an unhandled call is reported, its
 callback is disabled and the match goes on (it neither crashes the game nor loses the
 mission by itself; the end rules are LUA-13's).
+
+## Converting an install's missions
+
+The compiled missions of an install (Armada I and Armada II) are converted to
+Lua by the Rust converter, the crate `sta_mission_convert`. It reads the
+install, which it never writes to, decodes the mission DLLs itself and needs no
+other program. The game calls the same library by itself (the section
+above); this section is the command line, for a conversion outside the game.
+
+```sh
+cargo run --release -p sta_mission_convert -- --install "<game root>"
+```
+
+| Option | Meaning |
+|---|---|
+| `--install <game root>` | the install to read (required) |
+| `--mod <name>` | convert the compiled missions of this mod inside the install instead of the base game's (see below) |
+| `--engine <folder>` | Armada II: read the engine files in this folder instead of the install root |
+| `--out <folder>` | write here instead of the data directory's folder |
+| `--only <mission>` | convert one mission; may be given several times |
+| `--include-unmapped` | Armada I: also the DLL pairs no map names |
+| `--keep-foreign` | go on in an output folder that holds `.lua` files the tool did not write, leaving them untouched (default: refuse the folder) |
+| `--cache` | keep converted missions in the data directory and reuse them |
+| `--cache-dir <folder>` | the same, in that folder |
+
+**Where the output goes.** Without `--out`: `<user data dir>/converted/<key>/`,
+with the scripts in `missions/<name>.lua` and, beside them, the manifest
+`.sta_mission_convert.manifest` of the files the tool wrote. The user data
+directory is `$STA64_DATA_DIR` when set; otherwise `sta64` below
+`$XDG_DATA_HOME` when that is set, else below `~/.local/share` (Linux),
+`~/Library/Application Support` (macOS) or `%LOCALAPPDATA%` (Windows). The game
+mounts exactly this folder, so a conversion with `--out` elsewhere is not
+found by it.
+
+**The per-install key.** `<key>` is `<slug>-<hash>`: the install folder's own
+name in lower case with every run of other characters than `a-z0-9` as one
+`-`, and the first eight hex digits of a hash of the install's resolved path.
+Two installs whose folders share a name in two places so keep two folders. A
+mod adds `+<slug of the mod>`. The rule lives in one place,
+`sta_core::install_key`, and the converter, the game's mount and the client
+all call it.
+
+**The missions of a mod.** Without `--mod` the tool converts the base game's
+own missions and never looks into a mod. With `--mod <name>` it converts the
+compiled missions (a `.dsl` and `.drl` pair each) of that mod instead: the
+ones the game's own mount of the install with that mod shows (ADR 0004 D6: the
+mod, its parent mods, and the base data unless a mod of the chain is
+standalone), each written under the stems of the maps that mount shows. So a
+child mod converts its parent's missions under the names its own maps give
+them. The output and the cache go to the folders of the key *with* the mod,
+and the game mounts a converted folder only for the install and the mod that
+is active, so a conversion made for one mod is never used for another or for
+the install without a mod. The argument is accepted wherever the mount accepts
+the mod and refused with the mount's reason otherwise. A mission DLL the mount
+finds inside an archive is reported as failed; only files are converted.
+
+An Armada II conversion names the engine's calls from the engine files
+(`Armada2.exe` with `armada2.map`) and refuses files that are not the ones it
+was written against. An install that hosts mods may have no such pair at its root
+(a hand-made install of the mod family has the stock pair there, and needs no
+option); where it has not, a mod's conversion needs `--engine <stock Armada II
+root>`: that folder is only read, and is guarded like the install. Without it the
+run stops and says so. (The game's own offer takes the folder from the
+`stock_folder` line of the settings file, see "Where it applies".)
+
+**The cache.** With `--cache` the tool keeps each converted mission in
+`<user data dir>/convert-cache/<key>/` (`--cache-dir` names another folder)
+and, on the next run, replays a mission whose inputs and converter build are
+unchanged instead of converting it again. The key of an entry covers the bytes
+of the mission's DLLs, the engine files that name the engine calls and the
+identity of the converter build, so a changed converter never reuses an old
+entry. Failures are not cached. A full run that completed removes the entries
+that have not been used for 30 days, by age only, so a folder two installs
+share loses nothing the other still uses.
+Entries hold converted game text: the cache folder is as private as the
+output.
+
+**What it will not write or delete.** Every path is resolved first (links
+followed). The output folder and the cache folder may not be, contain or lie
+inside an install or anything that looks like a game folder, nor lie inside
+the checkout the converter was built in (its build folders excepted), nor
+contain one another. Symbolic links at the
+folder, at `missions/` or at a file to replace are refused. A full run (no
+`--only`) deletes only files its manifest lists. A `.lua` file that carries
+the Python tool's header line (an earlier conversion by it) is renamed to
+`<name>.old`, never deleted, and listed in the output. Files are written under a
+temporary name and renamed into place, so an interrupted run leaves no half
+script. Converted scripts are game content (ADR 0003): they stay on the
+player's machine and are never committed or shared.
+
+**Exit code.** 0 when every mission converted. 1 when any mission failed or
+was skipped, even if other scripts were written; also when the install, the
+output folder or the cache folder is refused, and when a run is aborted. 2 for
+a command line it cannot read. A mission that does not convert prints a `FAIL`
+line and the run goes on.
+
+### The Python tools: reference only, superseded
+
+`tools/convert_install_missions.py`, `tools/dsl_to_lua.py`,
+`tools/drl_to_lua.py` and `tools/a1_to_lua.py` are what the Rust converter was
+ported from. They stay in the repository as its reference: the converter's
+tests compare its output with theirs, on invented inputs in every run and on a
+local install where one is given. They are no longer the way to convert:
+
+- they need `python3` and `objdump`; the Rust converter needs neither;
+- they name the output folder by the install folder's name alone, which is not
+  the key the game looks for;
+- a full run of the Python wrapper deletes every `.lua` file in its output
+  folder, and it exits 0 when some missions failed.
+
+`tools/campaign_readiness.py` still drives the Python converter for its
+`--converted` measurements (see "Converted Armada II missions: progress");
+that is a measuring tool, not the route for players.
 
 ## Conversion report
 
@@ -621,7 +806,8 @@ limits:
 | `PATTERN_SUBJECT_MAX`, `PATTERN_MAX`, `PATTERN_QUANTIFIERS_MAX` | 1024 B, 256 B, 3 | limits for `string.find/match/gmatch/gsub` with a pattern (`find` with the `plain` flag is exempt): the matcher backtracks inside one C call that the instruction hook cannot interrupt |
 
 `setmetatable` refuses a metatable with `__gc`: Lua runs finalizers with hooks
-off, so a looping finalizer could not be stopped.
+off, so a looping finalizer could not be stopped. It refuses `__mode` too
+(weak tables are not reproducible; see "Determinism").
 
 A runaway loop ends with the Lua error "mission script exceeded its
 instruction budget" in that entry only; the budget is refilled for the next
@@ -645,7 +831,8 @@ every peer. Lua's arithmetic is IEEE double precision and identical on every
 platform. Its `math.sin`, `math.cos`, `math.exp`, `math.log`, `math.pow` and
 similar call the platform maths library, whose last bits differ between
 platforms. The runtime replaces them with deterministic implementations, and
-`math.random` with the mission runtime's seeded generator.
+`math.random` with the mission runtime's seeded generator. The `^` operator
+uses the same power function as `math.pow` (see below).
 
 `A2.RandomGetUnsigned(upper)` shares that deterministic stream and its
 `math.randomseed` state. It requires exactly one positive unsigned 32-bit
@@ -658,6 +845,57 @@ replacing the global `math.random` afterward does not redirect it.
 The positive upper-exclusive range matches the pinned A2 reference, while
 the random algorithm/sequence and zero-input error are explicit STA64
 policies. Native RNG and mission save/resume parity are not claimed.
+
+### Reproducible tables, sorting and references
+
+STA64's bundled Lua is patched (`vendor/lua-src/STA64-PATCH.md`, #1300) so a
+script given the same inputs does the same thing in every Lua state and every
+process. What a mission author can rely on:
+
+- `pairs` and `next`: first the list part, keys 1, 2, ..., n in ascending
+  order, for a list whose integer keys are only ever written by list
+  operations (`t[#t + 1] = v`, filling 1, 2, 3, ... in order, `table.insert`,
+  `table.remove`, `t[#t] = nil`, assigning to items that hold non-nil
+  values, a list constructor), whatever other keys the table holds. Then every key that is
+  not a positive integer (strings, booleans, floats, zero and negative
+  integers, tables, functions, coroutines, entity handles) in the order it was
+  added. A key set to nil and added again moves to the end; overwriting a
+  present key keeps its place. Other positive integer keys (sparse, or filled
+  out of order) come in an unspecified place, but the same place for the same
+  sequence of operations, in every run. Clearing fields during a traversal is
+  fine. Adding keys during one is undefined in Lua; here a new key goes to the
+  end and is visited. If the table has to grow for it, keys set to nil are
+  dropped, and a traversal whose current key was one of them ends with
+  "invalid key to 'next'". Either way it is the same in every run. `ipairs`, `__pairs` and the `table` functions are unchanged; `#` is
+  unchanged for lists without holes (on a table with holes it is a valid
+  border, possibly another one than stock Lua's). Host functions that walk a
+  script's table use the same order.
+- A key set to nil keeps its slot (and the key object alive) until the table
+  is rebuilt, which happens after enough new keys; a set keyed by tables or
+  closures that is emptied and never written again keeps those objects alive.
+- `table.sort` is stable: elements that compare equal keep their order. A
+  comparator that is not a strict weak order gives some fixed permutation, not
+  an error; if the comparator raises, the table is left unchanged (unless
+  writing the result back raises, through `__newindex` or a memory error).
+- Strings compare by bytes (`<`, `table.sort`). `string.lower/upper` and the
+  pattern classes (`%a`, `%w`, ...) are those of the C locale; numbers print
+  and parse with a dot. A host library changing the process locale does not
+  change any of this.
+- Floats print the same on every platform this is tested on (Linux x86-64
+  and ARM, macOS, Windows): `tostring` and `%g %e %f` give "nan", "inf",
+  "-inf" for non-finite values, `%a` is Lua's own formatter (it takes no
+  flags, width or precision), and `x ^ y` uses the same platform-independent
+  power function as `math.pow`.
+- `tostring` of a table, function, coroutine or userdata (and so `print`,
+  `string.format('%s')` and error messages built from them) gives the type
+  and a per-state id, `table: #12`, never an address. Ids count 1, 2, 3, ...
+  in the order the script first turns values into text (STA64's own reports
+  and traces read mission state without handing out ids), so they are the
+  same in every run; a value keeps its id for its lifetime. (`string.format('%p')` does not exist in Lua 5.3.)
+- Weak tables are not available. A script meets this as an error from
+  `setmetatable` when the metatable has `__mode` (as for `__gc`). Behind that,
+  the bundled Lua ignores `__mode` altogether, so a mode added to a metatable
+  later, or set by host code, leaves the table strong.
 
 ## To do
 

@@ -763,6 +763,22 @@ pub fn grid(feed: &HudFeed, page: Page) -> Vec<Button> {
 /// Shared action construction with a presentation-specific build capacity.
 /// Stock palettes page the full list; the LCARS wrapper preserves its 15 cells.
 pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) -> Vec<Button> {
+    grid_with(feed, page, capacity, false)
+}
+
+/// The grid of the stock palette (Armada II and the mod family's stock HUD; Armada I has its own): the full build list and
+/// the menu button rules measured on the original (`stock`, see [`grid_with`]).
+pub(super) fn stock_grid(feed: &HudFeed, page: Page) -> Vec<Button> {
+    grid_with(feed, page, usize::MAX, true)
+}
+
+/// The grid; `stock` is the stock palette, which follows the original's menu buttons where a frame of it measured
+/// them: a class with several menu flags shows ONE menu button, Evolve before Research before Build; the Build button
+/// with several builders selected is drawn greyed, not hidden (measured, frame, modded bench, one launch, stock
+/// Armada II data). The mod family's stock HUD takes the same rules (INTERIM, not measured for that profile: the rule it
+/// replaces was an unmeasured reading that the frames contradicted, and no reading exists for that family). Every other
+/// HUD keeps its own rules.
+fn grid_with(feed: &HudFeed, page: Page, capacity: usize, stock: bool) -> Vec<Button> {
     let own = feed.own_selection();
     if own.is_empty() {
         return Vec::new();
@@ -806,20 +822,68 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // An evolve-only class has it in the opener's place; a class with a builder key keeps
         // Build and gets Evolve in the first free cell (below). INTERIM: the position of a second
         // menu button is STA64's choice, not determined for the original.
-        // INTERIM: a class with the research key and the evolve key shows Research only; the
-        // static reading says both would show, so this is STA64's choice.
-        let evolve = embryo || (key("evolve") && !research);
+        // The STATE of each top-level menu button is its own (read from the executable, static; the cases with a
+        // single flag measured): Research is on by its class flag alone, Build needs exactly one unit selected,
+        // Evolve needs every selected unit to be of one class. No state makes another exclusive.
+        let selected = feed.selected_units();
+        let single = selected.len() == 1;
+        let one_class = selected.iter().all(|u| u.def == selected[0].def);
         let builds = !embryo && (key("builder_ship") || key("builder_facility"));
-        evolve_extra = evolve && builds;
-        let caption = if research { "Research" } else if evolve && !builds { "Evolve" } else { "Build" };
-        let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(if research { "Research menu" } else if caption == "Evolve" { "Evolve menu" } else { "Build" }));
-        if research {
-            opener.sprite_names = vec!["b_research".into()];
-            opener.verbose = Some(tooltip_key("Open the research menu."));
-        } else if caption == "Evolve" {
-            opener = evolve_button(0);
+        let research_on = research;
+        let evolve_on = (embryo || key("evolve")) && one_class;
+        let build_on = !embryo && single && (builds || !key("evolve"));
+        // The SLOTS stay as they were (INTERIM, ambiguous in the read): after the states are set the original packs
+        // the buttons that are on into the grid by their configured locations, and whether two buttons that are on
+        // each get a cell of their own or share one is not settled (reading one: separate cells, the second shifts
+        // the rest; reading two: a cell holds several modes and one wins). Today's slots: Research takes the opener's
+        // cell and hides an Evolve that is on with it; Evolve takes the opener's cell when Build is off, else the
+        // first free cell. Needs the install's button location keys and one frame of the original.
+        evolve_extra = evolve_on && build_on && !research_on && !stock;
+        // The stock palette (`stock`) follows the frames of the original instead (measured, frame, modded bench, one
+        // launch, stock Armada II data; the mod family's stock HUD follows it too, INTERIM, not measured for it):
+        // one menu button by the flags, Evolve over Research over Build, and Build greyed with several builders.
+        // INTERIM, two readings, for the other HUDs: a menu button whose own state is off (several builders selected, or an Evolve over
+        // several classes) is NOT DRAWN here (reading one: the original hides it). Reading two: the original draws it
+        // greyed and unusable. The read gives the state rule only (grade: read from the executable, static); whether
+        // an off button is hidden or greyed is not settled and needs a frame of the original.
+        let (caption, greyed) = if stock {
+            // Measured (frame, modded bench, one launch): one menu button in the Build slot by each pair of class flags,
+            // Evolve before Research before Build; Build drawn greyed with two builders of one class selected.
+            // INFERRED, not seen: a class with all three flags shows Evolve (transitive from the pairs), and Build is
+            // greyed for any selection of several builders (a mixed selection was not staged).
+            // Not measured, so as on main: an Evolve over several classes is not drawn.
+            let build_like = !embryo && (builds || !key("evolve"));
+            if embryo || key("evolve") {
+                (evolve_on.then_some("Evolve"), false)
+            } else if research {
+                (Some("Research"), false)
+            } else if build_like {
+                (Some("Build"), !single)
+            } else {
+                (None, false)
+            }
+        } else if research_on {
+            (Some("Research"), false)
+        } else if evolve_on && !build_on {
+            (Some("Evolve"), false)
+        } else if build_on {
+            (Some("Build"), false)
+        } else {
+            (None, false)
+        };
+        if let Some(caption) = caption {
+            let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(match caption { "Research" => "Research menu", "Evolve" => "Evolve menu", _ => "Build" }));
+            if caption == "Research" {
+                opener.sprite_names = vec!["b_research".into()];
+                opener.verbose = Some(tooltip_key("Open the research menu."));
+            } else if caption == "Evolve" {
+                opener = evolve_button(0);
+            }
+            if greyed {
+                opener.look = Look::Locked;
+            }
+            out.push(opener);
         }
-        out.push(opener);
     }
     if caps.rally {
         out.push(button(
@@ -1084,8 +1148,8 @@ pub struct ResEntry {
 
 /// The strip: the player's stock in the order dilithium, metal, latinum,
 /// biomatter (the order Refit's HUD.md asks for), those the race has, then the
-/// crew when initialized, then officers as "in use/capacity", or A1's
-/// "available/capacity", subject to the race's authored hide flags.
+/// crew when initialized, then officers as "in use/capacity", subject to the
+/// race's authored hide flags.
 pub fn resources(feed: &HudFeed, no: [bool; 4], no_personnel: [bool; 2]) -> Vec<ResEntry> {
     let Some(p) = feed.view.player(feed.player) else { return Vec::new() };
     let names = resource_model(feed);
@@ -1098,19 +1162,16 @@ pub fn resources(feed: &HudFeed, no: [bool; 4], no_personnel: [bool; 2]) -> Vec<
         out.push(ResEntry { name: "crew".into(), id: 5, text: (crew.to_bits() / Fixed::ONE.to_bits()).to_string() });
     }
     if !no_personnel[1] && (p.officers[1] > Fixed::ZERO || feed.content.as_deref().is_some_and(ContentDb::a1_officers)) {
-        out.push(ResEntry { name: "officers".into(), id: 4, text: officer_text(feed, p.officers) });
+        out.push(ResEntry { name: "officers".into(), id: 4, text: officer_text(p.officers) });
     }
     out
 }
 
-pub(super) fn officer_text(feed: &HudFeed, [used, cap]: [Fixed; 2]) -> String {
-    let shown = if feed.content.as_deref().is_some_and(ContentDb::a1_officers) {
-        Fixed::from_bits(cap.to_bits().saturating_sub(used.to_bits()).max(0))
-    } else {
-        used
-    };
+/// The officers readout, "in use/capacity", for every profile. Armada I follows the same form.
+/// Evidence: stated by a player (original at mission start); not measured. Interim.
+pub(super) fn officer_text([used, cap]: [Fixed; 2]) -> String {
     let whole = |value: Fixed| value.to_bits() / Fixed::ONE.to_bits();
-    format!("{}/{}", whole(shown), whole(cap))
+    format!("{}/{}", whole(used), whole(cap))
 }
 
 /// Everything the HUD draws, for change detection.
@@ -1587,7 +1648,8 @@ mod tests {
                 .any(|b| b.act == Act::Target(TargetMode::Move))
         );
         f.selected = vec![EntityId(1), EntityId(2)];
-        assert!(grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
+        // Build is on only for exactly one selected unit (read from the executable, static): two builders give none.
+        assert!(!grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
         assert!(grid(&f, Page::Top).iter().any(|b| b.act == Act::Stop));
         f.selected = vec![EntityId(2), EntityId(4)];
         assert!(!grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
@@ -1820,6 +1882,11 @@ mod tests {
         let g = grid(&f, Page::Build);
         assert_eq!(g[1].look, Look::Locked);
         assert!(g[1].verbose.as_deref().unwrap().starts_with("needs fx_station. Cost:"));
+        // The stock palette draws the same item dark in its slot and keeps its tooltip (measured, frame, modded bench);
+        // a dark item is a disabled widget, which a click does not start (what the original does on a click: not
+        // captured, so no action: INTERIM).
+        let stock = stock_grid(&f, Page::Build);
+        assert!(stock.iter().any(|b| b.look == Look::Locked && b.verbose.as_deref().is_some_and(|v| v.starts_with("needs fx_station"))));
         // A station of ours still being welded does not count, nor does the rival's.
         units.push(unit(&db, 3, "fx_station", 1, 100.0, Some(0.5)));
         units.push(unit(&db, 5, "fx_station", 2, 100.0, None));
@@ -2225,19 +2292,32 @@ mod tests {
     }
 
     #[test]
-    fn a1_officer_strip_shows_available_capacity_without_changing_player_view() {
+    fn a1_officer_strip_shows_used_against_cap_without_changing_player_view() {
         let db = ContentDb::builder().profile(sta_content::Profile::Sta1Classic).build().unwrap();
         let f = feed(db, Vec::new(), &[]);
         assert_eq!(f.view.players[0].officers, [Fixed::from_int(3), Fixed::from_int(10)]);
-        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "7/10");
+        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "3/10");
+        assert_eq!(officer_text(f.view.players[0].officers), "3/10");
         let mut view = (*f.view).clone();
         view.players[0].officers = [Fixed::from_int(12), Fixed::from_int(10)];
         let f = HudFeed { view: Arc::new(view), ..f };
-        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "0/10");
+        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "12/10");
         let mut view = (*f.view).clone();
         view.players[0].officers = [Fixed::ZERO, Fixed::ZERO];
         let f = HudFeed { view: Arc::new(view), ..f };
         assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "0/0");
+    }
+
+    #[test]
+    fn non_armada1_profiles_officer_readout_is_unchanged_in_use_against_cap() {
+        use sta_content::Profile;
+        for profile in [Profile::Native, Profile::Fo4, Profile::Fo3, Profile::Sta2Classic] {
+            let db = ContentDb::builder().profile(profile).build().unwrap();
+            assert!(!db.a1_officers(), "{profile:?} is not Armada I");
+            let f = feed(db, Vec::new(), &[]);
+            assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "3/10", "{profile:?}");
+        }
+        assert_eq!(officer_text([Fixed::from_int(4), Fixed::from_int(9)]), "4/9");
     }
 
     #[test]
@@ -2315,6 +2395,100 @@ mod tests {
         assert_eq!(Some(o[1].0), (0..).find(|c| !others.contains(c)), "the first free cell");
     }
 
+    /// A feed with one own unit of each class in `picks` (by definition name), all selected.
+    fn menu_multi(defs: Vec<UnitDef>, picks: &[&str]) -> HudFeed {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for u in fake.units() { db = db.unit(u.clone()); }
+        for u in defs { db = db.unit(u); }
+        let db = db.build().unwrap();
+        let units: Vec<_> = picks.iter().enumerate().map(|(i, odf)| unit(&db, 2 + i as u32, odf, 1, 100.0, None)).collect();
+        let ids: Vec<u32> = (0..picks.len() as u32).map(|i| 2 + i).collect();
+        feed(db, units, &ids)
+    }
+
+    /// The state of each top-level menu button is its own (read from the executable, static; single flags measured):
+    /// Build needs exactly one selected unit, Evolve needs one class among the selection, Research only its flag.
+    #[test]
+    fn each_menu_buttons_state_follows_its_own_rule() {
+        let defs = || vec![
+            menu_def("m_build", "station", "builder_facility = 1\n"),
+            menu_def("m_build_two", "station", "builder_facility = 1\n"),
+            menu_def("m_evolve", "station", "evolve = 1\n"),
+            menu_def("m_evolve_two", "station", "evolve = 1\n"),
+            menu_def("m_research", "station", "research = 1\n"),
+        ];
+        let sprites = |picks: &[&str]| -> Vec<String> { openers(&menu_multi(defs(), picks)).into_iter().flat_map(|(_, s)| s).collect() };
+        // Build: one unit gives it, two (even of one class) do not.
+        assert_eq!(sprites(&["m_build"]), ["b_build"]);
+        assert!(sprites(&["m_build", "m_build"]).is_empty());
+        assert!(sprites(&["m_build", "m_build_two"]).is_empty());
+        // Evolve: one class gives it whatever the count; two classes do not.
+        assert_eq!(sprites(&["m_evolve"]), ["b_evolve"]);
+        assert_eq!(sprites(&["m_evolve", "m_evolve"]), ["b_evolve"]);
+        assert!(sprites(&["m_evolve", "m_evolve_two"]).is_empty());
+        // Research: its flag alone, whatever the count or the classes.
+        assert_eq!(sprites(&["m_research"]), ["b_research"]);
+        assert_eq!(sprites(&["m_research", "m_research"]), ["b_research"]);
+    }
+
+    /// A class with a builder key and the evolve key, selected twice: Build is off (two selected) and Evolve is on
+    /// (one class), so Evolve takes the opener's place; the slot rule itself is unchanged and INTERIM (ambiguous).
+    #[test]
+    fn independent_states_show_evolve_alone_where_build_is_off() {
+        let defs = vec![menu_def("m_both", "station", "builder_facility = 1\nevolve = 1\n")];
+        assert_eq!(openers(&menu_multi(defs.clone(), &["m_both"])).iter().map(|o| o.1.clone()).collect::<Vec<_>>(), [vec!["b_build".to_string()], vec!["b_evolve".to_string()]]);
+        assert_eq!(openers(&menu_multi(defs, &["m_both", "m_both"])), [(0, vec!["b_evolve".to_string()])]);
+    }
+
+    /// The stock palette's menu buttons (measured, frame, modded bench; authored classes): a class with two menu flags
+    /// shows one button in the Build slot, Evolve before Research before Build; the other HUDs keep their own rules.
+    #[test]
+    fn the_stock_palette_shows_one_menu_button_by_the_measured_precedence() {
+        let defs = || vec![
+            menu_def("m_br", "station", "builder_facility = 1\nresearch = 1\n"),
+            menu_def("m_be", "station", "builder_facility = 1\nevolve = 1\n"),
+            menu_def("m_re", "station", "research = 1\nevolve = 1\n"),
+        ];
+        let opener = |pick: &str, stock: bool| -> Vec<(usize, Vec<String>)> {
+            let f = menu_multi(defs(), &[pick]);
+            let g = if stock { stock_grid(&f, Page::Top) } else { grid(&f, Page::Top) };
+            g.into_iter().filter(|b| b.act == Act::OpenBuild).map(|b| (b.cell, b.sprite_names)).collect()
+        };
+        assert_eq!(opener("m_br", true), [(0, vec!["b_research".to_string()])], "research over build");
+        assert_eq!(opener("m_be", true), [(0, vec!["b_evolve".to_string()])], "evolve over build");
+        assert_eq!(opener("m_re", true), [(0, vec!["b_evolve".to_string()])], "evolve over research");
+        // The other HUDs keep what they had: builder + evolve shows both buttons.
+        assert_eq!(opener("m_be", false).len(), 2);
+    }
+
+    /// Several builders selected: the stock palette draws the Build button greyed, the other HUDs do not draw it.
+    #[test]
+    fn the_stock_palette_greys_the_build_button_with_several_builders_instead_of_hiding_it() {
+        let defs = || vec![menu_def("m_build", "station", "builder_facility = 1\n")];
+        let look = |picks: &[&str], stock: bool| -> Vec<Look> {
+            let f = menu_multi(defs(), picks);
+            let g = if stock { stock_grid(&f, Page::Top) } else { grid(&f, Page::Top) };
+            g.into_iter().filter(|b| b.act == Act::OpenBuild).map(|b| b.look).collect()
+        };
+        assert_eq!(look(&["m_build"], true), [Look::Ready]);
+        assert_eq!(look(&["m_build", "m_build"], true), [Look::Locked], "greyed, not hidden");
+        assert!(look(&["m_build", "m_build"], false).is_empty(), "the other HUDs keep hiding it");
+    }
+
+    /// An enemy planet or station selected: no palette buttons at all (measured, frame, modded bench).
+    #[test]
+    fn the_stock_palette_has_no_buttons_for_an_enemy_selection() {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for u in fake.units() { db = db.unit(u.clone()); }
+        let db = db.unit(menu_def("m_build", "station", "builder_facility = 1\n")).build().unwrap();
+        let f = feed(db.clone(), vec![unit(&db, 2, "m_build", 2, 100.0, None)], &[2]);
+        assert!(stock_grid(&f, Page::Top).is_empty());
+    }
+
     /// Install-gated (`STA64_TEST_A2_STOCK_INSTALL`, read at run time, structure only): every class
     /// with an item list shows the menu button(s) its keys give, found by sprite name; research and
     /// planet classes, builder-ship and builder-facility classes and evolve classes exist, and the
@@ -2332,18 +2506,25 @@ mod tests {
         for def in db.units().filter(|d| !d.build.list.is_empty()) {
             let key = |k: &str| def.raw.bool(k) == Some(true);
             let builds = key("builder_ship") || key("builder_facility");
-            let expected: Vec<&str> = if key("research") {
+            let embryo = def.is_evolver();
+            // The other HUDs: an evolver (an embryo) shows Evolve alone; a class with the evolve key and a builder key
+            // keeps Build and gets Evolve beside it (INTERIM); research wins over the rest.
+            let expected: Vec<&str> = if key("research") && !embryo {
                 vec!["b_research"]
-            } else if key("evolve") && builds {
-                vec!["b_build", "b_evolve"]
-            } else if key("evolve") {
+            } else if embryo || (key("evolve") && !builds) {
                 vec!["b_evolve"]
+            } else if key("evolve") {
+                vec!["b_build", "b_evolve"]
             } else {
                 vec!["b_build"]
             };
             let f = feed(db.clone(), vec![unit(&db, 2, &def.odf, 1, 100.0, None)], &[2]);
             let got: Vec<String> = openers(&f).into_iter().flat_map(|(_, s)| s).collect();
             assert_eq!(got, expected, "{}", def.odf);
+            // The stock palette: ONE menu button by the measured precedence, Evolve before Research before Build.
+            let stock: Vec<String> = stock_grid(&f, Page::Top).into_iter().filter(|b| b.act == Act::OpenBuild).flat_map(|b| b.sprite_names).collect();
+            let stock_expected = if embryo || key("evolve") { "b_evolve" } else if key("research") { "b_research" } else { "b_build" };
+            assert_eq!(stock, [stock_expected], "{} (stock palette)", def.odf);
             research += usize::from(key("research") && def.planet_role.is_none());
             planet += usize::from(key("research") && def.planet_role.is_some());
             ship += usize::from(key("builder_ship") && !key("research"));

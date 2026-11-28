@@ -44,6 +44,8 @@ impl Sim {
             .collect();
         sim.ai_seats.sort();
         sim.ai_seats.dedup();
+        sim.directors_cut = s.options.directors_cut && s.content.profile() == sta_content::Profile::Sta1Classic;
+        sim.match_warp_off = !s.options.allow_warp && crate::setup::GameOptions::warp_option_counts(&s.content);
         sim.content = Some(Arc::clone(&s.content));
         sim.starts = s.map.starts.clone();
         sim.regions = s.map.regions.clone();
@@ -182,6 +184,7 @@ impl Sim {
         self.scripted.remove(id);
         self.switches.remove(id);
         self.alerts.remove(id);
+        self.dying.remove(id);
         if let Some(by) = destroyed_by {
             self.events.push(SimEvent::Destroyed { id, by });
         }
@@ -265,7 +268,9 @@ impl Sim {
                 u.hull[0] = (u.hull[0] - amount).max(floor).min(u.hull[0]);
                 let taken = before - u.hull[0];
                 if u.hull[0] <= Fixed::ZERO {
-                    return self.despawn(id, None);
+                    // Under `dying_phase` a script's lethal damage starts the dying phase
+                    // (measured, repeated); without it the unit is removed at once.
+                    return self.kill_by_damage(id);
                 }
                 if taken > Fixed::ZERO && let Some(db) = self.content.as_deref() {
                     self.recrew.note_damage(&self.units, db, id, Fixed::ZERO, taken, self.tick);
@@ -307,10 +312,17 @@ impl Sim {
                 let Some(u) = self.units.get_mut(id) else {
                     return false;
                 };
+                // `engines_off_drift` (#1031, measured on stock Armada II): the craft does
+                // not stop at once and keeps its order; it coasts (`kinematics::coast`) and
+                // carries the order out when its engines return. It does not turn.
+                let drift = u.kind == crate::world::EntityKind::Craft
+                    && self.content.as_deref().is_some_and(|db| db.unit(u.def).map_or(db.features(), |d| db.unit_features(d)).engines_off_drift);
                 if !on {
-                    u.speed = Fixed::ZERO;
                     u.omega = Fixed::ZERO;
-                    u.target = None;
+                    if !drift {
+                        u.speed = Fixed::ZERO;
+                        u.target = None;
+                    }
                 }
                 u.flags = u.flags.with(UnitFlags::ENGINES_OFF, !on);
                 true
@@ -470,6 +482,7 @@ mod tests {
                 units,
                 to,
                 queue: false,
+                mode: None,
             }),
         )
     }

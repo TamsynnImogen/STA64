@@ -217,8 +217,8 @@ struct LogFile {
 }
 
 // View logs include the derived PD slots and projected model appearance.
-// Player saves and command replays do not store views.
-const VIEW_LOG_REV: u32 = SEAM_REV + 2;
+// Player saves and command replays do not store views. +3 adds the warp rows, +4 the beams in flight, +5 the stretch factor of a warp row, +6 the match option `warp allowed` (`attrs.match_warp_off`), +7 the flown shots (`shot_rows`).
+const VIEW_LOG_REV: u32 = SEAM_REV + 7;
 
 /// A recorded run, replayed as a [`WorldSource`] that ignores commands.
 /// Past the end it repeats the last view with no events.
@@ -386,7 +386,7 @@ mod tests {
         let mv = |player, unit, to| Command {
             player: PlayerId(player),
             seq: 0,
-            kind: CommandKind::Order(Order::Move { units: vec![unit], to: Vec3::from_f32(to), queue: false }),
+            kind: CommandKind::Order(Order::Move { units: vec![unit], to: Vec3::from_f32(to), queue: false, mode: None }),
         };
         let batches = (0..300)
             .map(|t| match t {

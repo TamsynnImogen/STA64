@@ -53,10 +53,15 @@ pub struct ContentDb {
     has_map_confinement: bool,
     map_confinement_warnings: Vec<Warning>,
     rules: crate::Rules,
+    /// The formation files of the mount (CON-59); empty for content built in code.
+    formations: Arc<crate::Formations>,
     /// Armada I's play-physics block (CON-52): only under `Sta1Classic`, and
     /// only when the file is there and usable.
     a1_play: Option<crate::A1Dynamics>,
     a1_officer_policy: bool,
+    /// Explosion definitions the units name and the `ART_CFG.h` chunk settings (#1153).
+    /// Presentation only: never in the digest.
+    explosions: Arc<crate::ExplosionTable>,
     /// The mounted layers' names, top first: informational (D10), recorded
     /// in replays and snapshots, never compared.
     packs: Vec<String>,
@@ -65,6 +70,25 @@ pub struct ContentDb {
 
 impl ContentDb {
     pub fn rules(&self) -> &crate::Rules { &self.rules }
+
+    /// The group-movement rules of this content's profile (CON-59, ADR 0011 G12).
+    pub fn group_rules(&self) -> crate::GroupRules {
+        self.rules.group_rules(self.profile)
+    }
+
+    /// The formations the content ships (CON-59, ADR 0011 G3): the Armada II
+    /// family's `AI/formations/*.frm`. Empty for Armada I, for a mod that ships
+    /// none and for content built in code; the sim then keeps SIM-02's kinds.
+    pub fn formations(&self) -> &crate::Formations {
+        &self.formations
+    }
+
+    /// This database with these formations, digested (D10).
+    pub fn with_formations(mut self, formations: crate::Formations) -> Self {
+        self.formations = Arc::new(formations);
+        self.digest = digest_of(&self);
+        self
+    }
 
     /// Whether a race can trade. Unknown races and races without an authored
     /// `canTrade = 0` default to true.
@@ -127,7 +151,7 @@ impl ContentDb {
     }
 
     pub fn with_rules(mut self, rules: crate::Rules) -> Self {
-        self.rules = rules;
+        self.rules = if self.profile == Profile::Sta1Classic { rules } else { rules.without_a1_dogfight() };
         self.digest = digest_of(&self);
         self
     }
@@ -190,6 +214,14 @@ impl ContentDb {
         warnings.extend(rule_warnings);
         let (db, radius_warnings) = db.with_rules(rules).with_launch_points_warned(vfs);
         warnings.extend(radius_warnings);
+        // Armada I has no formation files (its grid is built in code, ADR 0011 G3).
+        let db = if profile == Profile::Sta1Classic {
+            db
+        } else {
+            let (formations, formation_warnings) = crate::Formations::load(vfs);
+            warnings.extend(formation_warnings);
+            db.with_formations(formations)
+        };
         let db = db
             .with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)))
             .with_packs(vfs.layers().iter().map(|l| l.name().to_owned()).collect());
@@ -553,6 +585,16 @@ impl ContentDb {
         self.digest.hash64()
     }
 
+    /// For legacy saves and replays whose match options predate dogfighting.
+    /// Match against exactly the same rules with the newly used A1 fields removed.
+    pub fn matches_pre_directors_cut_hash(&self, hash: u64) -> bool {
+        self.profile == Profile::Sta1Classic
+            && ContentDigest::from_entries(self.digest.entries().iter().filter(|entry| {
+                !entry.key.starts_with("a1-dogfight:")
+                    && !matches!(entry.key.as_str(), "RTS_CFG.h:ANCHOR_RADIUS" | "RTS_CFG.h:ANCHOR_PURSUIT_POINT_ANGLE")
+            }).cloned().collect()).hash64() == hash
+    }
+
     /// The keyed digest of every resolved sim-visible rule (D10): what
     /// peers compare, and what names the first differing key when they
     /// disagree. See [`crate::digest`].
@@ -574,6 +616,28 @@ impl ContentDb {
     pub fn with_resources(mut self, resources: ResourceModel) -> ContentDb {
         self.resources = resources;
         self.digest = digest_of(&self);
+        self
+    }
+
+    /// The explosion and shockwave definitions the units name, and the chunk settings
+    /// (#1153). Empty for content built in code. Not in the digest.
+    pub fn explosions(&self) -> &crate::ExplosionTable {
+        &self.explosions
+    }
+
+    /// The explosion a unit's `fireball` names, when it resolved.
+    pub fn explosion_of(&self, u: &UnitDef) -> Option<&crate::ExplosionDef> {
+        self.explosions.explosion(u.fx.explosion.as_deref()?)
+    }
+
+    /// The explosion a unit's `selfDestruct` names, when it resolved.
+    pub fn self_destruct_explosion_of(&self, u: &UnitDef) -> Option<&crate::ExplosionDef> {
+        self.explosions.explosion(u.stats.self_destruct.as_deref()?)
+    }
+
+    /// This database with these explosion definitions (authored ones in tests). The digest does not change.
+    pub fn with_explosions(mut self, table: crate::ExplosionTable) -> ContentDb {
+        self.explosions = Arc::new(table);
         self
     }
 
@@ -734,8 +798,8 @@ impl ContentBuilder {
         let mut db = ContentDb {
             defs, profile: self.profile, features: self.features, resources,
             tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
-            map_confinement_warnings, rules: crate::Rules::default(),
-            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), a1_officer_policy: false, packs: Vec::new(),
+            map_confinement_warnings, rules: crate::Rules::default(), formations: Arc::default(),
+            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), a1_officer_policy: false, explosions: Arc::default(), packs: Vec::new(),
             digest: ContentDigest::default(),
         };
         db.digest = digest_of(&db);
@@ -768,6 +832,7 @@ fn confinement_text(r: Option<&crate::ConfinementRules>) -> String {
 /// node names) and the model scale (it reaches the sim only through the
 /// geometry entry) are left out.
 fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
+    // `a1_combat_dynamics` is digested per unit as its own `a1-dogfight:` entry (see `digest_of`).
     // Every field, so a new one fails to compile here until someone decides
     // whether the sim reads it (then it is digested below) or not.
     // `transport` (SIM-46 P0): the sim reads `transporter`, `boardingPartyStrength`,
@@ -776,7 +841,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
         a1_base_officers: _, a1_officer_upgrade_gain: _, trade_station: _, trade_cargo_capacity: _,
-        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, a1_combat_dynamics: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, self_destruct_blast: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         free_unit: _, dock: _, transwarp_gate: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
@@ -1374,6 +1439,15 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     {
         c.raw("variance_rows", &table(l));
     }
+    // `ordnance_flight`: the keys a torpedo's flight reads, only under the switch and only for a
+    // torpedo class, so every other weapon keeps its text.
+    if features.ordnance_flight && w.kind == crate::WeaponKind::Projectile && crate::weapon::TORPEDO_CLASSES.contains(&w.class.0.as_str()) {
+        c.raw("flight", &group(
+            Canon::new()
+                .opt_fixed("life_span", w.base.life_span)
+                .opt_fixed("seek_time", w.base.seek_time)
+                .opt_fixed("omega_turn", w.base.omega_turn)));
+    }
     // The weapon's `special` key (read by `sta_sim::movement::approach`); only when set to 1.
     if w.base.special == Some(true) {
         c.raw("special", "1");
@@ -1437,6 +1511,9 @@ fn tech_text(e: &crate::TechEntry) -> String {
 /// Every resolved sim-visible rule of `db` (see [`crate::digest`]).
 fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
     let mut out = db.rules.digest_entries();
+    // CON-59: only what is set or shipped, so content without formation data keeps its digest.
+    out.extend(db.rules.group_digest_entries(db.profile));
+    out.extend(db.formations.digest_entries());
     out.push(DigestEntry::new("content:profile", db.lineage()));
     out.push(DigestEntry::new("content:features", features_text(&db.features)));
     if db.a1_officers() {
@@ -1466,6 +1543,15 @@ fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
                 let value = format!("{};tech={}", unit_text(db, u), tech(name));
                 out.push(DigestEntry::new(digest::key("unit:", name), value));
                 out.push(DigestEntry::new(digest::key("geometry:", name), geometry_text(u)));
+                if db.profile == Profile::Sta1Classic
+                    && let Some(p) = &u.a1_combat_dynamics
+                    && Some(p) != db.a1_play_physics()
+                {
+                    out.push(DigestEntry::new(
+                        digest::key("a1-dogfight:", name),
+                        crate::a1_physics::dynamics_text(p),
+                    ));
+                }
                 if let Some(attachment) = u.repair_attachment {
                     let vector = |v: sta_core::Vec3| format!("[{},{},{}]", fixed_text(v.x), fixed_text(v.y), fixed_text(v.z));
                     let value = Canon::new()

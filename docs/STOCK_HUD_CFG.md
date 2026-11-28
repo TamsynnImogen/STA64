@@ -57,17 +57,17 @@ The clean Armada II 1.1 executable and Heroic data supplied the reference.
 STA64 reads the panel positions and sprite names from the mounted CFG and SPR.
 The following rules apply to the Armada II presentation profile.
 
-| Element | Native evidence and STA64 behavior |
+| Element | Rule STA64 follows (grade: read from the executable, static, unless marked) |
 | --- | --- |
-| Selection height | `DetermineSelectedDisplayType` at `0x4f2ee0` tests the Shipyard flag `0x200` on a single non-planet object. `Shipyard::Shipyard` sets that flag at `0x4bb200`, and `Starbase::Starbase` inherits it. A research station has a production queue and still uses the medium card. |
-| Group | `DisplayMultiObjectSmall` and `DisplayMultiObjectFull` at `0x4f3c80` and `0x4f3d30` share the same slots. The medium card draws eight slots and the tall card draws sixteen. `ShipIcon::Render` at `0x4f7550` draws each wireframe and its health gauge. A sheet can add captions through its own name rectangles. |
-| Health gauge | `PostLoad` places a `HealthBar` in both single cards. `GetBarValue` at `0x4f4350` uses hull for fill width. `GetBarColor` at `0x4f4280` shades a craft's operating shields from red to green by charge and uses blue when shields are offline or empty. STA64 preserves authored tint overrides and binds the gauge's tooltip to hull integrity. |
-| Subsystems | `SystemText::GetInformation` at `0x4ec960` supplies the rounded health value. STA64 shows the number without a percent sign and uses the same stock font sizing as crew and officers. An unavailable subsystem displays a dim zero. CFG rectangles can hide a row. |
-| Construction rig | The rig inherits the producer draw path in `DisplaySingleObject` at `0x4f3770`. Its medium card keeps a striped meter at `infoSingleConstructionArea`, with an active fill from its current construction job. |
-| Hover strip | `DisplayInfoBar` at `0x4f3320` accepts craft. `SDInfoBar::Render` draws hull, shield and energy percentages and a whole crew count. STA64 displays the same rounded values without percent signs in this strip. The exact native name-versus-class predicate is still unverified. |
-| Resource strip | `ResourcePanel::PostLoad` at `0x4ff450` loads six rectangle and tooltip definitions. Their visibility and positions come from the faction's resolved sheet. |
-| Persistent controls | `ButtonPanel::ButtonPanel` at `0x4fe5f0` starts collapsed. `Render` at `0x4fefe0` gates the menu, help and palette row on one flag. STA64 draws CFG controls and disables actions whose game systems are unavailable. |
-| Minimap and cinematic viewport | Both use the faction's authored frame and display region. Native event-location marks from `MapRadar::AddMessageMark` still need an event feed. Native footprint and live inset behavior need a runtime comparison. |
+| Selection height | A single non-planet object takes the tall card only when it carries the shipyard class flag, which starbases inherit. A research station has a production queue and still uses the medium card. |
+| Group | The medium and tall group cards share the same slots: eight on the medium card, sixteen on the tall card. Each slot draws a wireframe and its health gauge. A sheet can add captions through its own name rectangles. |
+| Health gauge | Both single cards place a health bar; hull sets the fill width. A craft's operating shields shade the bar from red to green by charge, and it is blue when shields are offline or empty. STA64 preserves authored tint overrides and binds the gauge's tooltip to hull integrity. |
+| Subsystems | The subsystem text supplies the rounded health value. STA64 shows the number without a percent sign and uses the same stock font sizing as crew and officers. An unavailable subsystem displays a dim zero. CFG rectangles can hide a row. |
+| Construction rig | The rig inherits the producer's single-card path. Its medium card keeps a striped meter at `infoSingleConstructionArea`, with an active fill from its current construction job. |
+| Hover strip | The strip accepts craft and draws hull, shield and energy values and a whole crew count. STA64 displays the same rounded values without percent signs in this strip. Not established: the exact rule that chooses name versus class. |
+| Resource strip | Six rectangle and tooltip definitions are loaded. Their visibility and positions come from the faction's resolved sheet. |
+| Persistent controls | The button panel starts collapsed, and one flag gates the menu, help and palette row. STA64 draws CFG controls and disables actions whose game systems are unavailable. |
+| Minimap and cinematic viewport | Both use the faction's authored frame and display region. The native minimap's event-location marks still need an event feed. Native footprint and live inset behavior need a runtime comparison (not established). |
 
 The standalone data mount accepts a copied CD folder with `odf`, `bzn`,
 `game_cfg.h` and `misc/gui_glob16x12.cfg`. This lets tests use the CD assets
@@ -100,8 +100,8 @@ root, its camera and visibility, current selection and armed commands.
 Command ODFs are loaded through the existing layered ODF resolver. Their button,
 menu, tooltip and colour fields decorate only actions the shared capability model
 already supports. The static A2 bar compacts commands by command-type priority;
-`preferredPosition` is a secondary ordering hint for ties. Native `qsort` does not
-specify equal-priority order, so that tie policy is an explicit STA64 adaptation.
+`preferredPosition` is a secondary ordering hint for ties. The original's sort does not
+specify the order of equal priorities, so that tie policy is an explicit STA64 adaptation.
 Visible rows extend upward from `popupPaletteYA`. Long lists use previous/next
 pages rather than inheriting the LCARS build-list limit. Menu and paging actions
 change presentation only; build, targeting, stop and formation actions still use
@@ -168,9 +168,8 @@ SPR fonts remain available to other consumers. The inspected Classic/FO4 CFGs
 do not name individual font files, and native font parity is not claimed by
 this readability correction.
 
-The same live Classic map (`3peace`) was checked read-only: the minimap cluster
-is at the expected normalized start position near (0.219, 0.219), and the large
-grey world shroud matches the mod's `Gshroud` RGB (65, 71, 85). Those are separate
+The same live Classic map was checked read-only: the minimap's start position
+and the world shroud colour agree with the mounted data. Those are separate
 from the atlas/font faults; this HUD correction changes neither map projection,
 sensor rules, fog rendering nor original textures.
 
@@ -199,10 +198,10 @@ the previous fake-player fixture gap; live gameplay/FPS acceptance is separate.
 
 Verified follow-up: 446 client tests pass (one existing ignored), strict client
 all-target Clippy, workspace/all-target and NDK29/API26 ARM64 library checks pass.
-Five actual windowless NVIDIA Vulkan captures cover Classic and FO4 at 4:3 and
-16:9 plus Classic Lots/Restricted. Classic source labels and pixels show
-1200 /16/600 normally, 30000 /16/300 for Lots/Restricted; FO4 hides both fields
-through its CFG flags. The lead inspected the captures. Private evidence lives
+Five actual windowless GPU captures cover Classic and FO4 at 4:3 and
+16:9 plus Classic Lots/Restricted. Classic source labels and pixels follow the
+mounted setup data, for the normal and for the Lots/Restricted case; FO4 hides
+both fields through its CFG flags. The lead inspected the captures. Private evidence lives
 in `STA64-artifacts/probes/ui17/personnel-hud-*`. This is HUD rendering proof;
 live gameplay readability/FPS and the broader UI-18 reference gate remain open.
 
@@ -211,26 +210,27 @@ live gameplay readability/FPS and the broader UI-18 reference gate remain open.
 
 An authored `resource_N_color` (RGB or RGBA, including white, black or zero
 alpha) wins through the existing case-insensitive CFG/include resolution.
-When absent, the six native resource IDs use Armada II's built-in palette:
+When absent, each of the six native resource IDs has its own default text colour
+(the table of defaults is in `resource_colour`, `ui/hud/stock/info.rs`; read from
+the executable, static):
 
-| ID | Resource | Default RGB |
-|---|---|---|
-| 0 | Crew | 0, 1, 0 |
-| 1 | Officers | 1, 1, 1 |
-| 2 | Dilithium | 0.6, 0.9, 1 |
-| 3 | Latinum | 1, 1, 0 |
-| 4 | Metal | 0.8, 0.8, 0.8 |
-| 5 | Biomatter | 1, 0, 0 |
+| ID | Resource |
+|---|---|
+| 0 | Crew |
+| 1 | Officers |
+| 2 | Dilithium |
+| 3 | Latinum |
+| 4 | Metal |
+| 5 | Biomatter |
 
 Classic does not author those overrides; previously its resource numerals
 incorrectly inherited the generic theme text colour. FO4's authored palette
 and per-faction overrides remain authoritative. The same widget supports both;
 no game assets or simulation/resource values change.
 
-Evidence: read from the stock A2 executable (static). It allocates one RGB
-triple per resource ID in a table, and the resource panel sets the resource's
-text colour from that table with the current resource ID. This does not claim
-original Roots execution. Notes are kept outside the repository.
+Rule (read from the executable, static): each resource ID has its own default
+text colour, applied to that resource's text; explicit CFG keys override it. This
+does not claim original Roots execution. Notes are kept outside the repository.
 
 Regression checks cover all six defaults, explicit per-ID CFG overrides,
 include/case precedence and retaining tints across value updates. The installed
@@ -267,7 +267,7 @@ its stable possibleCraftNames instance caption. The main card retains both
 identity rows. `shipNameColor` controls the strip caption.
 
 Native numeric/icon tints follow faction ODF `crewYellowStatus` and
-`crewRedStatus` thresholds (defaults 0.5/0.25): strictly above yellow is green,
+`crewRedStatus` thresholds (STA64 uses 0.5 and 0.25 where the ODF sets none): strictly above yellow is green,
 strictly above red is yellow, otherwise nonnegative is red. Negative status
 is grey; a zero-capacity crew pool uses the native fully-crewed colour.
 The existing A2FOCraftIdentity GUI palette commands are also honoured:
@@ -299,15 +299,15 @@ shared UnitView values. No capacity is substituted for unknown current crew;
 older snapshots preserve that unknown state. Crew spending/regeneration,
 casualties and boarding remain separate gameplay work.
 
-Evidence: read from the stock A2 executable (static). The info bar loader
-reads native text and icon areas and copies the name colour; percent getters
-multiply by 100 and the display uses floor(percent + 0.5) with a `%` literal;
-energy uses the same format; current crew comes from actor state; status colour
-selection uses race threshold defaults. White icon art requires tint. Private
-native receipts are kept outside the repository.
+Rule (read from the executable, static): the info bar takes its text and icon
+areas from the CFG and the name colour; percentages are shown as rounded whole
+numbers (STA64 shows a bare number, without `%`, by decision, see
+above); current crew is the actor's; status colours follow the race's thresholds.
+White icon art requires tint. Private receipts are kept outside the repository.
 This is static original-A2 evidence, not original Roots runtime acceptance.
 The current bare-number presentation follows the supplied stock reference and
-user direction; the original literal above is not used as a display requirement.
+user direction. STA64 rounds to the
+nearest whole percent.
 
 Stock wireframes opt into linear texture filtering when resized. The sampler
 is isolated in page and resolved-art caches; other GUI pictures and sprite

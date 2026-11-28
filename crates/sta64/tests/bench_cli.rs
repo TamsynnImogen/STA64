@@ -161,6 +161,21 @@ fn max_diff(a: &[u8], b: &[u8]) -> u8 {
     a.2.iter().zip(&b.2).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
 }
 
+/// How many pixels of two PNGs of one size differ by more than `by` in some channel; every pixel if the sizes differ.
+fn pixels_differing(a: &[u8], b: &[u8], by: u8) -> usize {
+    let decode = |p: &[u8]| {
+        let mut r = png::Decoder::new(std::io::Cursor::new(p)).read_info().unwrap();
+        let mut buf = vec![0; r.output_buffer_size().unwrap()];
+        let info = r.next_frame(&mut buf).unwrap();
+        (info.width, info.height, info.color_type.samples(), buf)
+    };
+    let (a, b) = (decode(a), decode(b));
+    if (a.0, a.1) != (b.0, b.1) {
+        return usize::MAX;
+    }
+    a.3.chunks(a.2).zip(b.3.chunks(b.2)).filter(|(x, y)| x.iter().zip(*y).any(|(p, q)| p.abs_diff(*q) > by)).count()
+}
+
 /// The effects draw on a real GPU: `sta64` exits 0 with no ERROR logged (a shader or
 /// pipeline error is only logged), the frames repeat byte for byte, and each frame in
 /// `live` differs from the first, which is before any effect. The first `exact` frames
@@ -227,19 +242,25 @@ fn planet_frames(bin: &str, tag: &str) -> Vec<Vec<u8>> {
     files.iter().map(|f| std::fs::read(f).unwrap()).collect()
 }
 
+/// Bloom is on by default and is seeded only by authored emissive texels ("bloom never
+/// reads scene brightness", `render/hulls/emissive_bloom.rs`). The planet scene has none,
+/// so `--postfx bloom` and `--postfx off` give the same frames there, and the frames
+/// repeat. That bloom does change a frame with emissive texels is pinned in-process by the
+/// GPU test in `render/hulls.rs` (the same scene with and without it): the bench scenes
+/// carry no emissive maps to show it through the command line.
 #[cfg(unix)]
 #[test]
-fn bloom_changes_frames_and_repeats() {
+fn bloom_seeded_by_emissive_texels_leaves_a_scene_without_them_unchanged_and_repeats() {
     if !adapter(&tmp("probe-postfx")) {
         return;
     }
     let wrap = tmp("postfx-wrap");
     let bloom = sta64_with_postfx(&wrap, "bloom");
-    let off = planet_frames(sta64(), "postfx-off");
+    let off = planet_frames(&sta64_with_postfx(&wrap, "off"), "postfx-off");
     let on_a = planet_frames(&bloom, "postfx-on-a");
     let on_b = planet_frames(&bloom, "postfx-on-b");
     assert_eq!(on_a, on_b, "bloom on twice must give the same frames");
-    assert_ne!(off, on_a, "bloom must change the frames");
+    assert_eq!(off, on_a, "no emissive texels in the scene: bloom has nothing to seed from");
 }
 
 /// The fog of war and the shroud (RND-13): `fog.ini` draws them as team 1 sees the map,
@@ -264,7 +285,12 @@ fn fog_of_war_draws_changes_the_frame_and_follows_the_sensors() {
     assert_ne!(a[0], off[0], "the fog must change the first frame");
     assert_ne!(a[1], off[1], "the fog must change the later frame");
     assert_ne!(a[0], a[1], "the fog must move with the scout");
+    // The layers are drawn under the scene (#1145), and the stand-in frames now draw only the units the local player's
+    // side sees (as the game does), so the unit out on never-explored ground is not drawn and the fog frame differs
+    // from the no-fog one by the layers' dimming and by that unit: the original magnitude check holds again, and the
+    // difference is also an area (the discs and the shroud around them), not a speck.
     assert!(max_diff(&a[0], &off[0]) > 40, "fog is a visible dimming, not a speck");
+    assert!(pixels_differing(&a[0], &off[0], 8) > 5000, "fog changes an area of the frame");
 }
 
 /// A session with a renderer (`--control stdio --frame-dir D`, no `--frames`): runs to

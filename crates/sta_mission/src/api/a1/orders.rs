@@ -39,11 +39,11 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
                 return Ok(Value::Nil);
             };
             for (n, to) in points.into_iter().enumerate() {
-                send(e, "Goto", id, |units| Order::Move { units, to, queue: n > 0 })?;
+                send(e, "Goto", id, |units| Order::Move { units, to, queue: n > 0, mode: None })?;
             }
         } else {
             let to = e.unit("Goto", a[1].id())?.pos;
-            send(e, "Goto", id, |units| Order::Move { units, to, queue: false })?;
+            send(e, "Goto", id, |units| Order::Move { units, to, queue: false, mode: None })?;
         }
         Ok(Value::Nil)
     })?)?;

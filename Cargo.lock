@@ -3518,6 +3518,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iced-x86"
+version = "1.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c23ad4d19dca41180e835ef6fbd2c1ee655777eca086ad80dd517e0513322879"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4123,8 +4132,6 @@ dependencies = [
 [[package]]
 name = "lua-src"
 version = "551.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d400ffef0e3d4d29287092bdc5a276d0bf468b2c69709d5bab0d469312d9f947"
 dependencies = [
  "cc",
 ]
@@ -5725,6 +5732,7 @@ dependencies = [
  "sta_core",
  "sta_media",
  "sta_mission",
+ "sta_mission_convert",
  "sta_net",
  "sta_odf",
  "sta_sim",
@@ -5846,9 +5854,22 @@ dependencies = [
  "sta_bzn",
  "sta_content",
  "sta_core",
+ "sta_mission_convert",
  "sta_odf",
  "sta_sim",
  "sta_vfs",
+]
+
+[[package]]
+name = "sta_mission_convert"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "indexmap",
+ "sha2",
+ "sta_core",
+ "sta_vfs",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
