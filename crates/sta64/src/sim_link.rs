@@ -33,6 +33,10 @@ use crate::clock::AnimClock;
 #[path = "sim_link_production_tests.rs"]
 mod production_tests;
 
+#[cfg(test)]
+#[path = "sim_link_dying_tests.rs"]
+mod dying_tests;
+
 /// The running world source, its router and the last two views.
 #[derive(Resource)]
 pub struct SimLink {
@@ -592,6 +596,7 @@ impl Plugin for SimLinkPlugin {
             .init_resource::<SimEntities>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_removals)
             .add_systems(OnExit(crate::app::AppState::InGame), forget_removals)
+            .add_systems(Update, drop_dying_from_selection.in_set(GameSet::Interpolate).run_if(resource_exists::<SimLink>))
             .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)).run_if(crate::editor::play_mode));
     }
 }
@@ -627,6 +632,47 @@ fn step_sim(
         out.write_batch(events.into_iter().map(SimMsg));
     }
     clock.end_frame();
+}
+
+/// A unit in its dying phase (the sim's `dying_phase` switch, stock Armada II profile only) leaves the local
+/// selection and the control groups.
+///
+/// Grades: a selected unit leaves the local selection when it starts to die (read from the executable, static;
+/// measured once: the selected craft is deselected on the tick its hull reaches zero). INTERIM, STA64's own
+/// guard and not measured: a unit that is picked again while the phase lasts goes again, and a control group
+/// keeps no dying member (the original's handling of both is not read). With the switch off no unit is ever
+/// flagged dying, so nothing here runs on any other profile.
+///
+/// No `SelectionChanged` is sent: its reader plays the first selected unit's select voice, which a death must
+/// not trigger. The interface follows the `Selection` resource itself.
+///
+/// Contract: it runs in [`GameSet::Interpolate`], after the sim step and before every reader in `Render`, `Ui`
+/// and `Audio`, so a pick made earlier in the same frame is gone before anything is drawn or heard from it
+/// (declared gap: the pick paths in `input/` do not test the flag themselves, and the orders they issue in that
+/// frame name a dying unit, which the sim refuses). The test `the_prune_runs_after_the_input_and_before_the_interface`
+/// pins the placement.
+fn drop_dying_from_selection(link: Res<SimLink>, mut selection: ResMut<Selection>, groups: Option<ResMut<crate::input::select::ControlGroups>>) {
+    let view = link.curr();
+    // Touch a resource mutably only when something goes: change detection of the selection must stay quiet.
+    if selection.0.iter().any(|id| is_dying(view, *id)) {
+        prune_dying(view, &mut selection.0);
+    }
+    if let Some(mut groups) = groups
+        && groups.groups.iter().flatten().any(|id| is_dying(view, *id))
+    {
+        for group in &mut groups.groups {
+            prune_dying(view, group);
+        }
+    }
+}
+
+fn is_dying(view: &WorldView, id: EntityId) -> bool {
+    view.unit(id).is_some_and(|u| u.flags.contains(sta_sim::view::UnitFlags::DYING))
+}
+
+/// Remove from `ids` every unit the view flags as dying.
+fn prune_dying(view: &WorldView, ids: &mut Vec<EntityId>) {
+    ids.retain(|id| !is_dying(view, *id));
 }
 
 /// Follow replacement events in their emitted order, then validate the final
