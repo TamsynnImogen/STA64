@@ -1,6 +1,6 @@
-//! Armada II's additive warp sprite and cruise hull stretch. Entry timing and projection follow
-//! Armada2.exe's mWarpCheck (0x004b3ce0, 0x004ad4a0), CreateWarpSpriteEffect
-//! (0x0059c380), and WarpSpriteEffect::Render (0x0059ca40).
+//! Armada II's additive warp sprite and cruise hull stretch. The entry flash's timing and projection follow the
+//! original's rule (read from the executable, static): a point ahead of the craft on its velocity line, at the ramp's
+//! length times the warp speed, drawn smaller the nearer the craft comes and removed once it has passed.
 //!
 //! The Stock look ([`Effect::Warp`], #1154) is what the notes establish of the original (read from the executable,
 //! static; not seen in a frame, nothing measured about the view): the entry flash stays (it is the original's, in both
@@ -9,7 +9,7 @@
 //! and back to 1 over the exit ramp, in ticks of the sim clock, not the craft's speed (under `warp_shape` the speed holds
 //! and snaps, so it no longer says where the stretch is). INTERIM: the original sweeps a deformation plane through the
 //! mesh, so the shape between the ends differs from a uniform stretch; both ends are the original's. INTERIM: on a
-//! capped exit the original's factor is lower; the full factor is used. Without the switch the row's ramp is a hint
+//! capped exit the original's factor is lower (inferred, not seen); the sim's factor for the craft's own speeds is used. Without the switch the row's ramp is a hint
 //! derived from the old smooth ramp and is used the same way. Not built: the selection bubble and the shield caps
 //! stretching with the hull, and the sounds at entry and exit (established, not yet drawn or played). The Remaster look
 //! keeps its own (the exit pulse, the speed-driven stretch). Armada I has none of this: no hull part is attached to its
@@ -99,9 +99,9 @@ fn warp_speeds(link: &SimLink, unit: &UnitView, def: &sta_content::UnitDef) -> (
     (impulse.to_f32(), warp.to_f32())
 }
 
-/// mWarpCheck's stock longitudinal stretch at full warp speed.
-fn cruise_stretch(impulse: f32, warp: f32) -> f32 {
-    (0.6 * warp / (impulse + 0.1)).clamp(1.5, 6.0)
+/// The craft's stretch factor at full warp from its warp row: the sim's own (one source, the one its ramp is made from).
+fn row_stretch(row: &WarpRow) -> f32 {
+    row.stretch.to_f32().max(1.0)
 }
 
 fn stretch_hulls(
@@ -122,15 +122,15 @@ fn stretch_hulls(
                 link.warp_phase(id)?;
                 let unit = link.real_curr().unit(id)?;
                 let def = content.0.unit(unit.def)?;
+                let row = link.real_curr().warp_of(id)?;
                 let (impulse, warp) = warp_speeds(link, unit, def);
                 if warp <= impulse || impulse < 0.0 {
                     return None;
                 }
                 if stock {
                     // The stored ramp, on the sim clock: the view shows tick `tick - 1` at alpha 0 and `tick` at 1.
-                    let row = link.real_curr().warp_of(id)?;
                     let now = link.real_curr().tick as f64 - 1.0 + f64::from(clock.alpha());
-                    return Some(1.0 + (cruise_stretch(impulse, warp) - 1.0) * ramp_progress(row, now));
+                    return Some(1.0 + (row_stretch(row) - 1.0) * ramp_progress(row, now));
                 }
                 let now = unit.speed.to_f32();
                 let then = link
@@ -141,7 +141,7 @@ fn stretch_hulls(
                 // The original sweeps a deformation plane through the mesh. Use
                 // the live speed ramp for the visual transform during the transition.
                 let progress = ((speed - impulse) / (warp - impulse)).clamp(0.0, 1.0);
-                Some(1.0 + (cruise_stretch(impulse, warp) - 1.0) * progress)
+                Some(1.0 + (row_stretch(row) - 1.0) * progress)
             })
             .unwrap_or(1.0);
         let scale = Vec3::new(1.0, 1.0, stretch);
@@ -153,13 +153,12 @@ fn stretch_hulls(
     }
 }
 
-/// mWarpCheck multiplies its clamped transition time by the warp speed.
-/// Use the simulation's current speed limits and collision radius.
-fn warp_reach(radius: f32, impulse: f32, warp: f32, speed: f32) -> Option<f32> {
+/// The original multiplies its clamped transition time by the warp speed (read from the executable, static).
+/// Uses the simulation's current speed limits, collision radius and stretch factor.
+fn warp_reach(radius: f32, impulse: f32, warp: f32, speed: f32, stretch: f32) -> Option<f32> {
     if radius <= 0.0 || impulse < 0.0 || warp <= impulse {
         return None;
     }
-    let stretch = cruise_stretch(impulse, warp);
     let acceleration_span = warp - speed.clamp(0.0, impulse);
     let duration = ((stretch - 1.0) * (2.0 * radius) / acceleration_span).clamp(0.1, 3.0);
     Some(duration * warp)
@@ -219,7 +218,8 @@ fn track(
             let radius = def.radius.to_f32();
             let (impulse, warp) = warp_speeds(&link, unit, def);
             let speed = link.prev().unit(id).unwrap_or(unit).speed.to_f32();
-            let Some(reach) = warp_reach(radius, impulse, warp, speed) else {
+            let Some(row) = view.warp_of(id) else { continue };
+            let Some(reach) = warp_reach(radius, impulse, warp, speed, row_stretch(row)) else {
                 continue;
             };
             let Some((start, _)) = link.interpolate(id, 0.0) else {

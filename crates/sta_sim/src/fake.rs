@@ -217,8 +217,8 @@ struct LogFile {
 }
 
 // View logs include the derived PD slots and projected model appearance.
-// Player saves and command replays do not store views. +3 adds the warp rows, +4 the beams in flight.
-const VIEW_LOG_REV: u32 = SEAM_REV + 4;
+// Player saves and command replays do not store views. +3 adds the warp rows, +4 the beams in flight, +5 the stretch factor of a warp row.
+const VIEW_LOG_REV: u32 = SEAM_REV + 5;
 
 /// A recorded run, replayed as a [`WorldSource`] that ignores commands.
 /// Past the end it repeats the last view with no events.

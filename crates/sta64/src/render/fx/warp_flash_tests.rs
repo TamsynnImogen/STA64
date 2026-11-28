@@ -12,30 +12,33 @@ use sta_sim::setup::{Control, GameSetup, PlayerSetup};
 use sta_sim::{EntityId, Fixed, PlayerId, Sim, TeamId, Vec3 as SimVec3};
 use std::sync::Arc;
 
+/// The stretch factor of the authored speeds (impulse 20, warp 100): 0.6 x 100 / 20.1.
+const S: f32 = 2.985_07;
+
 #[test]
 fn reach_uses_clamped_stretch_and_speed_limits() {
     // The stretch is just under 3; duration uses the acceleration span.
-    assert!((warp_reach(10.0, 20.0, 100.0, 0.0).unwrap() - 39.7015).abs() < 0.01);
+    assert!((warp_reach(10.0, 20.0, 100.0, 0.0, S).unwrap() - 39.7015).abs() < 0.01);
     // At impulse, acceleration span falls to 80, making the reach longer.
-    assert!((warp_reach(10.0, 20.0, 100.0, 20.0).unwrap() - 49.6269).abs() < 0.01);
+    assert!((warp_reach(10.0, 20.0, 100.0, 20.0, S).unwrap() - 49.6269).abs() < 0.01);
     // Speed is clamped to the impulse cap before calculating the span.
     assert_eq!(
-        warp_reach(10.0, 20.0, 100.0, 200.0),
-        warp_reach(10.0, 20.0, 100.0, 20.0)
+        warp_reach(10.0, 20.0, 100.0, 200.0, S),
+        warp_reach(10.0, 20.0, 100.0, 20.0, S)
     );
     assert_eq!(
-        warp_reach(10.0, 20.0, 100.0, -5.0),
-        warp_reach(10.0, 20.0, 100.0, 0.0)
+        warp_reach(10.0, 20.0, 100.0, -5.0, S),
+        warp_reach(10.0, 20.0, 100.0, 0.0, S)
     );
 }
 
 #[test]
 fn reach_rejects_non_warping_or_radiusless_inputs() {
-    assert_eq!(warp_reach(0.0, 20.0, 100.0, 0.0), None);
-    assert_eq!(warp_reach(-1.0, 20.0, 100.0, 0.0), None);
-    assert_eq!(warp_reach(10.0, -1.0, 100.0, 0.0), None);
-    assert_eq!(warp_reach(10.0, 20.0, 20.0, 0.0), None);
-    assert_eq!(warp_reach(10.0, 20.0, 10.0, 0.0), None);
+    assert_eq!(warp_reach(0.0, 20.0, 100.0, 0.0, S), None);
+    assert_eq!(warp_reach(-1.0, 20.0, 100.0, 0.0, S), None);
+    assert_eq!(warp_reach(10.0, -1.0, 100.0, 0.0, S), None);
+    assert_eq!(warp_reach(10.0, 20.0, 20.0, 0.0, S), None);
+    assert_eq!(warp_reach(10.0, 20.0, 10.0, 0.0, S), None);
 }
 
 fn live_app() -> (App, EntityId) {
@@ -303,7 +306,7 @@ fn observing_an_already_warping_match_does_not_play_the_entry_again() {
 
 #[test]
 fn the_stretch_runs_up_over_the_entry_ramp_holds_at_warp_and_runs_down_over_the_exit_ramp() {
-    let row = |phase, start, len| WarpRow { id: EntityId(1), phase, ramp_start: start, ramp_len: len };
+    let row = |phase, start, len| WarpRow { id: EntityId(1), phase, ramp_start: start, ramp_len: len, stretch: sta_sim::Fixed::from_int(3) };
     let entering = row(WarpPhase::Entering, 100, 10);
     assert_eq!(ramp_progress(&entering, 100.0), 0.0);
     assert_eq!(ramp_progress(&entering, 105.0), 0.5);
@@ -360,4 +363,17 @@ fn under_stock_there_is_no_exit_pulse_and_the_stretch_follows_the_ramp_and_the_r
     // The Remaster look, and a run without the profile resources, keep today's pulse.
     assert!(trip(Some(RenderProfile::Refit)).1, "the Refit look keeps its exit pulse");
     assert!(trip(None).1);
+}
+
+#[test]
+fn without_the_shape_switch_the_stretch_from_the_derived_ramp_matches_the_speed_driven_one_over_a_whole_trip() {
+    // The authored craft has the switch off: its rows are derived from the old smooth ramp. The Stock look reads them by
+    // time, the Refit look by speed: they draw the same hull to within a fifth of the stretch (the ramp has a whole number of ticks, the speed does not).
+    const TOLERANCE: f32 = 0.2;
+    let (stock, _) = trip(Some(RenderProfile::Stock));
+    let (refit, _) = trip(Some(RenderProfile::Refit));
+    assert_eq!(stock.len(), refit.len());
+    let worst = stock.iter().zip(&refit).map(|(a, b)| (a.1 - b.1).abs()).fold(0.0, f32::max);
+    assert!(stock.iter().any(|r| r.1 > 1.5), "the craft was stretched");
+    assert!(worst <= TOLERANCE, "the two stretches differ by {worst}");
 }

@@ -751,7 +751,7 @@ mod tests {
             fn view(&self) -> Arc<WorldView> { self.0.clone() }
             fn impulse_caps(&self) -> Vec<(EntityId, sta_sim::Fixed)> { vec![(EntityId(7), sta_sim::Fixed::from_int(80))] }
         }
-        let row = |phase| WarpRow { id: EntityId(7), phase, ramp_start: 0, ramp_len: 10 };
+        let row = |phase| WarpRow { id: EntityId(7), phase, ramp_start: 0, ramp_len: 10, stretch: sta_sim::Fixed::from_int(3) };
         let warping = Arc::new(WorldView { warp_rows: vec![row(WarpPhase::Entering)], ..WorldView::default() });
         let mut link = SimLink::new(Box::new(Phased(warping.clone())), Box::new(LocalRouter::new()), PlayerId(0));
         // The phase comes from the view itself: entering and at warp read as in warp, leaving as dropping out.
