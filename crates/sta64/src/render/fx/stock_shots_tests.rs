@@ -1037,7 +1037,7 @@ fn a_pulse_streak_and_a_torpedo_sprite_fly_to_their_target_and_end_on_the_hit() 
     hit.events.clear();
     let inner = ScriptedSource::from_json5(&src, &hit.db).unwrap();
     let mut app = hit.app(Some(RenderProfile::Stock));
-    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, shields_until: None, held: None, dying_from: None, flown: None }), Box::new(LocalRouter::new()), PlayerId(0));
+    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, shields_until: None, held: None, dying_from: None, flown: Vec::new() }), Box::new(LocalRouter::new()), PlayerId(0));
     let mut after = Vec::new();
     for _ in 0..24 {
         app.update();
