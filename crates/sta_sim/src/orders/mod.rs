@@ -549,7 +549,15 @@ impl Sim {
 
     /// Plans for the warp moves of this tick (ascending id).
     /// `caps`: the nebula speed caps of this tick (ascending id).
-    pub(crate) fn steer_warp_moves(&mut self, gravity: &crate::movement::gravity::GravityWells, caps: &[(EntityId, (Fixed, Fixed))]) -> Vec<(EntityId, Plan)> {
+    /// `routed`, `detoured`: the real targets the planner and the avoidance took out of the
+    /// units this tick, as they return them for putting back.
+    pub(crate) fn steer_warp_moves(
+        &mut self,
+        gravity: &crate::movement::gravity::GravityWells,
+        caps: &[(EntityId, (Fixed, Fixed))],
+        routed: &[(EntityId, Vec3)],
+        detoured: &[(EntityId, Vec3)],
+    ) -> Vec<(EntityId, Plan)> {
         let mut plans = Vec::new();
         if self.scripted.is_empty() {
             return plans;
@@ -563,7 +571,15 @@ impl Sim {
                 continue;
             };
             let (vi, vw) = (u.stats.max_speed, u.stats.warp_speed);
-            let (to_goal, aligned) = approach::warp_leg(u, goal);
+            let (to_aim, aligned) = approach::warp_leg(u, goal);
+            // `warp_routing` (#1148): on a detour the target is the planner's aim point for this
+            // tick. The distances that end a warp near its goal are measured to the real goal
+            // (else the craft would leave warp before every aim point); the heading is still
+            // tested against the aim, which is where the craft flies.
+            let real = crate::nav::warp_routing(self.content.as_deref(), u)
+                .then(|| routed.iter().chain(detoured).find(|(other, _)| *other == id).map(|(_, t)| *t))
+                .flatten();
+            let to_goal = real.map_or(to_aim, |t| approach::warp_leg(u, t).0);
             let phase = self.approach_warp.phase(id);
             let was = self.approach_warp.contains(id);
             let shape = self.warp_shape_on(u);

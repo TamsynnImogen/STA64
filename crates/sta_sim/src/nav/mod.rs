@@ -32,6 +32,26 @@
 //!   its volume as blocked; any other unit pays `OFF_MAP_PATHING_COST`
 //!   (90000) outside the map's bounds.
 //!
+//! - **Warp-suppression fields** (`warp_routing`, #1148): only for a craft that wants warp (a
+//!   warp move, an attack approach from beyond the warp distance, a craft at warp). Each
+//!   planet's field (the radius the warp gate uses, [`GravityWells`]), grown by
+//!   `cfg_WARP_INHIBITION_BUFFER`, costs `cfg_WARP_INHIBITION_COST` per cell
+//!   ([`WarpRoutingRules`](sta_content::WarpRoutingRules)): dearer than open space, not
+//!   blocked, so the craft goes round where that is cheaper and stays at warp. A field the
+//!   goal lies in does not count; the craft leaves warp at its edge by the gate. Read from the
+//!   executable, static; measured (a warp leg aimed through a field goes round it at warp).
+//!   STA64's own, INTERIM: the footprint is grown by the larger of the buffer and the craft's
+//!   own bounding radius. The measured craft kept the buffer's distance (its hull is smaller);
+//!   the gate counts the hull, so a craft wider than the buffer would otherwise be stopped
+//!   while going round. A cost at or below open space makes no layer at all (nothing to go
+//!   round, and the planner must not be drawn into a field); a cost below zero is the
+//!   planner's "impassable": such a field is never crossed, except the one the goal lies in
+//!   (INTERIM: what the original does with such a cost is not established). The planner is
+//!   flat, like the whole grid, while the gate measures in space: a craft far above or below
+//!   a planet is routed round it although the gate would not stop it (INTERIM divergence).
+//!   Black holes, nebulae and asteroid fields have no layer of their own in the warp planner
+//!   here (INTERIM).
+//!
 //! Every rule constant above is a [`PathingRules`](sta_content::PathingRules)
 //! field read from `RTS_CFG.h` (the stock values when absent);
 //! `USE_PATH_PLANNING = 0` turns the planner off. No ODF of Armada, Armada II
@@ -83,6 +103,7 @@ use sta_content::{PathingRules, RegionKind, RegionShape};
 use sta_core::{EntityId, Fixed, Vec3};
 
 use crate::Sim;
+use crate::movement::gravity::GravityWells;
 use crate::spatial::Solid;
 use crate::world::EntityKind;
 use grid::{Area, BLOCKED, Field, Grid, Hazard, Spec, ceil_units, floor_units};
@@ -299,6 +320,12 @@ fn cell_cost(cost: i64, rules: &PathingRules) -> u32 {
     }
 }
 
+/// Whether `u` plans its warp legs round the fields that stop warp: the feature switch
+/// `warp_routing` (the unit's, as `ContentDb::unit_features` resolves it).
+pub(crate) fn warp_routing(db: Option<&sta_content::ContentDb>, u: &crate::world::Entity) -> bool {
+    db.is_some_and(|db| db.unit(u.def).map_or(db.features(), |d| db.unit_features(d)).warp_routing)
+}
+
 /// A nebula: as planned round, and its own extent (where "inside" begins).
 struct Nebula {
     hazard: Hazard,
@@ -354,7 +381,10 @@ impl Sim {
     /// Give every craft whose way is blocked an aim point along its path, or
     /// end an order whose goal cannot be reached. Returns the real targets
     /// to put back after kinematics.
-    pub(crate) fn route_orders(&mut self) -> Vec<(EntityId, Vec3)> {
+    ///
+    /// `wells`: this tick's warp-suppression fields; `plans`: the attack approaches of this
+    /// tick (ascending id), which say whose approach asks for warp.
+    pub(crate) fn route_orders(&mut self, wells: &GravityWells, plans: &[(EntityId, crate::kinematics::Plan)]) -> Vec<(EntityId, Vec3)> {
         let rules = self.pathing_rules();
         // LUA-41: `PathPlanning(b)` overrides the cfg key `USE_PATH_PLANNING`.
         if !self.mission_switches.path_planning.unwrap_or(rules.enabled) {
@@ -369,9 +399,11 @@ impl Sim {
                 .is_none_or(|d| d.stats.add_to_planner != Some(false))
         };
         let obstacles: Vec<_> = self.obstacles().into_iter().filter(|o| planned(o)).collect();
-        if nebulae.is_empty() && obstacles.is_empty() {
+        if nebulae.is_empty() && obstacles.is_empty() && wells.planet_fields().is_empty() {
             return Vec::new();
         }
+        let routing = self.content.as_deref().map(|db| db.rules().warp_routing()).unwrap_or_default();
+        let field_cost = cell_cost(routing.cost, &rules);
         let hazards: Vec<Hazard> = nebulae.iter().map(|n| n.hazard).collect();
         let default_cost = cell_cost(rules.default_cost, &rules).max(1);
         let off_map = cell_cost(rules.off_map_cost, &rules);
@@ -424,6 +456,31 @@ impl Sim {
                     }
                 })
                 .fold(default_cost, u32::max);
+            // `warp_routing`: a craft whose order asks for warp also plans round the planets'
+            // warp-suppression fields, each grown by the buffer or, where that is larger, by
+            // its own hull (the gate counts the hull). A field the goal lies in does not count:
+            // the craft flies to it and leaves warp at its edge. Fields no dearer than open
+            // space are no layer at all.
+            let wants_warp = !wells.planet_fields().is_empty()
+                && (field_cost == BLOCKED || field_cost > default_cost)
+                && u.kind == EntityKind::Craft
+                && u.stats.warp_speed > u.stats.max_speed
+                && warp_routing(db.as_deref(), u)
+                && (self.scripted.is_warp(id)
+                    || self.approach_warp.contains(id)
+                    || plans.binary_search_by_key(&id, |p| p.0).is_ok_and(|i| plans[i].1.wants_warp));
+            let fields: Vec<Hazard> = if wants_warp {
+                let hull = whole(db.as_deref().and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius));
+                wells
+                    .planet_fields()
+                    .iter()
+                    .map(|&(centre, radius)| (centre, radius + routing.buffer.max(hull)))
+                    .filter(|&(centre, radius)| !within(goal, centre, radius))
+                    .map(|(centre, radius)| Hazard { shape: Solid::Sphere { centre, radius }, cost: field_cost })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             // The leg needs a plan when it passes a solid within contact
             // distance (except the solid the target itself lies in, whose
             // edge SIM-21 flies to), or touches a nebula itself (not its
@@ -437,6 +494,9 @@ impl Sim {
                     let (c, r) = circle(&n.core);
                     segment_near(p, goal, c, r + body)
                 }
+            }) || fields.iter().any(|f| {
+                let (c, r) = circle(&f.shape);
+                segment_near(p, goal, c, r)
             });
             if !blocked {
                 continue;
@@ -483,7 +543,7 @@ impl Sim {
                 default_cost,
                 body,
                 solids,
-                hazards: hazards.clone(),
+                hazards: hazards.iter().copied().chain(fields).collect(),
                 area,
             };
             frame(&mut spec, p, goal);
@@ -645,3 +705,5 @@ fn plan(cache: &mut Cache, spec: Spec, p: Vec3, t: Vec3, reach: Fixed, lead: Fix
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod warp_routing_tests;

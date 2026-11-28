@@ -242,6 +242,10 @@ pub(crate) struct Plan {
     /// Dropping out of warp: straight on, down to the cap. Not used under `warp_shape`, where
     /// the craft's warp row says that it is leaving.
     pub warp_out: bool,
+    /// The craft's order asks for warp on this leg, whether or not it is at warp now (an attack
+    /// approach from beyond the warp distance): the planner routes such a leg round the fields
+    /// that stop warp (#1148).
+    pub wants_warp: bool,
     /// With no target: turn to face this point while braking.
     pub face: Option<Vec3>,
     /// Local pursuit point for Armada I Director’s Cut.

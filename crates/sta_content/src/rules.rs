@@ -81,6 +81,8 @@ pub struct Rules {
     autonomy: Option<AutonomyRules>,
     /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
     approach: Option<ApproachRules>,
+    /// `RTS_CFG.h`'s warp planner keys (#1148), when the header sets either.
+    warp_routing: Option<WarpRoutingRules>,
     /// `RTS_CFG.h`'s [`WARP_KEY`], when the header sets it: see [`Rules::warp_enabled`].
     warp: Option<bool>,
     /// Planet population levels and growth (SIM-30), when the header sets all of them.
@@ -102,7 +104,7 @@ pub struct Rules {
     group: GroupCfg,
 }
 
-const TYPED_LEN: usize = 6 + A1DogfightRules::KEYS.len() + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len() + GroupCfg::KEYS.len();
+const TYPED_LEN: usize = 6 + A1DogfightRules::KEYS.len() + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len() + GroupCfg::KEYS.len() + WarpRoutingRules::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -152,6 +154,11 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     while g < GroupCfg::KEYS.len() {
         out[6 + i + a + w + j + l + p + f + g] = GroupCfg::KEYS[g];
         g += 1;
+    }
+    let mut r = 0;
+    while r < WarpRoutingRules::KEYS.len() {
+        out[6 + i + a + w + j + l + p + f + g + r] = WarpRoutingRules::KEYS[r];
+        r += 1;
     }
     out[TYPED_LEN - 2] = A1DogfightRules::KEYS[0];
     out[TYPED_LEN - 1] = A1DogfightRules::KEYS[1];
@@ -417,6 +424,75 @@ impl ApproachRules {
             min_move_warp_distance: attack.unwrap_or(d.min_move_warp_distance),
             too_close_to_warp: warp_move.unwrap_or(d.too_close_to_warp),
         })
+    }
+}
+
+/// The warp planner's keys of `RTS_CFG.h` (#1148; ADR 0004 D9, D10). A craft that wants warp
+/// plans its way on a planner in which the warp-suppression field of every planet
+/// ([`Rules::warp_suppression_radius`]), grown by `cfg_WARP_INHIBITION_BUFFER` world units,
+/// costs `cfg_WARP_INHIBITION_COST` per cell on the scale where open space is
+/// `DEFAULT_TERRAIN_VALUE`: dearer than open space, not blocked. Read from the executable,
+/// static; the keys read from data; that a warp leg goes round a field at about that
+/// distance: measured.
+///
+/// INTERIM: what the original uses where the header sets neither key is not established.
+/// STA64's own defaults are [`WarpRoutingRules::DEFAULT_BUFFER`] and
+/// [`WarpRoutingRules::DEFAULT_COST`]. A cost at or below that of open space (zero included)
+/// gives the fields no part in planning; a cost below zero is the planner's "impassable"
+/// (INTERIM: what the original does with either is not established).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WarpRoutingRules {
+    /// World units added to a field's radius.
+    pub buffer: Fixed,
+    /// The cost of a cell of a field, as the header writes it (a whole number).
+    pub cost: i64,
+}
+
+impl Default for WarpRoutingRules {
+    fn default() -> Self {
+        WarpRoutingRules { buffer: Self::DEFAULT_BUFFER, cost: Self::DEFAULT_COST }
+    }
+}
+
+impl WarpRoutingRules {
+    const KEYS: [&'static str; 2] = ["cfg_WARP_INHIBITION_BUFFER", "cfg_WARP_INHIBITION_COST"];
+
+    /// INTERIM default of the buffer: STA64's own (two of the planner's finest cells).
+    pub const DEFAULT_BUFFER: Fixed = Fixed::from_int(100);
+    /// INTERIM default of the cost: STA64's own (ten times the default cost of open space).
+    pub const DEFAULT_COST: i64 = 1000;
+
+    /// `None` when the header sets neither key. A key that is set but is no number warns and
+    /// keeps its default; the other key is still read. The cost may be an expression in whole
+    /// numbers and other keys, as the header's other pathing costs.
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
+        if !Self::KEYS.iter().any(|k| cfg.raw(k).is_some()) {
+            return None;
+        }
+        let d = Self::default();
+        let mut bad = |key: &str| warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a number; STA64's default is used")));
+        let buffer = match cfg.raw(Self::KEYS[0]) {
+            None => d.buffer,
+            // As the header's `float` reads (f32); bounded so the fixed point holds it.
+            Some(_) => match cfg.f32(Self::KEYS[0]).filter(|v| v.is_finite() && *v >= 0.0 && *v <= 1.0e6) {
+                Some(v) => Fixed::from_f64(v as f64),
+                None => {
+                    bad(Self::KEYS[0]);
+                    d.buffer
+                }
+            },
+        };
+        let cost = match cfg.raw(Self::KEYS[1]) {
+            None => d.cost,
+            Some(_) => match cfg.i64(Self::KEYS[1]).or_else(|| cfg.f32(Self::KEYS[1]).filter(|v| v.is_finite()).map(|v| v.round() as i64)) {
+                Some(v) => v.clamp(-1_000_000_000, 1_000_000_000),
+                None => {
+                    bad(Self::KEYS[1]);
+                    d.cost
+                }
+            },
+        };
+        Some(WarpRoutingRules { buffer, cost })
     }
 }
 
@@ -985,6 +1061,7 @@ impl Rules {
         rules.population = PopulationRules::from_cfg(&cfg, &mut warnings);
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
+        rules.warp_routing = WarpRoutingRules::from_cfg(&cfg, &mut warnings);
         rules.warp = warp_from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
         rules.shots = ShotCfg::from_cfg(&cfg, &mut warnings);
@@ -1183,6 +1260,17 @@ impl Rules {
         self.approach.unwrap_or_default()
     }
 
+    /// The warp planner's buffer and cost: the header's, else STA64's own defaults.
+    pub fn warp_routing(&self) -> WarpRoutingRules {
+        self.warp_routing.unwrap_or_default()
+    }
+
+    /// Set the warp planner's keys (tests and content built in code).
+    pub fn with_warp_routing(mut self, warp_routing: WarpRoutingRules) -> Self {
+        self.warp_routing = Some(warp_routing);
+        self
+    }
+
     /// Whether this content has warp at all (#1102, ADR 0004 D10): [`WARP_KEY`] of the layered
     /// rules header when it is set (0: off; any other whole number: on), else [`WARP_DEFAULT`].
     /// One value for the whole content; a mod switches warp off by shipping the key in its own
@@ -1277,6 +1365,12 @@ impl Rules {
         (def.radius > Fixed::ZERO).then(|| def.radius * multiplier)
     }
 
+    /// [`Rules::warp_suppression_radius`] for a planet only: the fields the warp planner routes
+    /// round (#1148). `None` for every other class.
+    pub fn planet_warp_suppression_radius(&self, def: &UnitDef) -> Option<Fixed> {
+        def.raw.class_label().filter(|c| c.eq_ignore_ascii_case("planet")).and_then(|_| self.warp_suppression_radius(def))
+    }
+
     /// Armada I's header-level start, for a race that authors none.
     pub fn legacy_start(&self) -> LegacyStart {
         self.legacy_start
@@ -1341,6 +1435,15 @@ impl Rules {
                 format!("RTS_CFG.h:{}", ApproachRules::KEYS[1]),
                 crate::digest::fixed_text(approach.too_close_to_warp),
             ));
+        }
+        // The warp planner's two keys (#1148, D10): each only when it differs from its default,
+        // so content without them keeps its hash.
+        let (routing, routing_default) = (self.warp_routing(), WarpRoutingRules::default());
+        if routing.buffer != routing_default.buffer {
+            out.push(DigestEntry::new(format!("RTS_CFG.h:{}", WarpRoutingRules::KEYS[0]), crate::digest::fixed_text(routing.buffer)));
+        }
+        if routing.cost != routing_default.cost {
+            out.push(DigestEntry::new(format!("RTS_CFG.h:{}", WarpRoutingRules::KEYS[1]), routing.cost.to_string()));
         }
         if self.a1_dogfight.pursuit_angle != A1DogfightRules::default().pursuit_angle {
             out.push(DigestEntry::new(
@@ -1848,6 +1951,57 @@ mod autonomy_tests {
 }
 
 #[cfg(test)]
+mod warp_routing_tests {
+    use super::*;
+    use crate::digest::ContentDigest;
+
+    fn digest(rules: &Rules) -> ContentDigest {
+        ContentDigest::from_entries(rules.digest_entries())
+    }
+
+    /// The two warp planner keys (#1148): read from the header, the cost also as an expression
+    /// in other keys; absent, STA64's own defaults; digested only where they differ from them.
+    #[test]
+    fn the_buffer_and_the_cost_are_read_defaulted_and_digested_only_when_they_differ() {
+        let (none, w) = Rules::from_header("int DEFAULT_TERRAIN_VALUE = 100;\n");
+        assert!(w.is_empty());
+        assert_eq!(none.warp_routing(), WarpRoutingRules::default());
+        assert_eq!(none.warp_routing(), WarpRoutingRules { buffer: WarpRoutingRules::DEFAULT_BUFFER, cost: WarpRoutingRules::DEFAULT_COST });
+        let d = digest(&none);
+        assert!(d.get("RTS_CFG.h:cfg_WARP_INHIBITION_BUFFER").is_none() && d.get("RTS_CFG.h:cfg_WARP_INHIBITION_COST").is_none());
+
+        let (set, w) = Rules::from_header("int DEFAULT_TERRAIN_VALUE = 100;\nfloat cfg_WARP_INHIBITION_BUFFER = 75.5;\nint cfg_WARP_INHIBITION_COST = DEFAULT_TERRAIN_VALUE * 7;\n");
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(set.warp_routing(), WarpRoutingRules { buffer: Fixed::from_f64(75.5), cost: 700 });
+        let d = digest(&set);
+        assert!(d.get("RTS_CFG.h:cfg_WARP_INHIBITION_BUFFER").is_some());
+        assert_eq!(d.get("RTS_CFG.h:cfg_WARP_INHIBITION_COST"), Some("700"));
+        assert_ne!(d.hash64(), digest(&none).hash64());
+
+        // one key alone: the other keeps its default and is not digested
+        let (one, _) = Rules::from_header("float cfg_WARP_INHIBITION_BUFFER = 20.0;\n");
+        assert_eq!(one.warp_routing(), WarpRoutingRules { buffer: Fixed::from_int(20), cost: WarpRoutingRules::DEFAULT_COST });
+        assert!(digest(&one).get("RTS_CFG.h:cfg_WARP_INHIBITION_COST").is_none());
+        // a header that restates the defaults is the same content as one without the keys
+        let restated = format!("float cfg_WARP_INHIBITION_BUFFER = {}.0;\nint cfg_WARP_INHIBITION_COST = {};\n", WarpRoutingRules::DEFAULT_BUFFER.to_bits() >> 32, WarpRoutingRules::DEFAULT_COST);
+        let (same, _) = Rules::from_header(&restated);
+        assert_eq!(digest(&same).hash64(), digest(&Rules::from_header("").0).hash64());
+
+        // a value that is no number warns and keeps the default; the other key is still read
+        let (bad, w) = Rules::from_header("float cfg_WARP_INHIBITION_BUFFER = \"wide\";\nint cfg_WARP_INHIBITION_COST = 300;\n");
+        assert_eq!(bad.warp_routing(), WarpRoutingRules { buffer: WarpRoutingRules::DEFAULT_BUFFER, cost: 300 });
+        assert!(w.iter().any(|w| w.to_string().contains("cfg_WARP_INHIBITION_BUFFER")), "{w:?}");
+        let (neg, w) = Rules::from_header("float cfg_WARP_INHIBITION_BUFFER = -5.0;\n");
+        assert_eq!(neg.warp_routing().buffer, WarpRoutingRules::DEFAULT_BUFFER);
+        assert!(!w.is_empty());
+        // both keys are in the typed list
+        for key in WarpRoutingRules::KEYS {
+            assert!(TYPED_CFG_KEYS.contains(&key), "{key}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod pathing_tests {
     use super::*;
 
@@ -1953,6 +2107,8 @@ mod cfg_tests {
         // which is digested only when it differs from the engine default.
         // The two facing keys are digested only when set (SIM-39).
         let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100), too_close_to_warp: Fixed::from_int(900) }).with_warp(Some(false));
+        // The two warp planner keys are digested only when they differ from STA64's defaults (#1148).
+        rules = rules.with_warp_routing(WarpRoutingRules { buffer: WarpRoutingRules::DEFAULT_BUFFER + Fixed::ONE, cost: WarpRoutingRules::DEFAULT_COST + 1 });
         rules.upgrade_pod_maximum_tier = Some(9);
         rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2), officers: None };
         rules.cfg.facing_weight = Some(Fixed::ONE);

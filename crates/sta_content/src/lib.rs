@@ -71,7 +71,7 @@ pub use map::{field_radius, nebula_radius};
 pub use repair_geometry::RepairAttachment;
 pub use def::{ResearchSlot, ResearchBuildSlot, SystemUpgrade, UpgradeSystem};
 pub use resources::ResourceModel;
-pub use rules::{A1DogfightRules, ApproachRules, AutonomyRules, CfgRules, CrewRules, FieldCfg, GroupCfg, GroupRules, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, ShotCfg, TransporterRules, TYPED_CFG_KEYS};
+pub use rules::{A1DogfightRules, ApproachRules, AutonomyRules, CfgRules, CrewRules, FieldCfg, GroupCfg, GroupRules, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, ShotCfg, TransporterRules, WarpRoutingRules, TYPED_CFG_KEYS};
 pub use digest::{ContentDigest, DigestEntry, EntryDiff};
 pub use profile::{resolve_features, DetectStep, Detection, Overrides, ROOTS_ASSET_VERSION, FEATURE_NAMES, ODF_KEY_PREFIX};
 pub use techtree::{Availability, BuildOption, CapacityList, Condition, Owned, Requirement, TechEntry, TechState, TechTree, TtSource, Unmet};

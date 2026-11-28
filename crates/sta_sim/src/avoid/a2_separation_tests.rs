@@ -264,7 +264,7 @@ fn pinned_digest_of_two_craft_crossing() {
     assert_eq!(native, PINNED_NATIVE, "{native:#x}");
 }
 
-const PINNED_A2: u64 = 0x3741_1bbf_284b_6cb3;
+const PINNED_A2: u64 = 0x0809_8175_25f4_ea2e;
 const PINNED_NATIVE: u64 = 0x7bf3_4c37_09cc_fc90;
 
 #[test]
