@@ -610,3 +610,18 @@ fn a_replay_with_queued_warp_moves_is_stable() {
     assert_eq!(played.digest(), digest);
     assert_eq!(legs(&played, ship), left);
 }
+
+/// The stuck-order watch starts afresh with a queued warp move, as with every re-issued order:
+/// what it counted on the leg before is dropped.
+#[test]
+fn a_queued_warp_move_restarts_the_stuck_order_watch() {
+    let (mut sim, db) = game(Profile::Sta2Classic);
+    let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let born = |sim: &Sim| sim.watchdog.to_rec().into_iter().find(|(id, _)| *id == ship).map(|(_, row)| row.born);
+    run(&mut sim, vec![order(1, 0, Order::Move { units: vec![ship], to: v(0, 5000), queue: false, mode: None })], 2 * HZ);
+    let first = born(&sim).expect("a moving craft is watched");
+    let ordered_at = sim.tick;
+    assert!(first < ordered_at);
+    sim.step(&[order(1, 1, Order::MoveWarp { units: vec![ship], to: v(3000, 5000), queue: true })]);
+    assert!(born(&sim).is_none_or(|b| b >= ordered_at), "the row of the leg before is gone: {:?}", born(&sim));
+}

@@ -345,6 +345,9 @@ impl Sim {
             ids.iter().copied().filter(|id| matches!(self.scripted.job(*id), Some(Job::Patrol { .. }))).collect();
         self.clear_scripted(player, &patrols);
         for &id in ids {
+            // As every re-issued order: the stuck-order watch starts afresh, so what it
+            // counted on the legs before cannot end the order and drop the new leg.
+            self.watchdog.remove(id);
             let idle = self.unit(id).is_some_and(|u| u.target.is_none()) && self.weapons.attack_of(id).is_none();
             if idle {
                 self.set_target(id, Some(to));
