@@ -320,11 +320,11 @@ fn the_shader_preserves_stock_colour_and_alpha_in_ldr() {
 // ---------------------------------------------------------------------------------------------
 
 fn content(rules: ShotCfg) -> ContentDb {
-    content_with(rules, false)
+    content_with(rules, false, false)
 }
 
 /// [`content`], with `beam_damage_at_end` on and the phaser a beam with a life of thirty ticks when `at_end`.
-fn content_with(rules: ShotCfg, at_end: bool) -> ContentDb {
+fn content_with(rules: ShotCfg, at_end: bool, flight: bool) -> ContentDb {
     let mut ship = UnitDef::new("t_ship", "cruiser");
     ship.hardpoints = vec![
         Hardpoint { weapon: DefRef::new("w_phaser"), node: "hp_phaser".into(), arc: None },
@@ -339,6 +339,7 @@ fn content_with(rules: ShotCfg, at_end: bool) -> ContentDb {
     r.shots = rules;
     let mut features = sta_content::Features::default();
     features.beam_damage_at_end = at_end;
+    features.ordnance_flight = flight;
     let phaser = move || {
         let mut w = phaser();
         if at_end {
@@ -362,7 +363,12 @@ fn content_with(rules: ShotCfg, at_end: bool) -> ContentDb {
             w
         })
         .weapon(pulse())
-        .weapon(torpedo())
+        .weapon({
+            // under `ordnance_flight` a torpedo needs a life of its own (`lifeSpan`, seconds)
+            let mut w = torpedo();
+            w.base.life_span = flight.then(|| Fixed::from_int(4));
+            w
+        })
         .weapon(tractor())
         .weapon(weapon("w_art", "artillery", WeaponKind::Projectile, look("torpspr")))
         .unit(ship)
@@ -383,11 +389,14 @@ struct Shielded {
     held: Option<(u64, u64, sta_sim::ContentKey)>,
     /// From this tick on unit 1 (the shooter) carries the dying flag.
     dying_from: Option<u64>,
+    /// The views of the ticks (from, until) carry a flown torpedo of unit 1 at unit 2 (shot 1) at the place the path
+    /// gives for the ticks since `from` (x, z), heading along the next place.
+    flown: Option<(u64, u64, sta_sim::ContentKey, fn(i64) -> (f64, f64))>,
 }
 
 impl Shielded {
     fn patch(&self, view: Arc<WorldView>) -> Arc<WorldView> {
-        if !self.shields && self.held.is_none() && self.dying_from.is_none() {
+        if !self.shields && self.held.is_none() && self.dying_from.is_none() && self.flown.is_none() {
             return view;
         }
         let mut v = (*view).clone();
@@ -400,6 +409,22 @@ impl Shielded {
             && (from..until).contains(&v.tick)
         {
             v.beam_rows = vec![sta_sim::view::BeamRow { shooter: EntityId(1), weapon, target: EntityId(2), ends: until }];
+        }
+        if let Some((from, until, weapon, path)) = self.flown
+            && (from..until).contains(&v.tick)
+        {
+            let k = (v.tick - from) as i64;
+            let ((x, z), (nx, nz)) = (path(k), path(k + 1));
+            let heading = Vec3::new((nx - x) as f32, 0.0, (nz - z) as f32).normalize_or(Vec3::Z);
+            let f = |v: f64| Fixed::from_f64(v);
+            v.shot_rows = vec![sta_sim::view::ShotRow {
+                id: 1,
+                shooter: EntityId(1),
+                weapon,
+                target: EntityId(2),
+                pos: sta_sim::Vec3 { x: f(x), y: Fixed::ZERO, z: f(z) },
+                heading: (Fixed::from_f64(heading.x as f64), Fixed::from_f64(heading.z as f64)),
+            }];
         }
         if let Some(from) = self.dying_from
             && v.tick >= from
@@ -440,15 +465,24 @@ struct Setup {
     held: Option<(u64, u64)>,
     /// The shooter starts to die at this tick.
     shooter_dying: Option<u64>,
+    /// A flown torpedo (ticks from, until, its path), under `ordnance_flight`.
+    flown: Option<(u64, u64, fn(i64) -> (f64, f64))>,
 }
 
 impl Setup {
     fn new(rules: ShotCfg) -> Setup {
-        Setup { db: content(rules), shields: false, shields_until: None, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None, shooter_dying: None }
+        Setup { db: content(rules), shields: false, shields_until: None, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None, shooter_dying: None, flown: None }
+    }
+    /// The content has `ordnance_flight` on (and the torpedo a life), and the views carry a flown torpedo on `path`
+    /// from tick `from` until `until`.
+    fn flight(mut self, rules: ShotCfg, from: u64, until: u64, path: fn(i64) -> (f64, f64)) -> Setup {
+        self.db = content_with(rules, false, true);
+        self.flown = Some((from, until, path));
+        self
     }
     /// The phaser lands at the end of its life (`beam_damage_at_end`).
     fn at_end(mut self, rules: ShotCfg) -> Setup {
-        self.db = content_with(rules, true);
+        self.db = content_with(rules, true, false);
         self
     }
     /// The views of ticks `from` up to `until` carry the beam as one the sim holds.
@@ -492,7 +526,7 @@ impl Setup {
             .add_plugins(SimLinkPlugin)
             .insert_resource(ContentRes(Arc::new(self.db.clone())))
             .insert_resource(SpriteTables(Arc::new(table())))
-            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, shields_until: self.shields_until, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())), dying_from: self.shooter_dying }), Box::new(LocalRouter::new()), PlayerId(0)));
+            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, shields_until: self.shields_until, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())), dying_from: self.shooter_dying, flown: self.flown.map(|(a, b, p)| (a, b, self.db.key("w_torp").unwrap(), p)) }), Box::new(LocalRouter::new()), PlayerId(0)));
         if let Some(p) = profile {
             app.insert_resource(p);
         }
@@ -979,7 +1013,7 @@ fn a_pulse_streak_and_a_torpedo_sprite_fly_to_their_target_and_end_on_the_hit() 
     hit.events.clear();
     let inner = ScriptedSource::from_json5(&src, &hit.db).unwrap();
     let mut app = hit.app(Some(RenderProfile::Stock));
-    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, shields_until: None, held: None, dying_from: None }), Box::new(LocalRouter::new()), PlayerId(0));
+    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, shields_until: None, held: None, dying_from: None, flown: None }), Box::new(LocalRouter::new()), PlayerId(0));
     let mut after = Vec::new();
     for _ in 0..24 {
         app.update();
@@ -1584,6 +1618,13 @@ fn authored_shot(path: ShotPath, geom: Geom, radius: f32, sprite: &str) -> Stock
         muzzle_flare: None,
         impact_flare: None,
         arrived: false,
+        flown: false,
+        bound: None,
+        start_distance: 0.0,
+        progress: 0.0,
+        muzzle_offset: Vec3::ZERO,
+        aim_offset: Vec3::ZERO,
+        unbound_fallback: false,
         sim_lost: false,
         geom,
     }
@@ -1747,4 +1788,103 @@ fn gpu_the_atlas_is_drawn_in_its_cell_the_right_way_round_and_in_frame_order() {
         check("beyond the streak's head", 123, 24, black);
         check("beyond the streak's tail", 75, 24, black);
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Flown torpedoes (#1068): drawn where the view's shot row says
+// ---------------------------------------------------------------------------------------------
+
+/// A path that leaves the shooter sideways and comes back to the target: not the straight line.
+fn bent(k: i64) -> (f64, f64) {
+    let k = k as f64;
+    (100.0 * (60.0 - k) / 60.0 * (k.min(10.0) / 10.0), 10.0 * k)
+}
+
+fn drawn(app: &mut App) -> Vec<Vec3> {
+    shots(app).iter().filter_map(|s| if let Geom::Billboard { c } = s.geom { Some(c) } else { None }).collect()
+}
+
+#[test]
+fn a_flown_torpedo_is_drawn_where_the_views_row_puts_it_not_on_the_line_to_its_target() {
+    let setup = Setup::new(ShotCfg::default()).flight(ShotCfg::default(), 4, 64, bent).fire(4, "w_torp", 2);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let (mut off_line, mut frames) = (0.0f32, 0);
+    for _ in 0..60 {
+        app.update();
+        for s in shots(&mut app) {
+            if let Geom::Billboard { c } = s.geom {
+                frames += 1;
+                // the straight line from the muzzle to the target's centre
+                let dir = (Vec3::new(0.0, 0.0, -600.0) - s.muzzle).normalize();
+                off_line = off_line.max((c - s.muzzle).cross(dir).length());
+            }
+        }
+    }
+    assert!(frames > 30, "drawn through the flight: {frames} frames");
+    assert!(off_line > 40.0, "the path bends away from the straight line by {off_line}");
+}
+
+#[test]
+fn a_flown_torpedo_the_sim_no_longer_holds_vanishes_with_no_hit_effect() {
+    // The rows stop at tick 40 and no hit comes: the shot expired.
+    let setup = Setup::new(ShotCfg::default()).flight(ShotCfg::default(), 4, 40, bent).fire(4, "w_torp", 2);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    for i in 0..60 {
+        app.update();
+        if i >= 42 {
+            assert!(shots(&mut app).is_empty(), "frame {i}: gone");
+        }
+    }
+    assert!(app.world().resource::<super::super::stock_hull_hits::HullHitPoints>().0.is_empty(), "no hull hit spark for an expired shot");
+}
+
+#[test]
+fn a_flown_torpedo_whose_target_is_gone_flies_on_where_the_row_goes() {
+    let mut setup = Setup::new(ShotCfg::default()).flight(ShotCfg::default(), 4, 64, bent).fire(4, "w_torp", 2);
+    setup.target_until = Some(20);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let mut after = Vec::new();
+    for i in 0..60 {
+        app.update();
+        if i > 25 {
+            after.extend(drawn(&mut app));
+        }
+    }
+    assert!(after.len() > 20, "still drawn after the target went: {}", after.len());
+    assert!(after.windows(2).all(|w| w[0].distance(w[1]) < 40.0), "a continuous flight");
+}
+
+#[test]
+fn a_flown_torpedos_last_place_is_within_one_step_of_the_hull_node_its_spark_sits_on() {
+    let setup = Setup::new(ShotCfg::default()).flight(ShotCfg::default(), 4, 64, bent).fire(4, "w_torp", 2);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let node = Vec3::new(5.0, 0.0, 0.0);
+    let mut last = None;
+    for i in 0..80 {
+        app.update();
+        if i == 0 {
+            model(&mut app, 2, &[("hull_a", node), ("hull_b", node)]);
+        }
+        if let Some(c) = drawn(&mut app).last() {
+            last = Some(*c);
+        }
+    }
+    // The target stands at (0, 0, -600) in render space; the shot's last row is one step (10) short of its centre.
+    let aim = Vec3::new(0.0, 0.0, -600.0) + node;
+    let last = last.expect("drawn");
+    assert!(last.distance(aim) <= 12.0, "last drawn place {last} against the node {aim}");
+}
+
+#[test]
+fn a_flown_torpedo_without_a_row_in_the_view_is_drawn_as_without_the_switch() {
+    // The content has the switch on but the view has no rows: after the slack the old line is drawn.
+    let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_torp", 2);
+    setup.db = content_with(ShotCfg::default(), false, true);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    for _ in 0..20 {
+        app.update();
+    }
+    let s = shots(&mut app);
+    assert_eq!(s.len(), 1);
+    assert!(matches!(s[0].geom, Geom::Billboard { .. }), "drawn along the line");
 }

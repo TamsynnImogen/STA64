@@ -412,6 +412,18 @@ pub struct StockShot {
     impact_flare: Option<FlareSpec>,
     /// A beam has reached its target (once per beam): its flare or its shield cap was raised then.
     arrived: bool,
+    /// A projectile whose sim flies it by its own flight (`ordnance_flight`, #1068): it is drawn where the view's
+    /// shot row says, not along the line to its target. `bound` is the row's shot number once it is found.
+    flown: bool,
+    bound: Option<u32>,
+    /// A flown shot's drawing: how far it was from its target when found, how far along it is (0 to 1), where it left
+    /// the hardpoint from the sim's own place, and where the aim point lies from the target's centre.
+    start_distance: f32,
+    progress: f32,
+    muzzle_offset: Vec3,
+    aim_offset: Vec3,
+    /// A flown shot the view never showed a row for (a view without rows): drawn as without the switch.
+    unbound_fallback: bool,
     /// The sim lost this beam mid-life (latched: a target that comes back does not resume it).
     sim_lost: bool,
     pub geom: Geom,
@@ -447,6 +459,9 @@ impl StockShot {
 /// Ticks of slack between the sim's view and the drawing's clock when the drawing asks whether the sim still holds
 /// a beam (`beam_damage_at_end`, #1068): STA64's own, so a beam is not dropped at the first or last tick of its life.
 const BEAM_VIEW_SLACK: f32 = 2.0;
+
+/// Ticks a flown shot may wait for its row in the view before it is drawn as without the switch: STA64's own.
+const SHOT_ROW_SLACK: f32 = 3.0;
 
 /// The squared distance beyond which a beam of `range` is lost: twice the range (the sim's own factor,
 /// measured, repeated; also read from the executable, static), squared.
@@ -647,6 +662,13 @@ impl StockShots<'_, '_> {
             muzzle_flare,
             impact_flare,
             arrived: false,
+            flown: spec.path != ShotPath::Ribbon && sta_sim::combat::flight::flies(content.0.weapon_features(def), def),
+            bound: None,
+            start_distance: 0.0,
+            progress: 0.0,
+            muzzle_offset: Vec3::ZERO,
+            aim_offset: Vec3::ZERO,
+            unbound_fallback: false,
             sim_lost: false,
             geom: Geom::None,
             hidden_shooter: !self.client_draws(shooter),
@@ -698,9 +720,30 @@ pub(super) fn update_shots(
             }
         }
     }
+    // A flown shot finds its row in the view: the lowest shot number of its shooter, weapon and target that no
+    // other drawn shot holds, earliest fired first (the sim numbers its shots in the order they fire).
+    let mut rows_taken: BTreeSet<u32> = q.iter().filter_map(|(_, s)| s.bound).collect();
+    let mut waiting: Vec<(Tick, Entity)> = q.iter().filter(|(_, s)| s.flown && s.bound.is_none() && !s.unbound_fallback).map(|(e, s)| (s.fired, e)).collect();
+    waiting.sort();
+    let mut found: BTreeMap<Entity, u32> = BTreeMap::new();
+    for (_, e) in waiting {
+        let Ok((_, s)) = q.get(e) else { continue };
+        let Target::Entity(target) = s.target else { continue };
+        if let Some(row) = link.real_curr().shot_rows.iter().find(|r| !rows_taken.contains(&r.id) && r.shooter == s.shooter && r.weapon == s.weapon && r.target == target) {
+            rows_taken.insert(row.id);
+            found.insert(e, row.id);
+        }
+    }
     for (e, mut s) in &mut q {
         let age = (now_ticks - s.fired as f64) as f32;
-        if age >= s.life {
+        if let Some(id) = found.get(&e) {
+            s.bound = Some(*id);
+        }
+        // A flown shot lives as long as the sim holds it (its row), whatever the straight line would take.
+        if s.flown && s.bound.is_none() && !s.unbound_fallback && age >= SHOT_ROW_SLACK {
+            s.unbound_fallback = true;
+        }
+        if age >= s.life && s.bound.is_none() && !(s.flown && !s.unbound_fallback) {
             cmds.entity(e).try_despawn();
             continue;
         }
@@ -861,8 +904,40 @@ pub(super) fn update_shots(
             if let Some(t) = to {
                 s.to = t;
             }
-            let pos = s.muzzle.lerp(s.to, (age / s.life).clamp(0.0, 1.0));
-            let dir = (s.to - s.muzzle).normalize_or(Vec3::Z);
+            let (pos, dir) = match s.bound {
+                // Where the sim holds the shot, with two corrections that fade in and out over its flight: it leaves the
+                // hardpoint, not the shooter's centre, and it ends on the aim point, not the target's centre. The drawn
+                // shot's last place is the aim point to within what is left of one step; the sim's own centre-to-centre
+                // rule decides when it arrives (INTERIM: the corrections are STA64's own blend).
+                Some(id) => {
+                    let Some(row) = link.real_curr().shot_row(id) else {
+                        // The sim no longer holds the shot and no hit came for it: it expired (or was lost with
+                        // its shooter's shot-down): it vanishes with no hit effect.
+                        cmds.entity(e).try_despawn();
+                        continue;
+                    };
+                    let now = to_bevy(row.pos.to_f32());
+                    let before = link.prev().shot_row(id).map(|r| to_bevy(r.pos.to_f32()));
+                    let sim_at = before.map_or(now, |b| b.lerp(now, alpha));
+                    let target_at = match s.target {
+                        Target::Entity(t) => point(&link, t, alpha).map(|p| p + shifted(&offsets, t)),
+                        _ => None,
+                    };
+                    if s.start_distance == 0.0 {
+                        s.start_distance = target_at.map_or(1.0, |c| (sim_at - c).with_y(0.0).length()).max(1.0);
+                        s.muzzle_offset = s.muzzle - now;
+                    }
+                    if let (Some(c), Target::Entity(t)) = (target_at, s.target) {
+                        s.progress = (1.0 - (sim_at - c).with_y(0.0).length() / s.start_distance).clamp(0.0, 1.0);
+                        if let Some(body) = ctx.body(&link, t, alpha, &offsets, s.target_node) {
+                            s.aim_offset = s.aim(&body) - body.centre;
+                        }
+                    }
+                    let pos = sim_at + s.muzzle_offset * (1.0 - s.progress) + s.aim_offset * s.progress;
+                    (pos, Vec3::new(row.heading.0.to_f32(), 0.0, -row.heading.1.to_f32()).normalize_or(Vec3::Z))
+                }
+                None => (s.muzzle.lerp(s.to, (age / s.life).clamp(0.0, 1.0)), (s.to - s.muzzle).normalize_or(Vec3::Z)),
+            };
             s.geom = match s.path {
                 ShotPath::Sprite => Geom::Billboard { c: pos },
                 _ => {
