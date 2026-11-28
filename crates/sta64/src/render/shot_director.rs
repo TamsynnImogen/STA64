@@ -8,15 +8,14 @@
 //!
 //! - **Shots.** An event adds a shot with a base priority, a duration and a size. A shot's live priority is its
 //!   base priority times the share of its duration still left, so it decays to nothing.
-//! - **Scenes.** A new shot joins a scene when it lies within [`SCENE_RADIUS`] of the scene's place (a squared
-//!   comparison), else it starts a scene. INTERIM: the place a shot is compared with is the scene's first shot's.
-//! - **Choosing.** Scenes are ranked by their best shot's live priority. The current scene stays while it is on top
-//!   or while the top priority is no more than [`SWITCH_FACTOR`] times its own (the protection against rapid
-//!   switching); otherwise the top scene takes over. Within the scene the best live shot is shown. INTERIM, by name
-//!   (the hysteresis direction): the note this is read from words the test as "twice the top priority is no more than
-//!   the current scene's", which with live priorities holds only when the current scene is on top or both are zero,
-//!   so it could not protect anything; the reading used here is the one that does, and the literal one is the other
-//!   candidate. INTERIM: the original opens a switch with a wide master shot of the scene; that shot is not built.
+//! - **Scenes.** A new shot joins the nearest scene within [`SCENE_RADIUS`] of the scene's place (a squared
+//!   comparison), else it starts a scene, whose place is that shot's position (read from the executable, static).
+//! - **Choosing.** Scenes are ranked by their best shot's live priority and the top one is taken. The current scene
+//!   stays when it is the top, or when [`SWITCH_FACTOR`] times the top's live priority is at most its own (read from the
+//!   executable, static, as the test is written). As read, with live priorities that are never negative, that test
+//!   keeps the current scene only while it is on top (or while both are zero): it protects nothing beyond that.
+//!   The shot shown is taken out of its scene, and a scene left with no shot is dropped (static). INTERIM: the original
+//!   opens a switch with a wide master shot of the scene; that shot is not built.
 //! - **Dwell.** The next choice is due after the shown shot's time left, at least [`MIN_DWELL`] and at most its duration.
 //! - **Fallback.** With no scene, a random craft the viewer's team can see is shown for [`FALLBACK_DURATION`] at
 //!   close-up size, priority zero.
@@ -78,8 +77,8 @@ pub const SCENE_RADIUS: f32 = 600.0;
 pub const MIN_RADIUS: f32 = 50.0;
 /// The radius of a shot with no entity is its size times [`MIN_RADIUS`], at most this (read from the executable, static).
 pub const MAX_RADIUS: f32 = 600.0;
-/// The current scene is kept while the top priority is no more than this times its own (INTERIM, by name: the
-/// direction of the comparison; the factor is read from the executable, static).
+/// The current scene is kept when this times the top's live priority is at most its own (read from the executable,
+/// static; as read it keeps the current scene only while it is on top).
 pub const SWITCH_FACTOR: f32 = 2.0;
 /// The shortest time a chosen shot is held, seconds (read from the executable, static).
 pub const MIN_DWELL: f32 = 1.0;
@@ -152,10 +151,17 @@ pub struct Director {
 }
 
 impl Director {
-    /// Add a shot to the scene it lies in, or start one.
+    /// Add a shot to the nearest scene within the radius (a squared comparison), or start one at the shot's position.
     pub fn add(&mut self, shot: Shot) {
         let limit = SCENE_RADIUS * SCENE_RADIUS;
-        if let Some(scene) = self.scenes.iter_mut().find(|s| s.at.distance_squared(shot.at) <= limit) {
+        let nearest = self
+            .scenes
+            .iter_mut()
+            .map(|s| (s.at.distance_squared(shot.at), s))
+            .filter(|(d, _)| *d <= limit)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, s)| s);
+        if let Some(scene) = nearest {
             scene.shots.push(shot);
             return;
         }
@@ -194,12 +200,19 @@ impl Director {
             return Some(shot);
         };
         let current = self.current.and_then(|id| self.scenes.iter().find(|s| s.id == id));
+        // The stay test as read: the current scene is the top, or twice the top's live priority is at most its own.
         let chosen = match current {
-            Some(cur) if cur.id == top.id || top.live(now) <= SWITCH_FACTOR * cur.live(now) => cur,
+            Some(cur) if cur.id == top.id || SWITCH_FACTOR * top.live(now) <= cur.live(now) => cur,
             _ => top,
         };
-        let shot = chosen.best(now)?.clone();
-        self.current = Some(chosen.id);
+        let id = chosen.id;
+        let best: *const Shot = chosen.best(now)?;
+        let at = chosen.shots.iter().position(|s| std::ptr::eq(s, best))?;
+        // The shot shown leaves its scene; a scene left with no shot is dropped (read from the executable, static).
+        let scene = self.scenes.iter_mut().find(|s| s.id == id)?;
+        let shot = scene.shots.remove(at);
+        self.scenes.retain(|s| !s.shots.is_empty());
+        self.current = Some(id);
         self.due = now + dwell(&shot, now);
         Some(shot)
     }
@@ -292,6 +305,8 @@ pub fn fire_shot(kind: Ordnance, gap: f32, speed: f32) -> (f32, f32, ShotSize) {
     match kind {
         Ordnance::Bullet => (FIRE_PRIORITY, flight.min(BULLET_FLIGHT_MAX) + BULLET_EXTRA, ShotSize::Cu),
         Ordnance::Missile => (FIRE_PRIORITY, flight.min(MISSILE_FLIGHT_MAX) + MISSILE_EXTRA, ShotSize::Ecu),
+        // INTERIM: the notes give a beam or other ordnance one of two sizes (medium or extreme long) by a case that
+        // is not stated; the medium one is taken always.
         Ordnance::Beam => (FIRE_PRIORITY, OTHER_DURATION, ShotSize::Ms),
         Ordnance::Free => (FREE_PRIORITY, OTHER_DURATION, ShotSize::Cu),
     }
@@ -346,20 +361,46 @@ mod tests {
     }
 
     #[test]
-    fn the_current_scene_stays_until_the_top_is_more_than_twice_its_priority() {
+    fn the_current_scene_stays_only_while_it_is_the_top_as_the_stay_test_reads() {
+        // Scene one holds two shots; the shown shot leaves it.
         let mut d = Director::default();
         d.add(shot(10.0, 100.0, 0.0, Vec3::ZERO, 1));
+        d.add(shot(9.0, 100.0, 0.0, Vec3::ZERO, 2));
+        d.add(shot(5.0, 100.0, 0.0, Vec3::new(5000.0, 0.0, 0.0), 3));
         assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(1)]);
-        // A better scene, but not by more than the factor: the shown scene stays.
-        d.add(shot(15.0, 100.0, 0.0, Vec3::new(5000.0, 0.0, 0.0), 2));
-        assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(1)], "15 <= 2 x 10: protected");
-        d.add(shot(20.0, 100.0, 0.0, Vec3::new(-5000.0, 0.0, 0.0), 3));
-        assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(1)], "exactly twice still stays");
-        // One above twice takes over, and then it is the current scene.
-        d.add(shot(25.0, 100.0, 0.0, Vec3::new(0.0, 0.0, 5000.0), 4));
-        assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(4)], "25 > 2 x 10: switched");
-        d.add(shot(30.0, 100.0, 0.0, Vec3::new(0.0, 0.0, -5000.0), 5));
-        assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(4)], "and now protected in its turn");
+        // Another scene, weaker than the current one's next shot: the current scene is still the top and stays.
+        d.add(shot(8.0, 100.0, 0.0, Vec3::new(-5000.0, 0.0, 0.0), 4));
+        assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(2)], "the current scene is the top");
+        // A scene that is the top takes over from the current one whatever the ratio: twice the top's priority is
+        // never at most the current's (the rule as read; it protects nothing beyond the top).
+        let mut d = Director::default();
+        d.add(shot(10.0, 100.0, 0.0, Vec3::ZERO, 1));
+        d.add(shot(9.0, 100.0, 0.0, Vec3::ZERO, 2));
+        assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(1)]);
+        d.add(shot(9.5, 100.0, 0.0, Vec3::new(5000.0, 0.0, 0.0), 3));
+        assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(3)], "9.5 is above the current scene's 9: it takes over");
+    }
+
+    #[test]
+    fn a_shown_shot_leaves_its_scene_and_an_emptied_scene_is_dropped() {
+        let mut d = Director::default();
+        d.add(shot(8.0, 100.0, 0.0, Vec3::ZERO, 1));
+        assert_eq!(d.choose(0.0, None).unwrap().entities, vec![EntityId(1)]);
+        assert!(d.scenes.is_empty(), "the scene had one shot");
+        assert!(d.choose(0.0, None).is_none(), "the shot is not shown again");
+        assert_eq!(d.choose(0.0, Some(EntityId(9))).unwrap().entities, vec![EntityId(9)], "the fallback instead");
+    }
+
+    #[test]
+    fn a_shot_joins_the_nearest_scene_in_range_and_a_scenes_place_is_its_first_shots() {
+        let mut d = Director::default();
+        d.add(shot(1.0, 5.0, 0.0, Vec3::ZERO, 1));
+        d.add(shot(1.0, 5.0, 0.0, Vec3::new(700.0, 0.0, 0.0), 2));
+        assert_eq!(d.scenes.len(), 2);
+        // In range of both scenes (400 and 300 away): the nearer.
+        d.add(shot(1.0, 5.0, 0.0, Vec3::new(400.0, 0.0, 0.0), 3));
+        assert_eq!((d.scenes[0].shots.len(), d.scenes[1].shots.len()), (1, 2));
+        assert_eq!(d.scenes[1].at, Vec3::new(700.0, 0.0, 0.0), "joining does not move the scene");
     }
 
     #[test]

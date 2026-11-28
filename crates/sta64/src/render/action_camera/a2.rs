@@ -50,6 +50,8 @@ pub struct Seen {
     pub pos: Vec3,
     /// Its director radius: bounding radius times the class key `directorRadiusScale`.
     pub radius: f32,
+    /// The bounding radius (`SelectRadius` stands for it, INTERIM): a weapon-fire shot's flight gap subtracts it.
+    pub bounding: f32,
     pub team: u8,
     pub craft: bool,
     pub station: bool,
@@ -98,7 +100,7 @@ pub fn track(
         let team = view.player(u.owner).map_or(u.owner.0, |p| p.team.0);
         state.seen.insert(
             u.id,
-            Seen { pos: to_bevy(u.pos.to_f32()), radius: bounding * scale, team, craft: kind.is_none_or(|k| k == EntityKind::Craft) && !u.flags.contains(UnitFlags::DYING), station: kind == Some(EntityKind::Station), frame },
+            Seen { pos: to_bevy(u.pos.to_f32()), radius: bounding * scale, bounding, team, craft: kind.is_none_or(|k| k == EntityKind::Craft) && !u.flags.contains(UnitFlags::DYING), station: kind == Some(EntityKind::Station), frame },
         );
     }
     state.seen.retain(|_, s| frame - s.frame <= KEEP_FRAMES);
@@ -118,24 +120,48 @@ fn ordnance_of(class: &str) -> Ordnance {
 type ShotKind = (f32, f32, ShotSize);
 
 /// Make shots from this frame's events.
-pub fn shots(mut msgs: MessageReader<SimMsg>, clock: Option<Res<AnimClock>>, content: Option<Res<ContentRes>>, mut state: ResMut<A2State>) {
+pub fn shots(
+    mut msgs: MessageReader<SimMsg>,
+    clock: Option<Res<AnimClock>>,
+    content: Option<Res<ContentRes>>,
+    link: Res<SimLink>,
+    entities: Option<Res<SimEntities>>,
+    radii: Query<&SelectRadius>,
+    mut state: ResMut<A2State>,
+) {
     let now = clock.as_ref().map_or(0.0, |c| c.now() as f32);
     for SimMsg(ev) in msgs.read() {
+        // A unit's place and bounding radius: in sight, or else from the view (a shot's other party may be out of sight).
+        let info = |id: EntityId| -> Option<(Vec3, f32)> {
+            if let Some(s) = state.seen.get(&id) {
+                return Some((s.pos, s.bounding));
+            }
+            let u = link.curr().unit(id)?;
+            let bounding = entities.as_ref().and_then(|m| m.0.get(&id)).and_then(|e| radii.get(*e).ok()).map_or(20.0, |r| r.0);
+            Some((to_bevy(u.pos.to_f32()), bounding))
+        };
         let made: Option<(ShotKind, Vec<EntityId>, Vec3)> = match ev {
-            SimEvent::Fired { shooter, weapon, target, .. } => state.seen.get(shooter).map(|s| {
-                let def = content.as_ref().and_then(|c| c.0.weapon(*weapon));
-                // A target entity in sight is aimed at; any other target is free ordnance.
-                let aimed = match target {
-                    Target::Entity(t) => state.seen.get(t).map(|seen| (*t, *seen)),
+            // The shot is made when the shooter or its target is in the viewer's sight (read from the executable, static).
+            SimEvent::Fired { shooter, weapon, target, .. } => {
+                let aimed_at = match target {
+                    Target::Entity(t) => Some(*t),
                     _ => None,
                 };
-                let (ordnance, gap, entities) = match aimed {
-                    Some((t, tseen)) => (def.map_or(Ordnance::Beam, |d| ordnance_of(&d.class.0)), s.pos.distance(tseen.pos) - s.radius - tseen.radius, vec![*shooter, t]),
-                    None => (Ordnance::Free, 0.0, vec![*shooter]),
-                };
-                let speed = def.map_or(0.0, |d| d.shot_speed.to_f32());
-                (director::fire_shot(ordnance, gap, speed), entities, s.pos)
-            }),
+                let visible = state.seen.contains_key(shooter) || aimed_at.is_some_and(|t| state.seen.contains_key(&t));
+                visible
+                    .then(|| info(*shooter))
+                    .flatten()
+                    .map(|(at, own)| {
+                        let def = content.as_ref().and_then(|c| c.0.weapon(*weapon));
+                        // A target entity is aimed at (the gap is between the bounding spheres); any other target is free ordnance.
+                        let (ordnance, gap, who) = match aimed_at.and_then(|t| info(t).map(|i| (t, i))) {
+                            Some((t, (tat, tb))) => (def.map_or(Ordnance::Beam, |d| ordnance_of(&d.class.0)), at.distance(tat) - own - tb, vec![*shooter, t]),
+                            None => (Ordnance::Free, 0.0, vec![*shooter]),
+                        };
+                        let speed = def.map_or(0.0, |d| d.shot_speed.to_f32());
+                        (director::fire_shot(ordnance, gap, speed), who, at)
+                    })
+            }
             SimEvent::Destroyed { id, .. } => state.seen.get(id).map(|s| (director::FIREBALL, vec![*id], s.pos)),
             SimEvent::BuildStarted { builder, .. } => state.seen.get(builder).map(|s| (director::CONSTRUCTION_START, vec![*builder], s.pos)),
             SimEvent::Built { builder, id } => state.seen.get(id).map(|s| {
@@ -203,7 +229,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     fn seen(x: f32, z: f32, team: u8, craft: bool) -> Seen {
-        Seen { pos: Vec3::new(x, 0.0, z), radius: 30.0, team, craft, station: !craft, frame: 1 }
+        Seen { pos: Vec3::new(x, 0.0, z), radius: 30.0, bounding: 30.0, team, craft, station: !craft, frame: 1 }
     }
 
     fn world() -> World {
@@ -275,6 +301,36 @@ mod tests {
         assert!(w.resource::<ActionSubject>().0.is_some());
         w.run_system_once(forget).unwrap();
         assert!(w.resource::<ActionSubject>().0.is_none() && w.resource::<A2State>().seen.is_empty() && w.resource::<A2State>().pose.is_none());
+    }
+
+    /// The weapon-fire shot is made when the shooter or its target is in the viewer's sight (read from the
+    /// executable, static); with neither in sight there is none.
+    #[test]
+    fn a_weapon_fire_shot_is_made_when_the_shooter_or_the_target_is_in_sight() {
+        use sta_sim::command::LocalRouter;
+        use sta_sim::{ContentKey, Fixed, MoveStats, PlayerId, Sim, Vec3 as SimVec3};
+        let run = |seen_ids: &[u32]| {
+            let mut sim = Sim::new(1);
+            let h = (Fixed::ZERO, Fixed::ONE);
+            let stats = || MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0);
+            let a = sim.spawn(0, SimVec3::ZERO, h, stats());
+            let b = sim.spawn(1, SimVec3::from_f32([400.0, 0.0, 0.0]), h, stats());
+            let mut w = world();
+            w.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0)));
+            w.init_resource::<Messages<SimMsg>>();
+            for id in seen_ids {
+                w.resource_mut::<A2State>().seen.insert(EntityId(*id), seen(0.0, 0.0, 1, true));
+            }
+            w.write_message(SimMsg(SimEvent::Fired { shooter: a, weapon: ContentKey(0), hardpoint: 0, target: Target::Entity(b) }));
+            w.run_system_once(shots).unwrap();
+            let shot = w.resource_mut::<A2State>().director.choose(0.0, None);
+            (a, b, shot)
+        };
+        let (a, b, shot) = run(&[1]);
+        assert_eq!(shot.map(|s| s.entities), Some(vec![a, b]), "the shooter in sight");
+        let (a, b, shot) = run(&[2]);
+        assert_eq!(shot.map(|s| s.entities), Some(vec![a, b]), "only the target in sight");
+        assert!(run(&[]).2.is_none(), "neither in sight: no shot");
     }
 
     #[test]
