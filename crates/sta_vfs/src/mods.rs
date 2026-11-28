@@ -179,11 +179,12 @@ pub fn list_mods(data: &Path) -> Result<(Vec<ModInfo>, Vec<String>), VfsError> {
     let mut out = Vec::new();
     let mut notes = Vec::new();
     for e in rd.flatten() {
-        let Ok(ft) = e.file_type() else { continue };
-        if !ft.is_dir() {
+        // A mod folder, or a link that leads to one: the mount takes a linked mod the player names
+        // (`walk_chain`), so the list offers it. A link that leads nowhere or to a file is no mod.
+        let path = e.path();
+        if !path.is_dir() {
             continue;
         }
-        let path = e.path();
         let folder = e.file_name().to_string_lossy().into_owned();
         let mut archives: Vec<String> = std::fs::read_dir(&path)
             .map(|rd| {

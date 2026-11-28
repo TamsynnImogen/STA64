@@ -43,7 +43,7 @@ pub enum VfsError {
     #[error("mod {0:?} not found under Data/Mods")]
     ModNotFound(String),
     /// A mod name that is not one folder name under `Data/Mods` (see [`single_folder_name`]).
-    #[error("mod name {name:?} {asked_by} is not a single folder name under Data/Mods (no path parts, `.`, `..`, separators or drive)")]
+    #[error("mod name {name:?} {asked_by} is not a single folder name under Data/Mods (no path parts, `.`, `..`, separators or drive, no dot or space at the end)")]
     BadModName { name: String, asked_by: String },
     /// A parent mod folder that resolves to somewhere other than directly under `Data/Mods`.
     #[error("mod {name:?} {asked_by} is a link to {target}, which is not a folder directly under Data/Mods; a parent mod must be in Data/Mods itself")]
@@ -506,13 +506,17 @@ pub fn parent_mod(ini: &str) -> Option<String> {
 }
 
 /// Whether `name` is exactly one folder name, the same on every platform: not empty, not `.` or `..`, no `/`
-/// or `\`, no NUL, and no drive form (`C:` or `C:x`). A name that is more than that would let a join onto the
-/// mods folder reach another folder (`..`, `a/b`, an absolute path, a UNC path, a drive-relative path).
+/// or `\`, no NUL, no drive form (`C:` or `C:x`), and not ending in a dot or a space. A name that is more than
+/// that would let a join onto the mods folder reach another folder (`..`, `a/b`, an absolute path, a UNC path,
+/// a drive-relative path). Windows drops dots and spaces at the end of a name when it opens a path, so there a
+/// name of only dots (three or more) is the mods folder itself, which would mount every mod as one, and
+/// `Name.` is `Name`; the check is on the text, so the answer is the same on every system. (No folder can have
+/// such a name on Windows; elsewhere a mod folder that has one is not mounted under it.)
 /// STA64's own safety rule (ADR 0004 D4: a mod's data chain comes from its kind and `ParentMod`, which name
 /// folders in `Data/Mods`; D6: the mount follows the mod's own rules, and these are not a rule a mod can ask
 /// for). A well-formed mod folder name, spaces and letter case included, passes unchanged (D1).
 pub fn single_folder_name(name: &str) -> bool {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) || name.ends_with(['.', ' ']) {
         return false;
     }
     let mut chars = name.chars();
