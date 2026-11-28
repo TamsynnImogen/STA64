@@ -18,8 +18,11 @@
 //!   ([`beam_holds`]). Evidence: the damage lands exactly on the fire tick
 //!   plus the life in ticks, and on the fire tick for a life of none
 //!   (measured, repeated, no spread); a shooter that dies during the life
-//!   loses the beam (measured, repeated); the other cancelling cases are read
-//!   from the executable, static, not measured. The beam still lands when the
+//!   loses the beam (measured, repeated); so does a target beyond the range
+//!   factor (the factor: measured, repeated, with controls; the point the
+//!   distance is taken from is INTERIM, see [`beam_holds`]); the other
+//!   cancelling cases are read from the executable, static, not measured. The
+//!   beam still lands when the
 //!   shooter's weapons are switched off, when it is given a move order or
 //!   starts to cloak, and when the target cloaks or changes side (measured,
 //!   once each). STA64's own rules, on which the evidence is silent: the hit
@@ -194,6 +197,8 @@ const BEAMS_TAG: u64 = 0x6265_616d_735f_3031;
 
 /// A beam in flight is lost when its target is farther from its shooter than this many
 /// times the weapon's range (`beam_damage_at_end`; a constant of the rule, not a data key).
+/// Measured, repeated, with controls, on stock Armada II; also read from the executable,
+/// static.
 pub(crate) const BEAM_BREAK_RANGE_FACTOR: i32 = 2;
 
 /// The ordnance class of the regular beam, the one class the evidence for
@@ -216,7 +221,8 @@ pub(crate) fn lands_at_end(features: &sta_content::Features, w: &sta_content::We
 ///   exists, a shooter that starts to die loses the beam and a dying target still takes
 ///   the hit.
 /// - The target is farther than [`BEAM_BREAK_RANGE_FACTOR`] times the weapon's range.
-///   INTERIM: measured centre to centre and flat, as `pick` measures a range today. In
+///   The factor is measured; the points are INTERIM: the distance is taken centre to
+///   centre and flat, as `pick` takes a range today. In
 ///   the original the distance runs to the target's centre from a point ahead of the
 ///   shooter's centre (measured, in more than one geometry); that the point is the firing
 ///   hardpoint is an inference. The sim has no hardpoint positions (a hardpoint is a model

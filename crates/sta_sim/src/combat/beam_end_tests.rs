@@ -65,10 +65,12 @@ fn db(switch: bool, patch: impl Fn(&mut sta_content::Features, &mut WeaponDef)) 
     let mut cloak_beamer = beamer.clone();
     cloak_beamer.odf = "fx_cloak_beamer".into();
     cloak_beamer.hardpoints.push(cloak_slot.clone());
+    // An ordinary cloak that is complete at once and costs nothing, for a target.
+    let instant_cloak = WeaponDef::new("fx_instant_cloak", "cloakingdeviceimp", WeaponKind::Beam);
     let mut cloak_target = phaser.clone();
     cloak_target.odf = "fx_cloak_target".into();
-    cloak_target.hardpoints = vec![cloak_slot];
-    Arc::new(b.weapon(cloak).weapon(slow_cloak).unit(beamer).unit(phaser).unit(cloak_beamer).unit(cloak_target).build().unwrap())
+    cloak_target.hardpoints = vec![Hardpoint { weapon: DefRef::new("fx_instant_cloak"), node: "hp01".into(), arc: None }];
+    Arc::new(b.weapon(cloak).weapon(slow_cloak).weapon(instant_cloak).unit(beamer).unit(phaser).unit(cloak_beamer).unit(cloak_target).build().unwrap())
 }
 
 struct Game {
@@ -397,25 +399,64 @@ fn a_beam_row_with_an_unknown_weapon_is_corrupt_and_one_with_a_removed_unit_is_n
 }
 
 /// What happens to the shooter or the target during the beam's life without losing it
-/// (measured on the original, once each): the hit still lands on the tick the life ends.
+/// (measured on the original, once each): the hit still lands on the tick the life ends. Each
+/// case checks that its change really took effect while the beam was in flight.
 #[test]
 fn the_beam_still_lands_after_these_changes_during_its_life() {
     use crate::command::Edit;
+    use crate::specials::CloakState;
+    use crate::view::UnitFlags;
     type Change = fn(&Game) -> Command;
-    let cases: [(&str, &str, &str, Change); 5] = [
-        ("the shooter's weapons are switched off", "fx_beamer", "fx_frigate", |g| Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Weapons(g.shooter, false)) }),
-        ("the shooter is given a move order", "fx_beamer", "fx_frigate", |g| Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![g.shooter], to: v(2000, 1000), queue: false, mode: None }) }),
-        ("the shooter starts to cloak", "fx_cloak_beamer", "fx_frigate", |g| Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Cloak { units: vec![g.shooter], on: true }) }),
-        ("the target starts to cloak", "fx_beamer", "fx_cloak_target", |g| Command { player: PlayerId(2), seq: 0, kind: CommandKind::Order(Order::Cloak { units: vec![g.target], on: true }) }),
-        ("the target changes side", "fx_beamer", "fx_frigate", |g| Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Team(g.target, PlayerId(1))) }),
+    type Took = fn(&Game) -> bool;
+    let cases: [(&str, &str, &str, Change, Took); 5] = [
+        // as the bench did it: a script switches the weapons off
+        (
+            "a script switches the shooter's weapons off",
+            "fx_beamer",
+            "fx_frigate",
+            |g| Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Weapons(g.shooter, false)) },
+            |g| g.sim.unit(g.shooter).unwrap().flags.contains(UnitFlags::WEAPONS_OFF),
+        ),
+        (
+            "the shooter is given a move order",
+            "fx_beamer",
+            "fx_frigate",
+            |g| Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![g.shooter], to: v(2000, 1000), queue: false, mode: None }) },
+            |g| g.sim.unit(g.shooter).unwrap().target == Some(v(2000, 1000)) && g.sim.weapons.attack_of(g.shooter).is_none(),
+        ),
+        (
+            "the shooter starts to cloak",
+            "fx_cloak_beamer",
+            "fx_frigate",
+            |g| Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Cloak { units: vec![g.shooter], on: true }) },
+            |g| matches!(g.sim.specials.cloak_state(g.shooter), Some(CloakState::Engaging(_))),
+        ),
+        // as the bench did it: the target is fully cloaked at once
+        (
+            "the target cloaks fully",
+            "fx_beamer",
+            "fx_cloak_target",
+            |g| Command { player: PlayerId(2), seq: 0, kind: CommandKind::Order(Order::Cloak { units: vec![g.target], on: true }) },
+            |g| g.sim.specials.cloak_state(g.target) == Some(CloakState::Cloaked),
+        ),
+        (
+            "the target changes side",
+            "fx_beamer",
+            "fx_frigate",
+            |g| Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Team(g.target, PlayerId(1))) },
+            |g| g.sim.unit(g.target).unwrap().owner == PlayerId(1),
+        ),
     ];
-    for (what, shooter, target, change) in cases {
+    for (what, shooter, target, change, took) in cases {
         let mut g = game_of(db(true, |_, _| {}), shooter, target);
         let fired = g.until_fired();
         g.run(LIFE / 4);
         assert_eq!(g.beams(), 1, "{what}");
         let cmd = change(&g);
         g.step_with(&[cmd]);
+        g.run(1);
+        assert!(took(&g), "{what}: the change took effect");
+        assert!(g.ticks < fired + LIFE && g.beams() == 1, "{what}: while the beam is still in flight");
         g.run(LIFE);
         assert_eq!(g.hits.iter().map(|h| h.0).collect::<Vec<_>>(), [fired + LIFE], "{what}: the hit lands when the life ends");
     }
