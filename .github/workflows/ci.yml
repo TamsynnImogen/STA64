@@ -124,15 +124,18 @@ jobs:
       - name: Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
-      # Measured on main: nearly all of this job is LLVM code generation of the
-      # sta64 crate itself in the release profile (codegen-units = 1, one
-      # thread): about 10 minutes for the release build and 13 for the test
-      # build on ubuntu-latest, against 26 s for `cargo check`. Dependencies
-      # come from the cache below. On PRs only, give that one crate 16 codegen
-      # units so the runner's cores are used; no dependency's profile changes,
-      # so the dependency cache stays valid. Pushes to main and release builds
-      # keep the shipped profile (codegen-units = 1), so main still tests the
-      # exact configuration that ships.
+      # Why not a `[profile.ci]` without LTO: a new profile name rebuilds and
+      # caches every dependency a second time (the cache is at about 9.8 of
+      # 10 GB), and LTO only touches the linked binary, not the test build.
+      # What costs the time is LLVM code generation of the sta64 crate with
+      # codegen-units = 1 (about 10 min release build, 13 min test build on
+      # ubuntu-latest, against 26 s for `cargo check`). Cargo allows
+      # `codegen-units` per package but not `lto`, so the same release profile
+      # (opt-level, overflow checks, debug assertions, every dependency and its
+      # cache) stays and only the sta64 crate gets 16 codegen units.
+      # PRs: for every release-profile step. main: the shipped build and the
+      # bench smoke below run with the shipped profile (codegen-units = 1),
+      # then the override applies to the test build only.
       - name: Parallel codegen for sta64 (PR)
         if: github.event_name == 'pull_request'
         shell: bash
@@ -151,6 +154,12 @@ jobs:
       - run: cargo clippy --locked -p sta64 -- -D warnings
       - name: Bench smoke (sim-only)
         run: cargo run --locked -p sta64 --release -- --sim-only --scene bench/scenes/synthetic.ini --ticks 300
+      - name: Parallel codegen for sta64 tests (main)
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
+          printf '[profile.release.package.sta64]\ncodegen-units = 16\n' >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
       - run: cargo test --locked -p sta64 --release
 
   # One stable name for branch protection: green when every job that was
