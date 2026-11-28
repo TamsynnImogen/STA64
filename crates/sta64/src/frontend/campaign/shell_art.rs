@@ -1,22 +1,21 @@
-//! The campaign screens' backdrops from the mounted content's own shell bitmaps (#931).
+//! The campaign screens' backdrops from the mounted content's own shell bitmaps (#931), for the stock Armada II
+//! profile.
 //!
-//! Under a stock profile ([`UiProfile::is_stock`](crate::ui::profile::UiProfile::is_stock)) the
-//! single-player screen (the campaign select) and the mission list draw the mounted content's shell
-//! picture behind their controls; under the LCARS profile they keep the widget theme. The briefing is
-//! STA64's own screen (the original has no pre-mission briefing screen) and keeps the widget theme.
-//! Nothing of the art is in the repository: the pictures are read from the mounted layers (install
-//! or mod) at run time, a mod's own files winning by the layering, and a screen whose picture the
-//! content does not have keeps the widget theme.
+//! Under the stock Armada II profile ([`UiProfile::Armada2`]) the single-player screen (the campaign select) and the
+//! mission list draw the mounted content's shell picture behind their controls. Every other profile (the first
+//! game's stock profile, the mod family's, and the LCARS profile) keeps what it had before: the widget theme or its
+//! own front end. The briefing is STA64's own screen and keeps the widget theme. Nothing of the art is in the
+//! repository: the pictures are read from the mounted layers (install or mod) at run time, a mod's own files winning
+//! by the layering, and a screen whose picture the content does not have keeps the widget theme.
 //!
 //! Rules and grades:
-//! - Which pictures the engine opens: the two paths below are constants of the code, read from the
-//!   executable, static (its string table). Which screen draws which is not traced (the shell is
-//!   built in the executable; no data file names a screen's picture): INTERIM.
+//! - Which pictures are opened: the two paths below are constants of the code, stock Armada II's (a path the engine
+//!   opens: read from the executable, static). Which screen draws which picture is not traced: INTERIM. They are read
+//!   only under the profile they were read for.
 //! - The picture fills the stock box the screen is laid out in ([`StockBoxNode`]), so the art
 //!   and the controls move together at every window shape (arranged, STA64's own).
 //! - INTERIM, a first step: only the backdrop. The controls keep their arranged regions and the widget
-//!   kit's look over it. The original's lists and buttons have their own art and places on these
-//!   screens (not drawn here yet), and the single-player screen has more pictures than the one drawn.
+//!   kit's look over it; other pictures of that screen are not drawn.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -27,12 +26,12 @@ use crate::frontend::screens::Screen;
 use crate::ui::profile::UiProfile;
 use crate::viewer::Mounted;
 
-/// The single-player screen's picture, without extension: a path the engine opens (read from the executable, static,
-/// string table; which screen draws it is not traced).
-pub(crate) const SINGLE_PLAYER: &str = "bitmaps/single/singleplay";
-/// The mission list's picture, without extension: a path the engine opens (read from the executable, static,
-/// string table; which screen draws it is not traced).
-pub(crate) const MISSION_LIST: &str = "bitmaps/missionselect/missionselectbg";
+/// Stock Armada II's single-player picture, without extension: path the engine opens: read from the executable, static
+/// (which screen draws it is not traced: INTERIM).
+pub(crate) const STOCK_A2_SINGLE_PLAYER_PICTURE: &str = "bitmaps/single/singleplay";
+/// Stock Armada II's mission-list picture, without extension: path the engine opens: read from the executable, static
+/// (which screen draws it is not traced: INTERIM).
+pub(crate) const STOCK_A2_MISSION_LIST_PICTURE: &str = "bitmaps/missionselect/missionselectbg";
 /// Extensions tried, in order.
 pub(crate) const EXTENSIONS: [&str; 3] = ["png", "bmp", "tga"];
 
@@ -84,19 +83,31 @@ fn load(vfs: &sta_vfs::Vfs, stem: &str) -> Option<Image> {
     })
 }
 
-/// Read the pictures when the mount is new or changed.
-pub(crate) fn load_art(mounted: Option<Res<Mounted>>, images: Option<ResMut<Assets<Image>>>, mut art: ResMut<ShellArt>) {
+/// Whether the campaign screens draw the shell pictures under `profile`: the profile they were read for.
+pub(crate) fn drawn_under(profile: Option<&UiProfile>) -> bool {
+    profile.is_some_and(|p| *p == UiProfile::Armada2)
+}
+
+/// Read the pictures when the mount is new or changed, under the profile they were read for only; under another one
+/// none are read (and any read before are dropped).
+pub(crate) fn load_art(mounted: Option<Res<Mounted>>, images: Option<ResMut<Assets<Image>>>, profile: Option<Res<UiProfile>>, mut art: ResMut<ShellArt>) {
     let (Some(mounted), Some(mut images)) = (mounted, images) else { return };
+    if !drawn_under(profile.as_deref()) {
+        if art.read || art.single_player.is_some() || art.mission_list.is_some() {
+            *art = ShellArt::default();
+        }
+        return;
+    }
     if art.read && !mounted.is_changed() {
         return;
     }
-    art.single_player = load(&mounted.0, SINGLE_PLAYER).map(|i| images.add(i));
-    art.mission_list = load(&mounted.0, MISSION_LIST).map(|i| images.add(i));
+    art.single_player = load(&mounted.0, STOCK_A2_SINGLE_PLAYER_PICTURE).map(|i| images.add(i));
+    art.mission_list = load(&mounted.0, STOCK_A2_MISSION_LIST_PICTURE).map(|i| images.add(i));
     art.read = true;
 }
 
-/// Keep exactly one backdrop in the stock box of a campaign screen drawn under a stock profile that
-/// has the picture; none anywhere else. The screens rebuild their boxes on any change, so this runs
+/// Keep exactly one backdrop in the stock box of a campaign screen drawn under the profile the pictures were read
+/// for, when the content has the picture; none anywhere else. The screens rebuild their boxes on any change, so this runs
 /// every frame and puts the backdrop back first among the box's children.
 #[allow(clippy::type_complexity)]
 pub(crate) fn sync_backdrop(
@@ -108,7 +119,7 @@ pub(crate) fn sync_backdrop(
     backdrops: Query<(Entity, &ShellBackdrop, &ImageNode)>,
 ) {
     let screen = *screen.get();
-    let want = profile.as_deref().is_some_and(|p| p.is_stock()).then(|| art.backdrop(screen)).flatten();
+    let want = drawn_under(profile.as_deref()).then(|| art.backdrop(screen)).flatten();
     let mut have = false;
     for (e, mark, node) in &backdrops {
         if want.is_some_and(|w| mark.0 == screen && node.image == *w) && !have {
