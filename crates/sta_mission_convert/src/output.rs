@@ -90,15 +90,39 @@ fn python_header(bytes: &[u8]) -> bool {
 pub enum WriteError {
     /// The target exists and is not this tool's: that mission fails, the run goes on.
     Collision(String),
+    /// The target is a file this tool wrote that the player has edited since, and the folder was
+    /// opened with [`Edited::Keep`]: the file stays as it is, the run goes on.
+    Kept,
     /// Anything else: the run stops.
     Fatal(String),
 }
 
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (Self::Collision(m) | Self::Fatal(m)) = self;
-        f.write_str(m)
+        match self {
+            Self::Collision(m) | Self::Fatal(m) => f.write_str(m),
+            Self::Kept => f.write_str("the file was edited since the tool wrote it: kept"),
+        }
     }
+}
+
+/// What the folder does with a file the tool wrote (the manifest lists its name) whose content
+/// has changed since: the player edited it. A file the manifest does not list is foreign whatever
+/// the policy says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Edited {
+    /// The command line's rule: an edited file is a foreign one (the folder is refused, or with
+    /// `--keep-foreign` the file is left and a mission that would overwrite it fails).
+    #[default]
+    Foreign,
+    /// The game's normal run: an edited file is kept as it is, stays listed in the manifest and is
+    /// reported ([`WriteError::Kept`]); everything else is replaced as usual.
+    Keep,
+    /// The game's explicit "replace edited scripts": an edited file is renamed to `<name>.old`
+    /// (`.old2`, ...; never overwriting, never deleted) and the run writes its own in its place, as
+    /// for a file of the Python tool. A run that stops before it has written the new file loses
+    /// nothing.
+    Replace,
 }
 
 impl From<String> for WriteError {
@@ -126,6 +150,7 @@ pub struct OutDir {
     keep_foreign: bool,
     /// Files of the Python tool moved aside in this run, `(old name, new name)`.
     moved: Vec<(String, String)>,
+    edited: Edited,
 }
 
 impl OutDir {
@@ -140,13 +165,18 @@ impl OutDir {
     /// Looks at the folder (`root` resolved, `given` as the user wrote it) and refuses what the
     /// rules above refuse. Writes and deletes nothing.
     pub fn inspect(given: &Path, root: PathBuf, keep_foreign: bool) -> Result<OutDir, String> {
+        Self::inspect_with(given, root, keep_foreign, Edited::Foreign)
+    }
+
+    /// [`OutDir::inspect`] with a policy for the files the player edited ([`Edited`]).
+    pub fn inspect_with(given: &Path, root: PathBuf, keep_foreign: bool, edited: Edited) -> Result<OutDir, String> {
         let shown = given.display();
         if let Ok(abs) = std::path::absolute(given)
             && fs::symlink_metadata(&abs).is_ok_and(|m| m.file_type().is_symlink())
         {
             return Err(format!("output folder {shown} is a symbolic link: the tool does not write through links"));
         }
-        let mut me = OutDir { root, manifest: Vec::new(), keep_foreign, moved: Vec::new() };
+        let mut me = OutDir { root, manifest: Vec::new(), keep_foreign, moved: Vec::new(), edited };
         match fs::symlink_metadata(&me.root) {
             Ok(m) if !m.is_dir() => return Err(format!("output folder {shown} exists and is not a folder")),
             Ok(_) => {}
@@ -205,8 +235,8 @@ impl OutDir {
         Ok(())
     }
 
-    /// Whether the regular file `name` in `missions/` has content the manifest lists for it.
-    fn is_ours(&self, name: &str, path: &Path) -> bool {
+    /// Whether the regular file `name` in `missions/` has the content the manifest lists for it.
+    fn matches_manifest(&self, name: &str, path: &Path) -> bool {
         let Ok(m) = fs::symlink_metadata(path) else { return false };
         if !m.is_file() {
             return false;
@@ -214,6 +244,40 @@ impl OutDir {
         let Ok(bytes) = fs::read(path) else { return false };
         let h = sha_hex(&bytes);
         self.manifest.iter().any(|(mh, mn)| *mh == h && mn == name)
+    }
+
+    /// Whether the regular file `name` is one the tool wrote (its name is listed) whose content is
+    /// no longer what the manifest lists: the player edited it.
+    fn is_edited(&self, name: &str, path: &Path) -> bool {
+        self.manifest.iter().any(|(_, mn)| mn == name)
+            && fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+            && !self.matches_manifest(name, path)
+    }
+
+    /// Whether the file is the tool's to delete or replace: it has the content it wrote. (An edited
+    /// file is never deleted; under [`Edited::Replace`] it is moved aside.)
+    fn is_ours(&self, name: &str, path: &Path) -> bool {
+        self.matches_manifest(name, path)
+    }
+
+    /// Whether the regular file `name` of `missions/` is there and is either what the tool wrote or
+    /// an edit of it (a run keeps both; the stamp counts both as present).
+    pub fn holds(&self, name: &str) -> bool {
+        let p = self.missions().join(name);
+        self.matches_manifest(name, &p) || self.is_edited(name, &p)
+    }
+
+    /// The `.lua` files of `missions/` the tool wrote that the player has edited since, sorted
+    /// (file names).
+    pub fn edited_names(&self) -> Vec<String> {
+        let Ok(rd) = fs::read_dir(self.missions()) else { return Vec::new() };
+        let mut v: Vec<String> = rd
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.to_lowercase().ends_with(".lua") && self.is_edited(n, &self.missions().join(n)))
+            .collect();
+        v.sort();
+        v
     }
 
     /// Whether `path` is a regular file whose first line is the Python tool's header: an earlier
@@ -284,7 +348,9 @@ impl OutDir {
         let rd = fs::read_dir(self.missions()).map_err(|e| format!("{}: {e}", self.missions().display()))?;
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
-            if n.to_lowercase().ends_with(".lua") && !self.is_ours(&n, &e.path()) && !self.is_python_output(&e.path()) {
+            // an edit is kept (Keep) or moved aside (Replace): neither is foreign
+            let kept = self.edited != Edited::Foreign && self.is_edited(&n, &e.path());
+            if n.to_lowercase().ends_with(".lua") && !self.is_ours(&n, &e.path()) && !self.is_python_output(&e.path()) && !kept {
                 out.push(n);
             }
         }
@@ -344,6 +410,8 @@ impl OutDir {
         let mdir = self.missions();
         // the manifest's own temporary files (a killed save) are in the output folder itself
         remove_old_temps(&self.root, Some(MANIFEST));
+        // Edited files the policy keeps: they stay, and the manifest keeps remembering them
+        let mut kept: BTreeSet<String> = BTreeSet::new();
         if mdir.is_dir() {
             remove_old_temps(&mdir, None);
             // the manifest's files go; the `.lua` files of the Python tool's earlier conversion, which
@@ -361,10 +429,15 @@ impl OutDir {
                     fs::remove_file(&p).map_err(|e| format!("{}: {e}", p.display()))?;
                 } else if n.to_lowercase().ends_with(".lua") && self.is_python_output(&p) {
                     self.move_aside(&n)?;
+                } else if self.edited == Edited::Keep && self.is_edited(&n, &p) {
+                    kept.insert(n);
+                } else if self.edited == Edited::Replace && self.is_edited(&n, &p) {
+                    // the player's edit is moved aside, never deleted before its replacement exists
+                    self.move_aside(&n)?;
                 }
             }
         }
-        self.manifest.clear();
+        self.manifest.retain(|(_, n)| kept.contains(n));
         if self.manifest_path().exists() {
             self.save_manifest()?;
         }
@@ -390,6 +463,8 @@ impl OutDir {
             Err(_) => {}
             Ok(_) if self.is_ours(name, &target) => {}
             Ok(_) if self.is_python_output(&target) => self.move_aside(name).map_err(WriteError::Collision)?,
+            Ok(_) if self.edited == Edited::Keep && self.is_edited(name, &target) => return Err(WriteError::Kept),
+            Ok(_) if self.edited == Edited::Replace && self.is_edited(name, &target) => self.move_aside(name).map_err(WriteError::Collision)?,
             Ok(_) => {
                 return Err(WriteError::Collision(format!(
                     "{} exists and this tool did not write it (or it changed since): refusing to overwrite it",
@@ -426,4 +501,11 @@ impl OutDir {
     pub fn keep_foreign(&self) -> bool {
         self.keep_foreign
     }
+}
+
+/// The scripts in the output folder `root` (resolved) that the tool wrote and the player has edited
+/// since (file names in `missions/`, sorted); none when the folder cannot be read. Reads the
+/// manifest and the files, writes nothing.
+pub fn edited_scripts(root: &Path) -> Vec<String> {
+    OutDir::inspect_with(root, root.to_path_buf(), false, Edited::Keep).map(|o| o.edited_names()).unwrap_or_default()
 }

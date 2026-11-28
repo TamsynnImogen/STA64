@@ -613,11 +613,6 @@ pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Pa
     load_campaigns_with(vfs, install_root, active_mod, None, store)
 }
 
-/// The command that converts an install's missions (shown by the missions screen).
-pub fn convert_hint(install_root: &std::path::Path) -> String {
-    format!("Run once from the STA64 checkout, then restart: python3 tools/convert_install_missions.py --install \"{}\"", install_root.display())
-}
-
 /// [`load_campaigns_in`] with the converted-missions folder `converted` (when it holds
 /// scripts) mounted below the install: maps with no Lua of their own run the converted one,
 /// marked experimental (D6: the layer follows the install and mod it was made for; the
@@ -656,12 +651,12 @@ pub fn load_campaigns_with(
     if let Some(dir) = mounted {
         campaigns.mark_converted(dir, &own);
         info!("campaigns: {} missions run converted scripts from {} (experimental)", campaigns.experimental.len(), dir.display());
-    } else if campaigns.awaits_conversion()
-        && active_mod.is_none_or(str::is_empty)
-        && let Some(root) = install_root
-    {
-        campaigns.convert_hint = Some(convert_hint(root));
-        info!("campaigns: missions wait for a Lua conversion; {}", campaigns.convert_hint.as_deref().unwrap_or_default());
+    }
+    // The in-game conversion is offered for the base game only (D6: a mod's chain is never converted),
+    // where missions wait for it or a conversion is already mounted (`game::mission_convert`).
+    campaigns.convertible = install_root.is_some() && active_mod.is_none_or(str::is_empty) && (campaigns.awaits_conversion() || mounted.is_some());
+    if campaigns.convertible && mounted.is_none() {
+        info!("campaigns: missions wait for a Lua conversion (Prepare missions on the mission list)");
     }
     if let Some(w) = &campaigns.load_warning {
         warn!("campaigns: saved progress not used: {w}");
