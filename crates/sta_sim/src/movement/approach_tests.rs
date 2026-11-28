@@ -43,7 +43,7 @@ pub(crate) fn db(profile: Profile, warp_distance: Option<i32>) -> ContentDb {
     target.hardpoints.clear();
     let mut rules = Rules::default();
     if let Some(w) = warp_distance {
-        rules = rules.with_approach(ApproachRules { min_move_warp_distance: n(w) });
+        rules = rules.with_approach(ApproachRules { min_move_warp_distance: n(w), ..ApproachRules::default() });
     }
     ContentDb::builder()
         .profile(profile)
@@ -191,7 +191,7 @@ fn an_unseen_or_cloaked_target_is_flown_to_without_warp_and_the_order_stands() {
 fn a_dead_target_leaves_no_course_and_queued_legs_wait_for_the_attack() {
     let (mut sim, _) = run(Profile::Sta2Classic, Some(1100), 1000, 30 * 5);
     let (s, t) = (EntityId(1), EntityId(2));
-    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![s], to: v(-500, 0), queue: true }) };
+    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![s], to: v(-500, 0), queue: true, mode: None }) };
     for _ in 0..30 * 10 {
         WorldSource::step(&mut sim, &[]);
     }
@@ -211,7 +211,7 @@ fn a_dead_target_leaves_no_course_and_queued_legs_wait_for_the_attack() {
 #[test]
 fn a_move_order_replaces_the_attack() {
     let (mut sim, _) = run(Profile::Sta2Classic, Some(1100), 3000, 30);
-    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![EntityId(1)], to: v(-500, 0), queue: false }) };
+    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![EntityId(1)], to: v(-500, 0), queue: false, mode: None }) };
     WorldSource::step(&mut sim, &[mv]);
     assert_eq!(sim.weapons.attack_of(EntityId(1)), None);
     assert_eq!(sim.unit(EntityId(1)).unwrap().target, Some(v(-500, 0)));
@@ -229,4 +229,68 @@ fn warp_state_is_in_the_digest_and_survives_a_snapshot() {
     let back = Sim::from_snapshot(&sim.snapshot(), sim.content.clone()).unwrap();
     assert_eq!(back.digest(), sim.digest());
     assert!(back.approach_warp.contains(EntityId(1)));
+}
+
+/// [`db`] with the feature switch `warp_shape` off: warp as every profile without the measured
+/// shape flies it (a speed ramp both ways, straight at warp, braking to turn).
+pub(crate) fn db_ramped(profile: Profile, warp_distance: Option<i32>) -> ContentDb {
+    let base = db(profile, warp_distance);
+    let mut features = base.features().clone();
+    features.warp_shape = false;
+    let mut b = ContentDb::builder().profile(base.profile()).features(features);
+    for w in base.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in base.units() {
+        b = b.unit(u.clone());
+    }
+    b.build().unwrap().with_rules(base.rules().clone())
+}
+
+/// Without `warp_shape`: the rows are derived from the speed ramp.
+#[test]
+fn the_view_carries_warp_rows_for_an_attack_approach_sorted_by_id() {
+    use crate::view::{WarpPhase, WarpRow};
+    let mut sim = sim(db_ramped(Profile::Sta2Classic, Some(1100)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    // Spawned high id first, so the order of the rows is not the order of spawning.
+    let late = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(60, 0), AHEAD).unwrap();
+    let early = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let t = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, 3000), AHEAD).unwrap();
+    assert!(late < early, "ids follow spawning");
+    let order = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![early, late], target: t }) };
+    assert!(sim.view().warp_rows.is_empty(), "nothing warps before the order");
+    let mut seen: Vec<WarpPhase> = Vec::new();
+    let mut mid_ramp: Option<(Sim, WarpRow)> = None;
+    for i in 0..30 * 12 {
+        let view = WorldSource::step(&mut sim, if i == 0 { std::slice::from_ref(&order) } else { &[] }).view;
+        assert!(view.warp_rows.windows(2).all(|w| w[0].id < w[1].id), "sorted by id");
+        let Some(row) = view.warp_of(early).copied() else { continue };
+        assert_eq!(view.warp_of(late).map(|r| r.phase), Some(row.phase), "same course, same phase");
+        // 400 - 140 at 2 x 400 per second, 30 ticks a second: 10 ticks.
+        assert_eq!(row.ramp_len, 10);
+        assert!(row.ramp_start <= view.tick);
+        match row.phase {
+            WarpPhase::Entering => {
+                assert!(view.tick - row.ramp_start <= u64::from(row.ramp_len));
+                if mid_ramp.is_none() && row.ramp_start < view.tick {
+                    mid_ramp = Some((sim.clone(), row));
+                }
+            }
+            WarpPhase::AtWarp => assert_eq!(row.ramp_start, view.tick - u64::from(row.ramp_len)),
+            WarpPhase::Leaving => assert!(view.tick - row.ramp_start <= u64::from(row.ramp_len)),
+        }
+        if seen.last() != Some(&row.phase) {
+            seen.push(row.phase);
+        }
+    }
+    assert_eq!(seen, [WarpPhase::Entering, WarpPhase::AtWarp, WarpPhase::Leaving]);
+    assert!(sim.view().warp_rows.is_empty(), "closing in at combat speed is not warp");
+    // The rows come from the warp record and the speed alone: a snapshot taken
+    // mid-ramp shows the same row, and the view adds nothing to the digest.
+    let (sim, row) = mid_ramp.expect("a ramp in progress was seen");
+    let back = Sim::from_snapshot(&sim.snapshot(), sim.content.clone()).unwrap();
+    assert_eq!(back.view().warp_rows, sim.view().warp_rows);
+    assert_eq!(back.view().warp_of(early), Some(&row));
+    assert_eq!(back.digest(), sim.digest());
 }

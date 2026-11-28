@@ -60,7 +60,7 @@ pub enum Control {
 }
 
 /// Native starting choices, shared by all peers and persisted in replays.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GameOptions {
     pub starting_resources: sta_content::StartingResources,
@@ -69,11 +69,83 @@ pub struct GameOptions {
     /// Armada I's dogfighting mode, agreed at match start.
     #[serde(default)]
     pub directors_cut: bool,
+    /// Armada II's match option "warp allowed" (#1102), agreed at match start. Off, no craft
+    /// warps in this match, whatever a mission script switches: the option, the mission switch
+    /// and the content's warp rule must all allow warp (`Sim::warp_allowed`; that the three are
+    /// separate in the original and combined so: read from the executable, static). It counts
+    /// under the stock Armada II profile only and is ignored under every other one, as
+    /// [`GameOptions::directors_cut`] is outside its game.
+    ///
+    /// On by default. INTERIM, STA64's own: the original's default was not read.
+    #[serde(default = "on")]
+    pub allow_warp: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+impl Default for GameOptions {
+    fn default() -> Self {
+        GameOptions { starting_resources: Default::default(), officer_limit: 0, directors_cut: false, allow_warp: true }
+    }
+}
+
+impl GameOptions {
+    /// Whether a match on `content` has the option "warp allowed" to choose: the stock Armada II
+    /// profile, and content that has warp at all (`Rules::warp_enabled`; where the content
+    /// switches warp off the option could not bring it back, so it is not offered). The set-up
+    /// screens show the control when this is true.
+    ///
+    /// STA64's own: it is offered for a single-player skirmish as for a network match (whether
+    /// the original offers it outside a network match is not established).
+    pub fn warp_offered(content: &sta_content::ContentDb) -> bool {
+        Self::warp_option_counts(content) && content.rules().warp_enabled()
+    }
+
+    /// Whether [`GameOptions::allow_warp`] counts for a match on `content`: the one profile it
+    /// belongs to.
+    pub(crate) fn warp_option_counts(content: &sta_content::ContentDb) -> bool {
+        content.profile() == sta_content::Profile::Sta2Classic
+    }
 }
 
 /// A computer player or a mission: reads views and events, writes commands.
 pub trait Controller: Send {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>);
+
+    /// Hands out the controller's changing state as one versioned, opaque
+    /// record for a save file (ADR 0010 V5), or `None`: this controller
+    /// cannot be saved, and a save of a match it plays is refused with its
+    /// seat named instead of losing its state. The default is `None`.
+    ///
+    /// A controller that opts in must be deterministic given this record:
+    /// restored from it and fed the same views and events, it sends the same
+    /// commands as the uninterrupted controller would have (V5: a loaded
+    /// match continues as an uninterrupted one would). The record holds
+    /// state only, never configuration that is rebuilt from the setup and
+    /// content. Restoring is the owning crate's job: it builds the
+    /// controller and calls [`Controller::restore_state`].
+    fn save_state(&self) -> Option<ControllerState> {
+        None
+    }
+
+    /// Takes back a record made by [`Controller::save_state`]. Refuses (with
+    /// a message naming the reason) a record version it does not read. The
+    /// default refuses everything: a controller that does not save does not
+    /// restore.
+    fn restore_state(&mut self, _state: &ControllerState) -> Result<(), String> {
+        Err("this controller does not restore saved state".to_string())
+    }
+}
+
+/// A controller's state as a save file keeps it: a version of the
+/// controller's own record layout and opaque bytes only that controller
+/// reads.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ControllerState {
+    pub version: u32,
+    pub data: Vec<u8>,
 }
 
 impl Sim {

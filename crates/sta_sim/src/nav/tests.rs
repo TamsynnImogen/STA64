@@ -151,6 +151,7 @@ fn go(sim: &mut Sim, id: EntityId, to: Vec3) {
             units: vec![id],
             to,
             queue: false,
+            mode: None,
         }),
     }]);
 }
@@ -435,6 +436,7 @@ fn a_group_crossing_a_nebula_keeps_out_of_it() {
                 units: vec![id],
                 to: v(-1450 + k as i32 * 100, 5000),
                 queue: false,
+                mode: None,
             }),
         })
         .collect();
@@ -546,6 +548,7 @@ fn a_cold_cache_every_tick_runs_the_same_digests() {
                 units: vec![id],
                 to: v(3000 - k * 500, 5000),
                 queue: false,
+                mode: None,
             }),
         });
     }
@@ -559,13 +562,10 @@ fn a_cold_cache_every_tick_runs_the_same_digests() {
     }
 }
 
-/// The smooth model's craft at rest next to an impassable nebula: the path's
-/// first cells lie within the model's arrival radius, so the aim point is the
-/// first cell beyond it, which a straight line may reach across the nebula's
-/// corner. The craft must still keep out of the nebula itself.
-/// Fleet Operations rules (the smooth model) with a cruiser that has a capital
-/// ship's turn limits and `speed` units per second, and an impassable nebula.
-fn fo4_content(speed: i32) -> Arc<ContentDb> {
+/// The smooth movement model with a heavy cruiser (slow to turn, a wide
+/// "too close to turn" radius, `speed` units per second) and an impassable
+/// nebula. Every number is authored for these tests.
+fn smooth_content(speed: i32) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
     let mut b = ContentDb::builder().profile(sta_content::Profile::Fo4);
     for w in fake.weapons() {
@@ -579,11 +579,11 @@ fn fo4_content(speed: i32) -> Arc<ContentDb> {
             u.movement.combat_speed = Fixed::from_int(speed);
             u.movement.turn_at_rest = Fixed::ONE;
             u.movement.turn_alpha_at_rest = Fixed::ONE;
-            u.movement.forward_accel = Fixed::from_f64(0.45);
-            u.movement.turn_omega = Fixed::from_f64(0.105);
+            u.movement.forward_accel = Fixed::from_f64(0.5);
+            u.movement.turn_omega = Fixed::from_f64(0.125);
             u.movement.turn_alpha = Fixed::from_f64(0.25);
-            u.movement.too_close_to_turn = Fixed::from_int(120);
-            u.movement.path_lead = Fixed::from_int(300);
+            u.movement.too_close_to_turn = Fixed::from_int(128);
+            u.movement.path_lead = Fixed::from_int(256);
         }
         b = b.unit(u);
     }
@@ -591,9 +591,13 @@ fn fo4_content(speed: i32) -> Arc<ContentDb> {
     Arc::new(b.build().unwrap())
 }
 
+/// The smooth model's craft at rest next to an impassable nebula: the path's
+/// first cells lie within the model's arrival radius, so the aim point is the
+/// first cell beyond it, which a straight line may reach across the nebula's
+/// corner. The craft must still keep out of the nebula itself.
 #[test]
 fn a_craft_at_rest_beside_an_impassable_nebula_does_not_cut_its_corner() {
-    let db = fo4_content(135);
+    let db = smooth_content(120);
     let mut sim = sim_with(vec![sphere(RegionKind::Nebula, "fx_wall", 0, 650, 400)], db);
     let ship = put(&mut sim, "fx_cruiser", v(0, 0));
     go(&mut sim, ship, v(0, 3000));
@@ -613,13 +617,13 @@ fn a_craft_at_rest_beside_an_impassable_nebula_does_not_cut_its_corner() {
 /// A slow craft's way round a long wall of blocking fields takes longer than
 /// the stuck-order watch's two minutes standing still, and never gets nearer
 /// the goal on the way: it keeps flying, and the order ends by arrival, not by
-/// the watch (real maps have walls of up to 36 000 units).
+/// the watch.
 #[test]
 fn a_slow_craft_flying_round_a_long_wall_is_not_cut_off() {
     let wall: Vec<Region> = (-10..=10)
-        .map(|i| sphere(RegionKind::AsteroidField, "trigger_blocking", i * 400, 500, 400))
+        .map(|i| sphere(RegionKind::AsteroidField, "fx_rockwall", i * 400, 500, 400))
         .collect();
-    let mut sim = sim_with(wall, fo4_content(30));
+    let mut sim = sim_with(wall, smooth_content(32));
     let ship = put(&mut sim, "fx_cruiser", v(0, 0));
     go(&mut sim, ship, v(0, 1500));
     let mut blocked = 0;

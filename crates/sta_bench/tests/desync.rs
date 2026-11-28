@@ -60,7 +60,7 @@ fn game(extra: Vec<Command>) -> Replay {
         if tick == 30 {
             let unit = sim.view().units.iter().find(|u| u.owner == PlayerId(0)).map(|u| u.id);
             let to = Vec3::from_f32([0.0, 0.0, 300.0]);
-            cmds.push(Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![unit.unwrap()], to, queue: false }) });
+            cmds.push(Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![unit.unwrap()], to, queue: false, mode: None }) });
         }
         if tick == 60 {
             cmds.extend(extra.iter().cloned());

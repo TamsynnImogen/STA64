@@ -85,6 +85,7 @@ fn mv(player: u8, seq: u32, ids: &[EntityId], to: Vec3, queue: bool) -> Command 
             units: ids.to_vec(),
             to,
             queue,
+            mode: None,
         }),
     }
 }

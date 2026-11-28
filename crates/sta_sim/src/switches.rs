@@ -24,7 +24,7 @@
 //! - **HideObject** and **SetSpecialForcesFlag** are two bits of the unit
 //!   (`hidden`, `special_forces`); the engine reads hidden only when drawing and
 //!   special forces in the script order gate, assist and the AI planner.
-//!   `Craft::SetTeam` clears special forces (an ownership change does so here).
+//!   An ownership change clears special forces (read from the executable, static).
 //!   They are read with [`Sim::switches`]; the view carries the special-forces
 //!   units as `AttrsView::special_forces` (derived each tick, LUA-28), which the
 //!   mission bindings and the AI read. The mission bindings send `Edit::SpecialForces`

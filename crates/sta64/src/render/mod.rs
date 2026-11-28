@@ -32,6 +32,7 @@ pub mod reveal;
 pub mod rock;
 pub mod shader_shadow;
 pub mod shadows;
+pub mod shot_director;
 pub mod space;
 pub mod spin;
 pub mod stock;

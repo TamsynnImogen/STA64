@@ -75,7 +75,7 @@ impl Sim {
         self.economy.remove_docks(id);
         self.economy.remove_trade_entity(&mut self.units, id);
         self.production.transfer_research_pods(&mut self.units, id, to);
-        // `Craft::SetTeam` clears the special-forces flag (SIM-58), and the
+        // An ownership change clears the special-forces flag (SIM-58; read from the executable, static), and the
         // craft's scripted order goes with its old owner's.
         self.clear_scripted(PlayerId::SCRIPT, &[id]);
         self.colonies_craft_transferred(id);

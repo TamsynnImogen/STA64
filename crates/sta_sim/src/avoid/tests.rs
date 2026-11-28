@@ -67,6 +67,7 @@ fn go(sim: &mut Sim, owner: u8, ids: &[EntityId], to: Vec3) {
         units: ids.to_vec(),
         to,
         queue: false,
+        mode: None,
     });
     sim.step(&[Command {
         player: PlayerId(owner),
@@ -239,7 +240,7 @@ fn fo4_content() -> Arc<ContentDb> {
 fn field(x: i32, z: i32) -> Region {
     Region {
         kind: RegionKind::AsteroidField,
-        odf: "trigger_blocking".into(),
+        odf: "fx_rockwall".into(),
         shape: RegionShape::Sphere {
             centre: v(x, z),
             radius: Fixed::from_int(400),

@@ -3,10 +3,14 @@
 use bevy::prelude::*;
 use sta_sim::{EntityId, PlayerId};
 
+use super::hover_pick::{Candidate, Sticky, canvas_unit, pick};
 use super::orders::Aim;
 use super::select::{AimState, Targetable, target_seen, unit_under_where};
 use crate::frontend::scene::MenuScene;
-use crate::sim_link::SimLink;
+use crate::render::overlays::{ModelBounds, project_bounds};
+use crate::render::strategic::Strategic;
+use crate::render::units::SelectRadius;
+use crate::sim_link::{SimEntity, SimLink};
 use crate::ui::hud::{HudFeed, HudPointer};
 
 /// The current live map hover, when one is valid.
@@ -70,27 +74,108 @@ pub fn tick_readout(time: Option<Res<Time<Real>>>, hovered: Option<Res<HoveredUn
     readout.tick(dt, unit.map(|(id, _)| id), team);
 }
 
-/// Track the current map hover without changing selection or issuing orders.
+/// What the hover rule reads of an object: its sim id, size, place and (when the model is replaced by a
+/// symbol) its icon.
+pub type HoverUnits<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static SimEntity,
+        &'static SelectRadius,
+        &'static GlobalTransform,
+        Option<&'static Strategic>,
+        Option<&'static ModelBounds>,
+    ),
+>;
+
+/// Whether the content follows the original's hover rule ([`super::hover_pick`]): the stock Armada II profile,
+/// for which it was read from the executable (static), and the profiles that run on the same engine line (the
+/// Fleet Operations family), INTERIM: not read for those, they follow the stock reading. Armada I, STA64's own
+/// content and a mount with no content keep the pick by ray that was there before.
+pub fn follows_original_pick(content: Option<&sta_content::ContentDb>) -> bool {
+    use sta_content::Profile;
+    content.is_some_and(|c| matches!(c.profile(), Profile::Sta2Classic | Profile::Fo3 | Profile::Fo4))
+}
+
+/// Track the current map hover without changing selection or issuing orders. Where the content follows the
+/// original's rule the pick is that rule (nearest projected centre, accepted within a radius or inside the
+/// speed-scaled box, held for a moment on a fast mover over empty space); elsewhere it is the pick by ray as
+/// before.
+#[allow(clippy::too_many_arguments)]
 pub fn track(
     aim: Option<Res<Aim>>,
     pointer: Option<Res<HudPointer>>,
     link: Option<Res<SimLink>>,
     menu_scene: Option<Res<MenuScene>>,
     feed: Option<Res<HudFeed>>,
+    time: Option<Res<Time<Real>>>,
     units: Targetable,
+    rule_units: HoverUnits,
+    mut sticky: Local<Sticky>,
     mut hovered: ResMut<HoveredUnit>,
 ) {
-    let next = resolve(
-        aim.and_then(|a| a.0),
-        pointer.is_some_and(|p| p.0),
-        menu_scene.is_some(),
-        link.as_deref(),
-        feed.as_deref(),
-        &units,
-    );
+    let aim = aim.and_then(|a| a.0);
+    let over_hud = pointer.is_some_and(|p| p.0);
+    let rule = feed.as_deref().is_some_and(|f| follows_original_pick(f.content.as_deref()));
+    let next = if rule {
+        match (can_track(aim, over_hud, menu_scene.is_some(), link.as_deref(), feed.as_deref()), aim, link.as_deref(), feed.as_deref()) {
+            (true, Some(aim), Some(link), Some(feed)) => {
+                let unit_px = canvas_unit(aim.size);
+                let picked = pick(&candidates(&aim, link, feed, &rule_units), aim.cursor, unit_px);
+                let dt = time.map_or(0.0, |t| t.delta_secs());
+                sticky.resolve(dt, picked, |id| eligible(link, feed, id).then(|| link.curr().unit(id).map_or(0.0, |u| u.speed.to_f32())))
+            }
+            _ => {
+                *sticky = Sticky::default();
+                None
+            }
+        }
+    } else {
+        *sticky = Sticky::default();
+        resolve(aim, over_hud, menu_scene.is_some(), link.as_deref(), feed.as_deref(), &units)
+    };
     if hovered.0 != next {
         hovered.0 = next;
     }
+}
+
+/// Whether `id` may be hovered at all: selectable, not dying, in the view and visible to the viewer
+/// (the original's candidate filter: drawn, visible, not being removed, not unpickable).
+fn eligible(link: &SimLink, feed: &HudFeed, id: EntityId) -> bool {
+    link.curr().unit(id).is_some_and(|live| {
+        live.flags.contains(sta_sim::view::UnitFlags::SELECTABLE) && !live.flags.contains(sta_sim::view::UnitFlags::DYING)
+    }) && feed.view.unit(id).is_some()
+        && target_seen(&feed.view, Some(link.player()), id)
+}
+
+/// The eligible objects with their projected centre, bounding-sphere radius and container rectangle.
+fn candidates(aim: &AimState, link: &SimLink, feed: &HudFeed, units: &HoverUnits) -> Vec<Candidate> {
+    // The world direction of screen x, to turn a world radius into pixels at the object's depth.
+    let right = aim.clip_from_world.row(0).truncate().normalize_or_zero();
+    let mut out = Vec::new();
+    for (entity, radius, gt, strategic, bounds) in units {
+        let id = entity.0;
+        if !eligible(link, feed, id) {
+            continue;
+        }
+        let speed = link.curr().unit(id).map_or(0.0, |u| u.speed.to_f32());
+        // A symbol replaces the model: its icon is what is under the pointer.
+        if let Some(s) = strategic.filter(|s| s.symbol) {
+            if s.shown > 0.5 {
+                let half = Vec2::splat(s.size_px * 0.6);
+                out.push(Candidate { id, centre: s.screen, radius: half.x, rect: Rect::from_center_half_size(s.screen, half), speed });
+            }
+            continue;
+        }
+        let centre_world = gt.transform_point(strategic.map_or(Vec3::ZERO, |s| s.centre));
+        let Some(centre) = aim.project(centre_world) else { continue };
+        let radius_px = aim.project(centre_world + right * radius.0).map_or(0.0, |p| p.distance(centre));
+        let model = bounds.copied().unwrap_or_else(|| ModelBounds::fallback(radius.0));
+        let rect = project_bounds(model, gt.to_matrix(), aim.clip_from_world, aim.size)
+            .map_or_else(|| Rect::from_center_half_size(centre, Vec2::splat(radius_px)), |(r, _)| r);
+        out.push(Candidate { id, centre, radius: radius_px, rect, speed });
+    }
+    out
 }
 
 fn resolve(
@@ -124,6 +209,10 @@ fn can_track(
 ) -> bool {
     aim.is_some() && !over_hud && !menu_open && link.is_some() && feed.is_some()
 }
+
+#[cfg(test)]
+#[path = "hover_rule_tests.rs"]
+mod rule_tests;
 
 #[cfg(test)]
 mod tests {

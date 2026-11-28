@@ -24,10 +24,12 @@ pub mod bubble;
 pub mod marker;
 pub mod extras;
 pub mod readout;
+pub mod systems;
 pub use readout::armada2_look;
 #[cfg(test)]
 mod gpu;
 pub use geometry::{GaugeStyle, ModelBounds};
+pub(crate) use geometry::project as project_bounds;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -136,12 +138,13 @@ impl Plugin for OverlaysPlugin {
             .init_resource::<OverlayCounts>()
             .init_resource::<HoverReadout>()
             .init_resource::<readout::BarArt>()
+            .init_resource::<systems::SystemArt>()
             .init_resource::<marker::MarkerArt>()
             .add_plugins(bubble::BubblePlugin)
             .add_systems(Startup, make_assets.run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>))
             .add_systems(
                 Update,
-                (crate::input::hover::tick_readout, marker::load_art, readout::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), extras::sync_extras, count)
+                (crate::input::hover::tick_readout, marker::load_art, readout::load_art, systems::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), extras::sync_extras, systems::sync_icons, count)
                     .chain()
                     .in_set(GameSet::Render)
                     .distributive_run_if(resource_exists::<SimLink>)

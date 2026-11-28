@@ -89,15 +89,25 @@ fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
 #[test]
 fn key_and_data_dir_have_the_vectors_of_the_python_tests() {
     let t = TempDir::new("cli-key");
-    for (name, m, want) in [
-        ("Star Trek Armada II (Stock)", None, "star-trek-armada-ii-stock"),
-        ("Star Trek Armada II", Some("Fleet Ops 4.0"), "star-trek-armada-ii+fleet-ops-4-0"),
-        ("@@@", None, "install"),
+    // LUA-15j: the key is the Python tool's slug, then the hash of the resolved path (the rule of
+    // `sta_core::install_key`, which the game uses too), then the mod; the data folder rule is
+    // still the Python tests' own.
+    for (name, m, slug, tail) in [
+        ("Star Trek Armada II (Stock)", None, "star-trek-armada-ii-stock", ""),
+        ("Star Trek Armada II", Some("Fleet Ops 4.0"), "star-trek-armada-ii", "+fleet-ops-4-0"),
+        ("@@@", None, "install", ""),
     ] {
         let d = t.path().join(name);
         fs::create_dir_all(&d).unwrap();
-        assert_eq!(cli::key(&d, m), want);
+        let hash = sta_core::install_key::path_hash(&d);
+        assert_eq!(cli::key(&d, m), format!("{slug}-{hash}{tail}"));
+        assert_eq!(cli::key(&d, m), sta_core::install_key::key(&d, m), "the converter has no rule of its own");
     }
+    // one folder name in two places: two keys
+    let (a, b) = (t.path().join("a").join("Armada"), t.path().join("b").join("Armada"));
+    fs::create_dir_all(&a).unwrap();
+    fs::create_dir_all(&b).unwrap();
+    assert_ne!(cli::key(&a, None), cli::key(&b, None));
     let get = |pairs: &'static [(&'static str, &'static str)]| {
         move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| (*v).to_owned())
     };
@@ -237,7 +247,8 @@ fn the_default_output_is_below_the_data_directory_by_the_install_key() {
     let env = Env { data_dir: Some(data.clone()), ..Env::default() };
     let r = run_with(&["--install", &s(&root)], &env);
     assert_eq!(r.code, 0, "{}", r.err);
-    let want = data.join("converted").join("star-trek-armada-test");
+    let want = data.join("converted").join(cli::key(&root, None));
+    assert!(want.to_string_lossy().contains("star-trek-armada-test-"), "{}", want.display());
     assert_eq!(r.out[0], format!("converting {} -> {}", s(&cli::realpath(&root)), s(&want)));
     assert_eq!(r.out[1], format!("0 mission scripts in {}", s(&want)));
 }

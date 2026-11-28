@@ -433,7 +433,7 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
             queued
         }
         EntityAction::Order(intent) => match intent {
-            OrderIntent::Move { to, queue } => c.order(id, |units| Order::Move { units, to, queue }),
+            OrderIntent::Move { to, queue } => c.order(id, |units| Order::Move { units, to, queue, mode: None }),
             OrderIntent::Stop => c.order(id, |units| Order::Stop { units }),
             OrderIntent::Attack { target } => match target.id() {
                 Some(target) => c.order(id, |units| Order::Attack { units, target }),

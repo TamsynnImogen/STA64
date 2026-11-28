@@ -126,7 +126,8 @@ impl ProgressProbe {
 fn counts(rt: &crate::runtime::MissionRuntime, field: &str) -> Vec<(String, u32)> {
     let mut v: Vec<(String, u32)> = rt
         .eval(&format!(
-            "local t = {{}} for k, n in pairs(Mission_.{field}) do t[#t + 1] = k .. '\\t' .. tostring(n) end table.sort(t) return t"
+            "{}local t = {{}} for k, n in pairs(Mission_.{field}) do t[#t + 1] = txt(k) .. '\\t' .. txt(n) end table.sort(t) return t",
+            crate::sandbox::HOST_TEXT
         ))
         .map(|l: Vec<String>| {
             l.into_iter().filter_map(|s| s.rsplit_once('\t').map(|(k, n)| (k.to_owned(), n.parse().unwrap_or(0)))).collect()
@@ -151,10 +152,11 @@ fn read(rt: &crate::runtime::MissionRuntime, p: &mut ProgressProbe) {
         .eval("local seen, n = {}, 0 for _, s in ipairs(Mission_.ran) do if not seen[s] then seen[s] = true n = n + 1 end end return n")
         .unwrap_or(0);
     p.problems = rt
-        .eval::<Vec<String>>(
-            "local o = {} for i, q in ipairs(Mission_.problemOrder or {}) do \
-             o[i] = q[1] .. '\\t' .. q[2] .. '\\t' .. tostring(q[3]) .. '\\t' .. tostring(q[4] or ''):gsub('[\\r\\n\\t]+', ' ') end return o",
-        )
+        .eval::<Vec<String>>(&format!(
+            "{}local o = {{}} for i, q in ipairs(Mission_.problemOrder or {{}}) do \
+             o[i] = txt(q[1]) .. '\\t' .. txt(q[2]) .. '\\t' .. txt(q[3]) .. '\\t' .. txt(q[4] or ''):gsub('[\\r\\n\\t]+', ' ') end return o",
+            crate::sandbox::HOST_TEXT
+        ))
         .unwrap_or_default()
         .into_iter()
         .filter_map(|s| {
@@ -170,7 +172,10 @@ fn read(rt: &crate::runtime::MissionRuntime, p: &mut ProgressProbe) {
         .unwrap_or_default();
     p.handles_resolved = rt.eval("return Mission_.resolved or 0").unwrap_or(0);
     p.blocked = rt
-        .eval::<Vec<String>>("local o = {} for r, c in pairs(Mission_.blocked or {}) do o[#o + 1] = r .. '\\t' .. tostring(c) end table.sort(o) return o")
+        .eval::<Vec<String>>(&format!(
+            "{}local o = {{}} for r, c in pairs(Mission_.blocked or {{}}) do o[#o + 1] = txt(r) .. '\\t' .. txt(c) end table.sort(o) return o",
+            crate::sandbox::HOST_TEXT
+        ))
         .unwrap_or_default()
         .into_iter()
         .filter_map(|s| s.split_once('\t').map(|(a, b)| (a.to_owned(), b.to_owned())))

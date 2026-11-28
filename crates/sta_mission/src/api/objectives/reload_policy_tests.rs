@@ -27,7 +27,7 @@ fn files() -> BTreeMap<String, Vec<u8>> {
             b"Empty heading\nNo objectives.\n".to_vec(),
         ),
         ("objectives/malformed.txt", b"Broken heading\n*\n".to_vec()),
-        ("objectives/encoded.txt", vec![0xff]),
+        ("objectives/headless.txt", b"* a goal before any heading\n".to_vec()),
     ]
     .into_iter()
     .map(|(name, bytes)| (name.to_owned(), bytes))
@@ -180,7 +180,7 @@ fn failures_preserve_failed_state_metadata_visibility_and_allocator() {
 
     for path in [
         "malformed.txt",
-        "encoded.txt",
+        "headless.txt",
         "../escape.txt",
         "/absolute.txt",
         "a//b.txt",

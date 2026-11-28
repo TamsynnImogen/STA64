@@ -286,7 +286,7 @@ fn stock_shape(
             !compact || panel.is_some_and(|p| r.x >= p.x && r.y >= p.y && r.right() <= p.right() && r.bottom() <= p.bottom())
         })
     };
-    // ShipDisplay puts a rig's site build on the compact card. A deployment
+    // The native info panel puts a rig's site build on the compact card. A deployment
     // or weld has no queue ID, even when the active skin is Fleet Operations.
     let inline_rig = !armada_one && status.construction_rig
         && status.queue.first().is_none_or(|head| head.queue_id.is_none());

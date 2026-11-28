@@ -170,6 +170,7 @@ fn a1_padded_edges_and_rearm_differ_from_a2_sticky_false() {
             units: vec![entrant],
             to: at(0, 0, 0),
             queue: false,
+            mode: None,
         }),
     };
     assert_eq!(rejected(&sim.step(&[move_in]).events), 0);
@@ -200,6 +201,7 @@ fn a1_padded_edges_and_rearm_differ_from_a2_sticky_false() {
             units: vec![entrant],
             to: at(0, 0, 0),
             queue: false,
+            mode: None,
         }),
     };
     assert_eq!(rejected(&sim.step(&[move_in]).events), 0);

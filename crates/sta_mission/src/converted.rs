@@ -8,8 +8,9 @@
 //! mission the install ships itself always wins and only maps with nothing else gain a
 //! script. The output is derived from game files and never goes into the repository.
 //!
-//! The key rule is mirrored by `tools/convert_install_missions.py`
-//! (`tests::key_rule_matches_the_python_tool` pins the shared vectors).
+//! The key rule lives in [`sta_core::install_key`] and is shared with the Rust converter
+//! (`sta_mission_convert`). `tools/convert_install_missions.py` keeps the earlier rule (the slug
+//! alone) and is superseded.
 
 use std::path::{Path, PathBuf};
 
@@ -18,31 +19,25 @@ pub fn dir_in(data_dir: &Path, install_root: &Path, active_mod: Option<&str>) ->
     data_dir.join("converted").join(key(install_root, active_mod))
 }
 
-/// The folder name of an install (and mod): the install folder's own name and the
-/// mod's name, each lower-cased with every run of other characters as one `-`, joined
-/// by `+`. The path is made absolute first, so `.` names the folder it is.
-pub fn key(install_root: &Path, active_mod: Option<&str>) -> String {
-    let root = install_root.canonicalize().unwrap_or_else(|_| install_root.to_path_buf());
-    let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let mut k = slug(&name);
-    if let Some(m) = active_mod.filter(|m| !m.is_empty()) {
-        k.push('+');
-        k.push_str(&slug(m));
-    }
-    k
+/// `convert-cache/<key>` under the user data dir: the converter's cache for the base game of an
+/// install, next to `converted/<key>`. (A mod's cache is [`cache_dir_for`].)
+pub fn cache_dir_in(data_dir: &Path, install_root: &Path) -> PathBuf {
+    cache_dir_for(data_dir, install_root, None)
 }
 
-fn slug(s: &str) -> String {
-    let mut out = String::new();
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    let t = out.trim_matches('-');
-    if t.is_empty() { "install".to_owned() } else { t.to_owned() }
+/// `convert-cache/<key>` for an install and the active mod: the cache of a conversion of that mod's
+/// missions lies under the key with the mod, as the command line keeps it (#927, D6).
+pub fn cache_dir_for(data_dir: &Path, install_root: &Path, active_mod: Option<&str>) -> PathBuf {
+    data_dir.join("convert-cache").join(key(install_root, active_mod))
+}
+
+/// The folder name of an install (and mod): `<slug of the install folder's name>-<hash of its
+/// resolved path>`, then `+<slug of the mod>`. The rule, with the hash and the normal form of the
+/// path, is [`sta_core::install_key`]: the converter and the client use the same function, so
+/// two installs with one folder name no longer share a folder. A folder made under the earlier
+/// rule (the slug alone) is not found; it is left alone and converted once more.
+pub fn key(install_root: &Path, active_mod: Option<&str>) -> String {
+    sta_core::install_key::key(install_root, active_mod)
 }
 
 /// Mount `dir` (when it holds `missions/`) below everything already in `vfs`; whether it did.
@@ -55,16 +50,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_rule_matches_the_python_tool() {
-        // The same vectors are asserted by tools/test_convert_install_missions.py.
-        for (name, m, want) in [
+    fn key_is_the_slug_the_path_hash_and_the_mod() {
+        for (name, m, slug) in [
             ("Star Trek Armada II (Stock)", None, "star-trek-armada-ii-stock"),
-            ("Star Trek Armada II", Some("Fleet Ops 4.0"), "star-trek-armada-ii+fleet-ops-4-0"),
+            ("Star Trek Armada II", Some("Fleet Ops 4.0"), "star-trek-armada-ii"),
             ("@@@", None, "install"),
         ] {
             let tmp = std::env::temp_dir().join(format!("sta64-key-{}", std::process::id()));
             let root = tmp.join(name);
             std::fs::create_dir_all(&root).unwrap();
+            let hash = sta_core::install_key::path_hash(&root);
+            let want = match m {
+                None => format!("{slug}-{hash}"),
+                Some(_) => format!("{slug}-{hash}+fleet-ops-4-0"),
+            };
             assert_eq!(key(&root, m), want);
             let _ = std::fs::remove_dir_all(&tmp);
         }
@@ -75,8 +74,10 @@ mod tests {
         let d = Path::new("/data/sta64");
         let a = dir_in(d, Path::new("/nonexistent/Armada II"), None);
         let b = dir_in(d, Path::new("/nonexistent/Armada II"), Some("Classic"));
-        assert_eq!(a, Path::new("/data/sta64/converted/armada-ii"));
+        let c = dir_in(d, Path::new("/elsewhere/Armada II"), None);
+        assert_eq!(a, Path::new("/data/sta64/converted").join(key(Path::new("/nonexistent/Armada II"), None)));
         assert_ne!(a, b);
+        assert_ne!(a, c, "one folder name in two places is two folders");
     }
 
     #[test]

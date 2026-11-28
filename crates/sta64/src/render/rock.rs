@@ -152,6 +152,32 @@ pub struct RockParams {
     pub ext: Vec4,
     pub core: Vec4,
     pub spill: Vec4,
+    /// The game's out-of-sight lighting material (#1146, `light.odf`'s `ghost*` keys; read from data): rgb ambient,
+    /// w 1 when all three colours are given (else the mesh tag's factor scales the light).
+    pub ghost_a: Vec4,
+    pub ghost_d: Vec4,
+    pub ghost_s: Vec4,
+}
+
+/// `params` with the out-of-sight lighting keys put in; incomplete or no keys clear them (the mesh tag's factor then
+/// applies).
+pub fn with_ghost_keys(mut p: RockParams, keys: Option<&sta_content::GhostLighting>) -> RockParams {
+    (p.ghost_a, p.ghost_d, p.ghost_s) = (Vec4::ZERO, Vec4::ZERO, Vec4::ZERO);
+    if let Some(sta_content::GhostLighting { ambient: Some(a), diffuse: Some(d), specular: Some(s), .. }) = keys {
+        p.ghost_a = Vec3::from(*a).extend(1.0);
+        p.ghost_d = Vec3::from(*d).extend(0.0);
+        p.ghost_s = Vec3::from(*s).extend(0.0);
+    }
+    p
+}
+
+/// The out-of-sight lighting keys of the mounted layers, kept in `cache` and read again when the mount changed
+/// (another mod or game mounted in the same session must not keep the first one's keys).
+fn ghost_keys(cache: &mut Option<Option<sta_content::GhostLighting>>, mount_changed: bool, vfs: &sta_vfs::Vfs) -> Option<sta_content::GhostLighting> {
+    if mount_changed {
+        *cache = None;
+    }
+    *cache.get_or_insert_with(|| sta_content::GhostLighting::load(vfs, &sta_content::OdfIndex::build(vfs).0).0)
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -237,7 +263,20 @@ fn apply(
     mut shared: ResMut<RockMaterials>,
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
+    mut ghost_keys: Local<Option<Option<sta_content::GhostLighting>>>,
 ) {
+    // A new mount brings its own keys: the cache is dropped and the materials made under the old one are updated.
+    if vfs.is_changed() {
+        *ghost_keys = None;
+        if !shared.0.is_empty() {
+            let keys = self::ghost_keys(&mut ghost_keys, true, &vfs.0);
+            for h in shared.0.values() {
+                if let Some(mut m) = materials.get_mut(h) {
+                    m.params = with_ghost_keys(m.params, keys.as_ref());
+                }
+            }
+        }
+    }
     let stock = nimbus_drawn(profile.as_deref(), effects.as_deref());
     if stock {
         return;
@@ -266,6 +305,9 @@ fn apply(
             spill: Vec4::new(1.0, CRACK_CORE, if cut { CRACK_DEPTH } else { 0.0 }, CRACK_FALLOFF),
             ..default()
         };
+        // The game's out-of-sight lighting, read once from the mounted layers (#1146).
+        let keys = self::ghost_keys(&mut ghost_keys, false, &vfs.0);
+        let params = with_ghost_keys(params, keys.as_ref());
         let m = materials.add(RockMaterial {
             params,
             albedo: Some(b.albedo.clone()),
@@ -541,6 +583,53 @@ mod tests {
         app.update();
         app.update();
         assert!(app.world().resource::<ModifiedCount>().0 > 0, "a light change should still rewrite the materials");
+    }
+
+    /// #1146: the out-of-sight lighting keys go into the rock material only when all three colours are given;
+    /// without them the shader falls back on the mesh tag's factor.
+    #[test]
+    fn the_ghost_keys_go_into_the_material_only_when_all_three_colours_are_given() {
+        use sta_content::GhostLighting;
+        let full = GhostLighting { ambient: Some([0.25, 0.5, 0.75]), diffuse: Some([1.0, 2.0, 3.0]), specular: Some([4.0, 5.0, 6.0]), team_factor: Some(0.5) };
+        let p = with_ghost_keys(RockParams::default(), Some(&full));
+        assert_eq!((p.ghost_a, p.ghost_d.truncate(), p.ghost_s.truncate()), (Vec4::new(0.25, 0.5, 0.75, 1.0), Vec3::new(1.0, 2.0, 3.0), Vec3::new(4.0, 5.0, 6.0)));
+        let partial = GhostLighting { specular: None, ..full };
+        for keys in [Some(&partial), None] {
+            let p = with_ghost_keys(RockParams::default(), keys);
+            assert_eq!((p.ghost_a, p.ghost_d, p.ghost_s), (Vec4::ZERO, Vec4::ZERO, Vec4::ZERO), "{keys:?}: the factor of the tag applies");
+        }
+    }
+
+    /// #1146 (review D1): the keys are read again when the mount changes, so a mod or game mounted later in the same
+    /// session does not keep the first one's keys (or their absence); an unchanged mount reads nothing again.
+    #[test]
+    fn the_ghost_keys_are_read_again_when_the_mount_changes() {
+        use sta_content::GhostLighting;
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/scratch/ghost-keys-remount");
+        let mount = |name: &str, light: Option<&str>| {
+            let root = base.join(name);
+            let dir = root.join("odf/other");
+            std::fs::create_dir_all(&dir).unwrap();
+            if let Some(text) = light {
+                std::fs::write(dir.join("light.odf"), text).unwrap();
+            }
+            std::fs::write(dir.join("keep.odf"), "x = 1\n").unwrap();
+            let mut vfs = sta_vfs::Vfs::default();
+            vfs.push_dir(name.into(), root).unwrap();
+            vfs
+        };
+        let first = mount("first", Some("ghostAmbient = 0.25 0.25 0.25\nghostDiffuse = 0.5 0.5 0.5\nghostSpecular = 0 0 0\n"));
+        let second = mount("second", Some("ghostAmbient = 0.75 0.75 0.75\nghostDiffuse = 1 1 1\nghostSpecular = 0 0 0\n"));
+        let none = mount("none", None);
+        let mut cache: Option<Option<GhostLighting>> = None;
+        let a = ghost_keys(&mut cache, true, &first).expect("the first mount's keys");
+        assert_eq!(a.ambient, Some([0.25; 3]));
+        // The same mount, not changed: the cache answers (a second mount given here is not looked at).
+        assert_eq!(ghost_keys(&mut cache, false, &second), Some(a));
+        // A new mount: its own keys, and then none at all for a mount without the file.
+        assert_eq!(ghost_keys(&mut cache, true, &second).unwrap().ambient, Some([0.75; 3]));
+        assert_eq!(ghost_keys(&mut cache, true, &none), None);
+        assert_eq!(ghost_keys(&mut cache, false, &first), None, "and that is kept until the mount changes again");
     }
 
     #[test]

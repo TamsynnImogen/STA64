@@ -27,6 +27,15 @@ fn game(profile: Profile) -> (Sim, Arc<sta_content::ContentDb>) {
     (sim, db)
 }
 
+/// [`game`] for stock Armada II content with the feature switch `warp_shape` off: the warp of
+/// the profiles that do not have the measured shape (a craft at warp flies straight and brakes
+/// to turn).
+fn game_ramped() -> (Sim, Arc<sta_content::ContentDb>) {
+    let sim = approach_tests::sim(approach_tests::db_ramped(Profile::Sta2Classic, Some(1100)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    (sim, db)
+}
+
 /// [`game`] on a map of this half-size (the map's bounds, as a real game has them).
 fn game_on(half: i32) -> (Sim, Arc<sta_content::ContentDb>) {
     use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -223,7 +232,7 @@ fn a_warp_move_warps_on_a_long_leg_a_plain_move_does_not() {
         let o = if warp {
             Order::MoveWarp { units: vec![s], to: v(0, 6000), queue: false }
         } else {
-            Order::Move { units: vec![s], to: v(0, 6000), queue: false }
+            Order::Move { units: vec![s], to: v(0, 6000), queue: false, mode: None }
         };
         let mut best = Fixed::ZERO;
         for i in 0..(20 * HZ) {
@@ -244,7 +253,7 @@ fn a_warp_move_warps_on_a_long_leg_a_plain_move_does_not() {
 fn a_warp_move_drops_out_before_turning_and_reenters_once_when_aligned() {
     use crate::movement::approach::{IN_WARP, WARP_OUT, warp_leg};
 
-    let (mut sim, db) = game(Profile::Sta2Classic);
+    let (mut sim, db) = game_ramped();
     let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let move_warp = |seq, to| order(1, seq, Order::MoveWarp { units: vec![ship], to, queue: false });
     run(&mut sim, vec![move_warp(0, v(0, 5000))], 4 * HZ);
@@ -298,7 +307,7 @@ fn a_warp_move_brakes_when_avoidance_plans_a_turn() {
     use crate::movement::approach::{IN_WARP, WARP_OUT};
     use sta_content::{Region, RegionKind, RegionShape};
 
-    let (mut sim, db) = game(Profile::Sta2Classic);
+    let (mut sim, db) = game_ramped();
     let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let goal = v(0, 6000);
     let start = order(1, 0, Order::MoveWarp { units: vec![ship], to: goal, queue: false });
@@ -373,7 +382,7 @@ fn switch_edits_store_apply_and_survive_a_snapshot() {
     let loaded = Sim::from_snapshot(&sim.snapshot(), Some(db)).unwrap();
     assert_eq!(loaded.switches(s), sim.switches(s));
     assert_eq!(loaded.digest(), sim.digest());
-    // A change of owner clears the special-forces flag (`Craft::SetTeam`).
+    // A change of owner clears the special-forces flag.
     run(&mut sim, vec![edit(9, Edit::Team(s, PlayerId(2)))], 1);
     assert!(!sim.switches(s).unwrap().special_forces && sim.switches(s).unwrap().hidden);
     // Players may not edit.
@@ -403,11 +412,11 @@ fn another_players_order_cannot_cancel_a_scripted_order_and_assist_skips_scripte
     let s = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     run(&mut sim, vec![order(1, 0, Order::Scout { units: vec![s] })], 2);
     // Seat 2 orders seat 1's craft: refused, the scout keeps its order.
-    run(&mut sim, vec![order(2, 0, Order::Stop { units: vec![s] }), order(2, 1, Order::Move { units: vec![s], to: v(5, 5), queue: false })], 2);
+    run(&mut sim, vec![order(2, 0, Order::Stop { units: vec![s] }), order(2, 1, Order::Move { units: vec![s], to: v(5, 5), queue: false, mode: None })], 2);
     assert!(matches!(sim.scripted.job(s), Some(crate::orders::Job::Scout { .. })));
     // A queued move replaces a patrol.
     run(&mut sim, vec![order(1, 1, Order::Patrol { units: vec![s], points: vec![v(0, 300), v(300, 0)] })], 2);
-    run(&mut sim, vec![order(1, 2, Order::Move { units: vec![s], to: v(5, 5), queue: true })], 1);
+    run(&mut sim, vec![order(1, 2, Order::Move { units: vec![s], to: v(5, 5), queue: true, mode: None })], 1);
     assert!(sim.scripted.job(s).is_none());
     // An empty path changes nothing.
     run(&mut sim, vec![order(1, 3, Order::Scout { units: vec![s] })], 1);
@@ -451,7 +460,7 @@ mod auto_warp {
         let to = v(0, dist);
         let (mut top, mut arrived) = (Fixed::ZERO, None);
         for i in 0..secs * HZ {
-            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false })] } else { vec![] });
+            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false, mode: None })] } else { vec![] });
             top = top.max(sim.unit(s).unwrap().speed);
             if arrived.is_none() && flat(pos(&sim, s), to) < n(60) {
                 arrived = Some(i);
@@ -483,7 +492,7 @@ mod auto_warp {
         let (mut sim, s) = scout_game(true);
         let to = v(1500, 3000); // about 27 degrees off the bow
         for i in 0..80 * HZ {
-            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false })] } else { vec![] });
+            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false, mode: None })] } else { vec![] });
         }
         assert!(flat(pos(&sim, s), to) < n(80), "{:?}", flat(pos(&sim, s), to));
         assert!(sim.scripted.job(s).is_none(), "warp job outlives the move");
@@ -492,7 +501,7 @@ mod auto_warp {
     #[test]
     fn a_new_order_ends_the_warp_and_a_snapshot_keeps_it() {
         let (mut sim, s) = scout_game(true);
-        let cmd = order(1, 0, Order::Move { units: vec![s], to: v(0, 3000), queue: false });
+        let cmd = order(1, 0, Order::Move { units: vec![s], to: v(0, 3000), queue: false, mode: None });
         for i in 0..10 * HZ {
             WorldSource::step(&mut sim, &if i == 0 { vec![cmd.clone()] } else { vec![] });
         }
@@ -507,4 +516,121 @@ mod auto_warp {
         run(&mut sim, vec![order(1, 1, Order::Stop { units: vec![s] })], 30 * HZ);
         assert!(sim.unit(s).unwrap().speed < n(1));
     }
+}
+
+/// The legs a craft still has: its current target, then its queued legs.
+fn legs(sim: &Sim, id: EntityId) -> Vec<Vec3> {
+    let mut out: Vec<Vec3> = sim.unit(id).and_then(|u| u.target).into_iter().collect();
+    out.extend(sim.movement.course(id).map(|c| c.waypoints.clone()).unwrap_or_default());
+    out
+}
+
+/// #1173: a queued warp move is appended; only an unqueued one replaces the course.
+#[test]
+fn a_queued_warp_move_keeps_the_earlier_legs_and_appends() {
+    let (mut sim, db) = game(Profile::Sta2Classic);
+    let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let warp = |seq, to, queue| order(1, seq, Order::MoveWarp { units: vec![ship], to, queue });
+    let (a, b, c) = (v(0, 5000), v(3000, 5000), v(3000, 0));
+
+    // An idle craft starts for a queued leg at once.
+    sim.step(&[warp(0, a, true)]);
+    assert_eq!(legs(&sim, ship), [a]);
+    assert!(sim.scripted.is_warp(ship));
+
+    // Under way: each queued warp move is added behind what is there.
+    run(&mut sim, vec![warp(1, b, true)], HZ);
+    assert_eq!(legs(&sim, ship), [a, b], "the first leg is kept");
+    run(&mut sim, vec![warp(2, c, true)], HZ);
+    assert_eq!(legs(&sim, ship), [a, b, c]);
+
+    // The craft flies them in order, warping on the way, and ends at the last.
+    let impulse = sim.unit(ship).unwrap().stats.max_speed;
+    let (mut reached, mut warped) = (Vec::new(), false);
+    for _ in 0..180 * HZ {
+        let before = legs(&sim, ship);
+        sim.step(&[]);
+        let now = legs(&sim, ship);
+        if now.len() < before.len() {
+            reached.push(before[0]);
+        }
+        let unit = sim.unit(ship).unwrap();
+        warped |= unit.speed > impulse;
+        if now.is_empty() && unit.speed == Fixed::ZERO {
+            break;
+        }
+    }
+    assert_eq!(reached, [a, b, c], "the legs in the order they were given");
+    assert!(warped, "the course was flown at warp");
+    let end = sim.unit(ship).unwrap().pos;
+    assert!((end.x - c.x).abs() < n(150) && (end.z - c.z).abs() < n(150), "ended at {end:?}");
+    assert!(!sim.scripted.is_warp(ship), "the warp move is over with its last leg");
+
+    // Not queued: the course is replaced, as before.
+    run(&mut sim, vec![warp(3, a, false)], HZ);
+    run(&mut sim, vec![warp(4, b, true)], 1);
+    assert_eq!(legs(&sim, ship), [a, b]);
+    sim.step(&[warp(5, c, false)]);
+    assert_eq!(legs(&sim, ship), [c], "an unqueued warp move drops the queued legs");
+}
+
+/// A queued warp move cancels nothing: a plain move under way keeps its leg and gets the new
+/// one behind it, and the craft's whole course is a warp course from then on.
+#[test]
+fn a_queued_warp_move_behind_a_plain_move_keeps_that_move() {
+    let (mut sim, db) = game(Profile::Sta2Classic);
+    let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let (a, b) = (v(0, 5000), v(3000, 5000));
+    run(&mut sim, vec![order(1, 0, Order::Move { units: vec![ship], to: a, queue: false, mode: None })], HZ);
+    assert!(!sim.scripted.is_warp(ship));
+    sim.step(&[order(1, 1, Order::MoveWarp { units: vec![ship], to: b, queue: true })]);
+    assert_eq!(legs(&sim, ship), [a, b]);
+    assert!(sim.scripted.is_warp(ship));
+}
+
+/// A game with queued warp moves replays to the same state.
+#[test]
+fn a_replay_with_queued_warp_moves_is_stable() {
+    use crate::replay::{Recorder, Replay};
+    use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
+
+    let db = Arc::new(approach_tests::db(Profile::Sta2Classic, Some(1100)));
+    let seat = |id| PlayerSetup { id: PlayerId(id), team: sta_core::TeamId(id), race: "st".into(), control: Control::Idle };
+    let setup = GameSetup { seed: 5, map: Arc::new(sta_content::MapDef::empty()), content: Arc::clone(&db), players: vec![seat(1), seat(2)], options: GameOptions::default() };
+    let mut recorder = Recorder::with_interval(&setup, 1);
+    recorder.step(&[edit(0, Edit::Spawn { odf: db.key("st_seer").unwrap(), player: PlayerId(1), pos: v(0, 0), heading: AHEAD })]);
+    let ship = recorder.sim().units.iter().next().unwrap().id;
+    let warp = |seq, to, queue| order(1, seq, Order::MoveWarp { units: vec![ship], to, queue });
+    let (a, b, c) = (v(0, 5000), v(3000, 5000), v(3000, 0));
+    recorder.step(&[warp(0, a, false)]);
+    for (i, to) in [b, c].into_iter().enumerate() {
+        for _ in 0..HZ {
+            recorder.step(&[]);
+        }
+        recorder.step(&[warp(1 + i as u32, to, true)]);
+    }
+    assert_eq!(legs(recorder.sim(), ship), [a, b, c]);
+    for _ in 0..20 * HZ {
+        recorder.step(&[]);
+    }
+    let (digest, left) = (recorder.sim().digest(), legs(recorder.sim(), ship));
+    assert!(!left.is_empty() && left.len() < 3, "recorded mid-course: {left:?}");
+    let played = Replay::decode(&recorder.finish().encode()).unwrap().play(db).unwrap();
+    assert_eq!(played.digest(), digest);
+    assert_eq!(legs(&played, ship), left);
+}
+
+/// The stuck-order watch starts afresh with a queued warp move, as with every re-issued order:
+/// what it counted on the leg before is dropped.
+#[test]
+fn a_queued_warp_move_restarts_the_stuck_order_watch() {
+    let (mut sim, db) = game(Profile::Sta2Classic);
+    let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let born = |sim: &Sim| sim.watchdog.to_rec().into_iter().find(|(id, _)| *id == ship).map(|(_, row)| row.born);
+    run(&mut sim, vec![order(1, 0, Order::Move { units: vec![ship], to: v(0, 5000), queue: false, mode: None })], 2 * HZ);
+    let first = born(&sim).expect("a moving craft is watched");
+    let ordered_at = sim.tick;
+    assert!(first < ordered_at);
+    sim.step(&[order(1, 1, Order::MoveWarp { units: vec![ship], to: v(3000, 5000), queue: true })]);
+    assert!(born(&sim).is_none_or(|b| b >= ordered_at), "the row of the leg before is gone: {:?}", born(&sim));
 }

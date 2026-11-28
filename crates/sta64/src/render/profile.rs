@@ -101,6 +101,22 @@ pub enum Effect {
     /// [`Effect::Impacts`], which also covers hull sparks, explosions and smoke and is never registered as
     /// stock: under Stock the Refit shield shell is not drawn, everything else `Impacts` draws still is.
     ShieldHits,
+    /// The explosion of a destroyed unit or building (#1153): the sprite-cluster fireball and the shockwave ring
+    /// (`fx/stock_explosions.rs`). Finer than [`Effect::Impacts`], which is never registered as stock: under Stock the
+    /// Refit fireball, ring, blast sparks and debris are not drawn for a unit whose definition resolves; the hull
+    /// sparks, the smoke and the shield shell keep their own rules.
+    Explosions,
+    /// What a weapon hit on a bare hull and a dying hull draw (#1153): one node-particle spark at the hit, and sparks
+    /// during the dying phase (`fx/stock_hull_hits.rs`). Finer than [`Effect::Impacts`]: under Stock the Refit hull-hit
+    /// streaks are not drawn.
+    HullHits,
+    /// STA64's own hull-damage smoke (`fx/impacts.rs`). Its thresholds are STA64's own; the original's damage look
+    /// is the model's damage nodes, which STA64 already draws (D-02): registering a stock implementation switches it off under the Stock look; Refit keeps it.
+    DamageSmoke,
+    /// What a craft shows entering, flying and leaving warp (#1154, `fx/warp_flash.rs`). Finer than [`Effect::Specials`],
+    /// which is never registered as stock: under Stock there is no exit pulse and the hull's stretch follows the
+    /// stored ramp of the view's warp row; the Refit look keeps the pulse and the speed-driven stretch.
+    Warp,
 }
 
 /// What stays in the repository under Refit: each effect, its package, and the
@@ -119,6 +135,14 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::Shots, "RND-09", &[]),
     // The Refit look of a shield hit is `Effect::Impacts`' shell (`fx/shield.wesl`); `ShieldHits` adds the stock one.
     (Effect::ShieldHits, "RND-10", &[]),
+    // The Refit look of an explosion is `Effect::Impacts`' fireball and ring (`fx/fire.wesl`); `Explosions` adds the stock one.
+    (Effect::Explosions, "RND-10", &[]),
+    // The Refit look of a hull hit is `Effect::Impacts`' streaks; `HullHits` adds the stock spark.
+    (Effect::HullHits, "RND-10", &[]),
+    // The damage smoke is Refit-only (STA64's own): the stock implementation is none.
+    (Effect::DamageSmoke, "RND-10", &[]),
+    // The Refit look of warp is `Effect::Specials`' (pulse, speed-driven stretch); `Warp` adds the stock one.
+    (Effect::Warp, "RND-11", &[]),
 ];
 
 /// Original, profile-independent presentation shaders. These are available

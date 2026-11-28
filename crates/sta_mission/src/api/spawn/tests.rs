@@ -132,7 +132,8 @@ fn two_pending_handles_resolve_before_callback_and_deferred_orders_replay() {
         CommandKind::Order(Order::Move {
             units: vec![ids[0]],
             to: Vec3::from_f32([1100.0, 0.0, 0.0]),
-            queue: false
+            queue: false,
+            mode: None
         })
     );
     assert_eq!(

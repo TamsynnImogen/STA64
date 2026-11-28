@@ -505,6 +505,7 @@ impl Sim {
                     units: vec![ship.id],
                     to,
                     queue: false,
+                    mode: None,
                 }),
             });
         }

@@ -49,7 +49,7 @@ fn rejected(events: &[SimEvent]) -> usize {
 }
 
 fn go(sim: &mut Sim, id: EntityId, to: Vec3) {
-    let c = Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![id], to, queue: false }) };
+    let c = Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![id], to, queue: false, mode: None }) };
     assert_eq!(rejected(&sim.step(&[c]).events), 0);
 }
 

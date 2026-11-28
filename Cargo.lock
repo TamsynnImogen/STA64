@@ -4132,8 +4132,6 @@ dependencies = [
 [[package]]
 name = "lua-src"
 version = "551.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d400ffef0e3d4d29287092bdc5a276d0bf468b2c69709d5bab0d469312d9f947"
 dependencies = [
  "cc",
 ]
@@ -5734,6 +5732,7 @@ dependencies = [
  "sta_core",
  "sta_media",
  "sta_mission",
+ "sta_mission_convert",
  "sta_net",
  "sta_odf",
  "sta_sim",
@@ -5855,6 +5854,7 @@ dependencies = [
  "sta_bzn",
  "sta_content",
  "sta_core",
+ "sta_mission_convert",
  "sta_odf",
  "sta_sim",
  "sta_vfs",
@@ -5867,6 +5867,8 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "sha2",
+ "sta_core",
+ "sta_vfs",
  "thiserror 2.0.21",
 ]
 

@@ -1751,6 +1751,14 @@ pub fn on_buttons(
                 }
             }
             MpAct::ToggleDirectorsCut => {}
+            MpAct::ToggleWarp if sta_sim::setup::GameOptions::warp_offered(&data.content) => {
+                if let Some(s) = mp.session.as_mut() && s.is_host() && matches!(s.phase, Phase::Open) {
+                    let mut o = s.view().options;
+                    o.allow_warp = !o.allow_warp;
+                    s.set_options(o);
+                }
+            }
+            MpAct::ToggleWarp => {}
         }
     }
 }

@@ -666,7 +666,7 @@ fn build_install(mut commands: Commands, active: Res<ActiveMatch>, launch: Res<M
 
 /// A flow over an install's campaign: card `card`, its first mission, `ticks` ticks of it.
 /// Returns what the script did: (objectives in the view, the script's errors).
-fn play_install(vfs: sta_vfs::Vfs, campaigns: Campaigns, card: usize, ticks: u64) -> (ObjectivesView, Vec<String>, Vec<(String, u32)>, String) {
+pub(super) fn play_install(vfs: sta_vfs::Vfs, campaigns: Campaigns, card: usize, ticks: u64) -> (ObjectivesView, Vec<String>, Vec<(String, u32)>, String) {
     let mut app = base(campaigns);
     app.insert_resource(crate::viewer::Mounted(vfs))
         .init_resource::<crate::map::Catalogue>()
@@ -680,7 +680,7 @@ fn play_install(vfs: sta_vfs::Vfs, campaigns: Campaigns, card: usize, ticks: u64
     (view, errors, unsupported, title)
 }
 
-fn first_card_of(cs: &Campaigns) -> usize {
+pub(super) fn first_card_of(cs: &Campaigns) -> usize {
     cs.book.campaigns.iter().position(|c| cs.state(&c.id, 0) == crate::frontend::campaign::MissionState::Ready).expect("a campaign whose first mission can start")
 }
 
@@ -774,15 +774,17 @@ fn install_gated_roots_politics_by_other_means_plays_its_intro_and_never_holds_t
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// With `STA64_TEST_A2_STOCK_INSTALL` and `STA64_TEST_A2_CONVERTED` (the `--out` folder of
-/// `tools/dsl_to_lua.py`): an Armada II campaign mission from the locally converted missions,
-/// mounted as the top layer, starts from the screen flow and runs 300 ticks.
+/// With `STA64_TEST_A2_STOCK_INSTALL`: an Armada II campaign mission from the missions the in-game
+/// conversion made in a temporary data folder, mounted as the top layer, starts from the screen
+/// flow and runs 300 ticks.
 #[test]
 fn install_gated_a2_converted_mission_starts_from_the_screens_and_runs() {
-    let (Ok(root), Ok(conv)) = (std::env::var("STA64_TEST_A2_STOCK_INSTALL"), std::env::var("STA64_TEST_A2_CONVERTED")) else {
-        eprintln!("SKIP: set STA64_TEST_A2_STOCK_INSTALL and STA64_TEST_A2_CONVERTED (a dsl_to_lua.py output folder) for the converted-mission start");
+    let Ok(root) = std::env::var("STA64_TEST_A2_STOCK_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A2_STOCK_INSTALL for the converted-mission start");
         return;
     };
+    let data = temp_dir("a2conv");
+    let conv = super::convert_e2e_tests::hook_convert(Path::new(&root), &data).0;
     let mount = || {
         let mut v = sta_vfs::Vfs::mount_install(Path::new(&root), None).expect("mounts");
         v.push_dir("converted".into(), Path::new(&conv).to_path_buf()).expect("overlay");
@@ -805,6 +807,7 @@ fn install_gated_a2_converted_mission_starts_from_the_screens_and_runs() {
     eprintln!("a2: {title}: objectives {:?} / {:?}; {} script errors {:?}; unsupported {:?}", view.title, view.items.len(), errors.len(), errors.iter().take(3).collect::<Vec<_>>(), unsupported.iter().take(8).collect::<Vec<_>>());
     assert!(!unsupported.iter().any(|(k, _)| k == "Player.loadAIP"), "plan loads reach the seats: {unsupported:?}");
     std::fs::remove_dir_all(dir).unwrap();
+    let _ = std::fs::remove_dir_all(data);
 }
 
 /// Synthetic (no game files): a mounted conversion makes the missions the install has no
@@ -859,10 +862,10 @@ fn a_converted_folder_makes_scriptless_missions_startable_and_experimental() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-/// With `STA64_TEST_A2_STOCK_INSTALL` (needs `python3` and `objdump`): the stock Armada II
-/// campaign lists as startable after `tools/convert_install_missions.py`, loaded the way the
-/// game does (`load_campaigns_with` over the user data layout), and the first mission of each
-/// campaign starts from the screen flow and runs 300 ticks.
+/// With `STA64_TEST_A2_STOCK_INSTALL`: the stock Armada II campaign lists as startable after the
+/// in-game conversion (the hook, into a temporary data folder), loaded the way the game does
+/// (`load_campaigns_with` over the user data layout), and the first mission of each campaign starts
+/// from the screen flow and runs 300 ticks.
 #[test]
 fn install_gated_stock_a2_campaign_is_startable_after_conversion() {
     let Ok(root) = std::env::var("STA64_TEST_A2_STOCK_INSTALL") else {
@@ -871,10 +874,7 @@ fn install_gated_stock_a2_campaign_is_startable_after_conversion() {
     };
     let root = Path::new(&root);
     let data = temp_dir("stockdata");
-    let tool = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/convert_install_missions.py");
-    let run = std::process::Command::new("python3").arg("-I").arg(tool).arg("--install").arg(root).env("STA64_DATA_DIR", &data).output().expect("run the converter");
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-    let conv = sta_mission::converted::dir_in(&data, root, None);
+    let conv = super::convert_e2e_tests::hook_convert(root, &data).0;
 
     let dir = temp_dir("stockmenu");
     let load = || {
@@ -900,8 +900,8 @@ fn install_gated_stock_a2_campaign_is_startable_after_conversion() {
     let _ = std::fs::remove_dir_all(&data);
 }
 
-/// With `STA64_TEST_A1_INSTALL` (needs `python3` and `objdump`): Armada I mission 1 (`fed1`),
-/// converted the way the game's converter does it, starts from the screens; its opening
+/// With `STA64_TEST_A1_INSTALL`: Armada I mission 1 (`fed1`), converted by the in-game conversion
+/// (the hook, into a temporary data folder), starts from the screens; its opening
 /// cineractive takes the camera, plays its shots and ends by the script's own rule once
 /// `isCineractiveDone` reads 1 (UI-36), and the camera is the player's again.
 #[test]
@@ -912,10 +912,7 @@ fn install_gated_a1_fed1_leaves_its_opening_cineractive_and_gives_the_camera_bac
     };
     let root = Path::new(&root);
     let data = temp_dir("a1data");
-    let tool = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/convert_install_missions.py");
-    let run = std::process::Command::new("python3").arg("-I").arg(tool).arg("--install").arg(root).env("STA64_DATA_DIR", &data).output().expect("run the converter");
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-    let conv = sta_mission::converted::dir_in(&data, root, None);
+    let conv = super::convert_e2e_tests::hook_convert(root, &data).0;
     let dir = temp_dir("a1menu");
     let vfs = sta_vfs::Vfs::mount_install(root, None).expect("mounts");
     let (cs, _) = load_campaigns_with(&vfs, Some(root), None, Some(&conv), |b| crate::frontend::campaign::ProgressStore::in_dir(&dir, b)).expect("A1 campaigns");

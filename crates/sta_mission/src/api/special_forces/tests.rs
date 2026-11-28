@@ -211,7 +211,7 @@ fn the_flag_is_cleared_by_a_team_change_and_the_owner_can_still_order_a_flagged_
     s.sim.step(&[flag]);
     assert!(s.sim.view().is_special_forces(s.ids[0]));
     // The player's own order is not gated by the flag.
-    let mv = Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![s.ids[0]], to: Vec3::from_f32([50.0, 0.0, 0.0]), queue: false }) };
+    let mv = Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![s.ids[0]], to: Vec3::from_f32([50.0, 0.0, 0.0]), queue: false, mode: None }) };
     let out = s.sim.step(&[mv]);
     assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
     // A team change clears it (the original's SetTeam does).

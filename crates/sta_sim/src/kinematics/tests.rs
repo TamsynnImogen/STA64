@@ -1,6 +1,7 @@
-//! The movement models on their own (SIM-15). Physics values are the stock
-//! and Fleet Operations 4.0 ODFs' own; the bench `move-*` scenarios run the
-//! same craft through the whole sim.
+//! The movement models on their own (SIM-15). The craft are invented: round
+//! numbers of a heavy craft that cannot turn at rest and a light one that
+//! can, chosen to exercise the same code paths. They are no unit's or
+//! game's data.
 
 use super::*;
 use crate::world::{Entity, EntityKind};
@@ -19,31 +20,33 @@ fn f(x: f64) -> Fixed {
     Fixed::from_f64(x)
 }
 
-/// Stock `sbattphys.odf` (the battleship).
-fn stock_battleship() -> MoveStats {
+/// Invented heavy craft: no turn acceleration at rest (it pulls away before it
+/// turns), a high speed acceleration and a short turn-in distance.
+fn heavy_craft() -> MoveStats {
     MoveStats {
-        combat_speed: f(40.0),
+        combat_speed: f(50.0),
         turn_alpha_at_rest: Fixed::ZERO,
-        too_close_to_turn: f(50.0),
-        path_lead: f(150.0),
-        turn_control_angle: f(30.0),
+        too_close_to_turn: f(60.0),
+        path_lead: f(200.0),
+        turn_control_angle: f(35.0),
         turn_control_squared: false,
-        forward_control_distance: f(100.0),
-        ..MoveStats::from_f32(80.0, 3.0, 1.0, 1.0, 0.0)
+        forward_control_distance: f(120.0),
+        ..MoveStats::from_f32(90.0, 2.0, 0.9, 1.0, 0.0)
     }
 }
 
-/// Fleet Operations 4.0 `smooth_physics_100.odf` (Galaxy class).
-fn fo_100() -> MoveStats {
+/// Invented light craft: turns at once at rest, accelerates slowly, long
+/// path lead.
+fn light_craft() -> MoveStats {
     MoveStats {
-        combat_speed: f(120.0),
+        combat_speed: f(100.0),
         turn_alpha_at_rest: Fixed::ONE,
-        too_close_to_turn: f(100.0),
-        path_lead: f(400.0),
-        turn_control_angle: f(20.0),
+        too_close_to_turn: f(90.0),
+        path_lead: f(350.0),
+        turn_control_angle: f(25.0),
         turn_control_squared: false,
-        forward_control_distance: f(70.0),
-        ..MoveStats::from_f32(120.0, 0.2, 0.145, 0.24, 1.0)
+        forward_control_distance: f(80.0),
+        ..MoveStats::from_f32(100.0, 0.25, 0.15, 0.25, 1.0)
     }
 }
 
@@ -126,11 +129,13 @@ fn position_controller_settles() {
     assert!(worst > f(-0.002), "overshoot {}", worst.to_f32());
 }
 
-/// Acceleration is `1.3 combatSpeed forwardAccel`: stock battleship
-/// 156 u/s^2 (cruise in about half a second), FO 31.2 u/s^2 (about 3.85 s).
+/// Acceleration is `1.3 combatSpeed forwardAccel`: the heavy craft 130 u/s^2
+/// (cruise 90 in about 0.7 s), the light one 32.5 u/s^2 (cruise 100 in about
+/// 3.1 s). The tick counts follow from those numbers at 30 ticks a second.
 #[test]
 fn acceleration_scales_with_combat_speed() {
-    for (stats, ticks) in [(stock_battleship(), 16), (fo_100(), 116)] {
+    for (stats, accel, cruise) in [(heavy_craft(), 130.0, 90.0), (light_craft(), 32.5, 100.0)] {
+        let ticks = (cruise / accel * 30.0_f64).ceil() as i32;
         let mut u = craft(stats, NORTH);
         u.target = Some(v(0, 0, 5000));
         let mut t: i32 = 0;
@@ -146,17 +151,17 @@ fn acceleration_scales_with_combat_speed() {
     }
 }
 
-/// `turnOmegaFractionAtRest = 0`: a stock battleship cannot turn at rest,
-/// so it pulls away first; FO turns at once.
+/// `turnOmegaFractionAtRest = 0`: the heavy craft cannot turn at rest, so it
+/// pulls away first; the light one turns at once.
 #[test]
 fn turning_at_rest_follows_the_fractions() {
-    let mut a = craft(stock_battleship(), NORTH);
+    let mut a = craft(heavy_craft(), NORTH);
     a.target = Some(v(2000, 0, 0));
     step(Model::Smooth, &mut a, Leg::default());
     assert_eq!(a.heading, NORTH);
     assert!(a.speed > Fixed::ZERO);
 
-    let mut b = craft(fo_100(), NORTH);
+    let mut b = craft(light_craft(), NORTH);
     b.target = Some(v(2000, 0, 0));
     step(Model::Smooth, &mut b, Leg::default());
     assert_ne!(b.heading, NORTH);
@@ -167,7 +172,7 @@ fn turning_at_rest_follows_the_fractions() {
 /// spot with no target; the spin-down rate is interim).
 #[test]
 fn leftover_turn_settles_for_a_craft_that_cannot_turn_at_rest() {
-    let mut u = craft(stock_battleship(), NORTH);
+    let mut u = craft(heavy_craft(), NORTH);
     u.speed = f(40.0);
     u.omega = f(-5.0);
     for _ in 0..2000 {
@@ -176,7 +181,7 @@ fn leftover_turn_settles_for_a_craft_that_cannot_turn_at_rest() {
     assert_eq!(u.speed, Fixed::ZERO);
     assert_eq!(u.omega, Fixed::ZERO, "still spinning");
     // Same with a target close enough to count as arrived.
-    let mut w = craft(stock_battleship(), NORTH);
+    let mut w = craft(heavy_craft(), NORTH);
     w.omega = f(0.8);
     w.target = Some(v(1, 0, 1));
     for _ in 0..2000 {
@@ -185,10 +190,94 @@ fn leftover_turn_settles_for_a_craft_that_cannot_turn_at_rest() {
     assert_eq!(w.omega, Fixed::ZERO, "still spinning with a target at hand");
 }
 
+/// Invented stats for the #1039 tests: `combatSpeed` 30, so a full-speed turn limit of
+/// 0.5 * 30 * 0.08 = 1.2 rad/s and a turn acceleration of 0.9 of it per second (1.08 rad/s^2),
+/// speed acceleration 1.3 * 30 * 2 = 78 u/s^2.
+fn invented(turn_at_rest: f64, turn_alpha_at_rest: f64) -> MoveStats {
+    MoveStats {
+        combat_speed: f(30.0),
+        turn_at_rest: f(turn_at_rest),
+        turn_alpha_at_rest: f(turn_alpha_at_rest),
+        ..MoveStats::from_f32(60.0, 2.0, 0.08, 0.9, 0.0)
+    }
+}
+
+const ACCEL: f64 = 78.0;
+const SPIN_ALPHA: f64 = 1.08;
+
+/// Ticks to bring `speed` and then a turn rate of at most `omega` to zero: the time to rest,
+/// then the turn's braking at the full-speed turn acceleration (the interim spin-down), one
+/// tick of slack each.
+fn bound(speed: f64, omega: f64) -> usize {
+    ((speed / ACCEL * 30.0).ceil() + 1.0 + (omega / SPIN_ALPHA * 30.0).ceil() + 1.0) as usize
+}
+
+/// Runs `tick` for `bound` ticks, then checks the turn rate is exactly zero, and stays zero.
+fn settles_within(mut u: Unit, bound: usize, what: &str, mut tick: impl FnMut(&mut Unit)) {
+    for _ in 0..bound {
+        tick(&mut u);
+    }
+    assert_eq!(u.omega, Fixed::ZERO, "{what}: still turning at {} rad/s after {bound} ticks", u.omega.to_f32());
+    for _ in 0..30 {
+        tick(&mut u);
+        assert_eq!(u.omega, Fixed::ZERO, "{what}: the turn started again");
+    }
+}
+
+/// #1039, the facing step: a craft in range of its attack target brakes while turning to face
+/// it (`Plan::face`). A craft with no turn acceleration at rest (`turnAlphaFractionAtRest` 0)
+/// keeps a turn left over when it stops, for ever, whether it can turn at rest or not. The
+/// spin-down rate is interim (STA64's own; the original's is not measured).
+#[test]
+fn leftover_turn_settles_while_facing_an_attack_target() {
+    for side in [-1.0, 1.0] {
+        let plan = Plan { face: Some(v((2000.0 * side) as i32, 0, 0)), ..Plan::default() };
+        for omega in [-1.0, 1.0] {
+            // Cannot turn or accelerate its turn at rest, under way at half cruise: braked to
+            // rest first (omega up to the full-speed limit 1.2 while moving).
+            let mut u = craft(invented(0.0, 0.0), NORTH);
+            u.speed = f(30.0);
+            u.omega = f(omega);
+            settles_within(u, bound(30.0, 1.2), "car-like, moving", |u| step_planned(Model::Smooth, u, Leg::default(), plan));
+        }
+    }
+}
+
+/// The same for a craft that can turn at rest (limit 0.6 rad/s there) but has no turn
+/// acceleration at rest: a turn within the limit kept its rate for ever while "facing".
+#[test]
+fn leftover_turn_settles_while_facing_with_no_turn_acceleration_at_rest() {
+    for side in [-1.0, 1.0] {
+        let plan = Plan { face: Some(v((2000.0 * side) as i32, 0, 0)), ..Plan::default() };
+        for omega in [-0.4, 0.4] {
+            let mut u = craft(invented(0.5, 0.0), NORTH);
+            u.omega = f(omega);
+            settles_within(u, bound(0.0, 0.4), "turns at rest, no acceleration, at rest", |u| step_planned(Model::Smooth, u, Leg::default(), plan));
+        }
+    }
+}
+
+/// #1039, the steering step of a held craft (a script's speed 0, or a nebula's floor: its top
+/// speed is the held floor, so the turn limit sees speed 0): with a far target and no turn
+/// acceleration at that speed it kept its turn rate for ever.
+#[test]
+fn a_held_craft_does_not_keep_a_turn_it_cannot_steer() {
+    for side in [-1.0, 1.0] {
+        for omega in [-0.5, 0.5] {
+            let mut stats = invented(0.0, 0.0);
+            stats.max_speed = crate::speed_override::HELD_SPEED;
+            let mut u = craft(stats, NORTH);
+            u.omega = f(omega);
+            u.target = Some(v((5000.0 * side) as i32, 0, 0));
+            settles_within(u, bound(0.0, 0.5), "held craft with a far target", |u| step(Model::Smooth, u, Leg::default()));
+        }
+    }
+}
+
 /// No slowing to turn: facing away, a unit asks for full speed.
 #[test]
 fn no_slowing_to_turn() {
-    let mut u = craft(fo_100(), NORTH);
+    let mut u = craft(light_craft(), NORTH);
     u.target = Some(v(0, 0, -3000));
     for _ in 0..90 {
         step(Model::Smooth, &mut u, Leg::default());
@@ -200,7 +289,7 @@ fn no_slowing_to_turn() {
 /// stays where it is and counts as arrived.
 #[test]
 fn too_close_to_turn_stays() {
-    let mut u = craft(fo_100(), NORTH);
+    let mut u = craft(light_craft(), NORTH);
     let (t, _) = fly(&mut u, &[v(0, 0, -60)], 600);
     assert!(t.is_some());
     assert_eq!(u.heading, NORTH);
@@ -210,7 +299,7 @@ fn too_close_to_turn_stays() {
 /// Arrival brakes to rest near the point, without snapping onto it.
 #[test]
 fn arrives_short_of_the_point_at_rest() {
-    for stats in [stock_battleship(), fo_100()] {
+    for stats in [heavy_craft(), light_craft()] {
         let mut u = craft(stats, NORTH);
         let (t, _) = fly(&mut u, &[v(0, 0, 1500)], 3000);
         assert!(t.is_some(), "did not stop");
@@ -227,9 +316,9 @@ fn arrives_short_of_the_point_at_rest() {
 /// Waypoints with legs behind them are flown through, not stopped at.
 #[test]
 fn waypoint_chain_flows_through() {
-    for stats in [stock_battleship(), fo_100()] {
+    for stats in [heavy_craft(), light_craft()] {
         let mut u = craft(stats, NORTH);
-        let legs = [v(0, 0, 2000), v(2000, 0, 2000), v(2000, 0, 4000)];
+        let legs =[v(0, 0, 2000), v(2000, 0, 2000), v(2000, 0, 4000)];
         let (t, slowest) = fly(&mut u, &legs, 6000);
         assert!(t.is_some(), "did not finish");
         assert!(
@@ -245,7 +334,7 @@ fn waypoint_chain_flows_through() {
 /// A 180-degree turn settles on the new course without weaving across it.
 #[test]
 fn reversal_settles_without_weaving() {
-    for stats in [stock_battleship(), fo_100()] {
+    for stats in [heavy_craft(), light_craft()] {
         let mut u = craft(stats, NORTH);
         u.target = Some(v(0, 0, -6000));
         let mut crossings = 0;
@@ -276,7 +365,7 @@ fn reversal_settles_without_weaving() {
 #[test]
 fn smooth_trajectory_golden() {
     let mut h = crate::world::Fnv::new();
-    for stats in [stock_battleship(), fo_100()] {
+    for stats in [heavy_craft(), light_craft()] {
         for legs in [
             &[v(0, 0, 2000), v(2000, 0, 2000), v(2000, 0, 4000)][..],
             &[v(0, 0, -3000)][..],
@@ -305,7 +394,7 @@ fn smooth_trajectory_golden() {
     }
     assert_eq!(h.0, SMOOTH_GOLDEN, "{:#x}", h.0);
 }
-const SMOOTH_GOLDEN: u64 = 0x6ef9_9e4d_0759_6b0f;
+const SMOOTH_GOLDEN: u64 = 0x315e_7a06_598b_e63a;
 
 /// The native model is the one profiles without a measured model fly.
 #[test]

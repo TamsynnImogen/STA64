@@ -333,6 +333,7 @@ fn move_and_stop_end_mining() {
                 units: vec![m],
                 to: v(500, 0),
                 queue: false,
+                mode: None,
             }
         };
         let carried = sim.economy.cargo(m).unwrap();

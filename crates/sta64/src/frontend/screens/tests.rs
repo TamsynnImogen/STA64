@@ -803,7 +803,7 @@ fn installed_mods_come_from_the_data_folder() {
 #[test]
 fn disabled_entries_do_not_click() {
     let mut app = app();
-    // Single player's Load game is off.
+    // Single player has disabled campaign entries.
     go(&mut app, Screen::SinglePlayer);
     let off = app.world_mut().query::<(Entity, &WidgetState)>().iter(app.world()).find(|(_, s)| **s == WidgetState::Disabled).unwrap().0;
     click(app.world_mut(), off);

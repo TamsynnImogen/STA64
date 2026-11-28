@@ -1,7 +1,6 @@
-//! Fleet Ops opens a local choice dialog for an owned craft with
-//! `showChoiceDialog` (FleetOpsHook RVAs 0x10c790 and 0x1dcebc).
-//! CommandInfoBar loads its CFG at 0x10afb8 and walks the craft's weapons in
-//! order, filling up to five special buttons (0x10ae2c).
+//! Fleet Ops opens a local choice dialog for an owned craft. Its command info bar
+//! loads its CFG and walks the craft's weapons in order, filling up to five special
+//! buttons (read from the executable, static).
 
 use bevy::{picking::Pickable, prelude::*};
 use sta_content::{ContentDb, UnitDef, WeaponDef};

@@ -45,7 +45,7 @@ impl GaugeStyle {
 /// Project all eight corners. Reject the near plane rather than creating huge
 /// gauges when a corner crosses the camera. Offscreen fragments remain clipped
 /// by the renderer; wholly offscreen actors have no gauge.
-pub(super) fn project(bounds: ModelBounds, world: Mat4, clip: Mat4, size: Vec2) -> Option<(Rect, f32)> {
+pub(crate) fn project(bounds: ModelBounds, world: Mat4, clip: Mat4, size: Vec2) -> Option<(Rect, f32)> {
     if !size.is_finite() || size.min_element() <= 0.0 { return None; }
     let matrix = clip * world;
     let mut min = Vec2::splat(f32::INFINITY);

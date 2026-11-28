@@ -403,8 +403,9 @@ fn resource_text(feed: &HudFeed, id: usize) -> Option<String> {
     player.resources.get(slot).map(|v| whole(*v).to_string())
 }
 
-/// Resource IDs and keys are the branches in Armada2.exe ResourceComponent::GetTooltip and
-/// GetVerboseTooltip. Keep keys until display so the mounted native header wins, including blanks.
+/// Resource IDs and keys are the branches the native resource readout takes for its short and
+/// verbose tooltips (read from the executable, static). Keep keys until display so the mounted
+/// native header wins, including blanks.
 fn resource_tip(feed: &HudFeed, id: usize) -> Option<Tooltip> {
     if id == 0 {
         let available = feed.view.player(feed.player).and_then(|p| p.crew);
@@ -522,7 +523,7 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
     names
 }
 
-/// Native Wireframe::Render draws five independent GUI SPR layers in one square.
+/// The native wireframe draws five independent GUI SPR layers in one square.
 pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
     wireframe_layers_of(commands, root, r, model, None, None, None);
 }
@@ -540,7 +541,7 @@ pub(in crate::ui::hud) struct WireLayer {
 /// wireframe art by eye; the original draws layer n with the ship's system n-1).
 const LAYER_SYSTEM: [usize; 5] = [1, 0, 3, 2, 4];
 
-/// A wireframe layer's colour (A2 `WireframeIcon::DrawSystem`, read from the executable, static):
+/// A wireframe layer's colour (A2, read from the executable, static):
 /// white; with damage left `r` above 0.01, `(r, 0.2(1 - r), 0.2(1 - r))`, pure red when destroyed;
 /// a switched-off system yellow (the original flashes it; here it is steady, ours).
 pub(super) fn wire_tint(health: Fixed, on: bool) -> Color {
@@ -589,6 +590,9 @@ pub(super) fn wireframe_layers_of(
 /// `GUI_RD_OFFICERS_VTOOLTIP` string says so); the number format itself is assumed.
 const SEPARATE_RESOURCES: [(&str, usize, &str); 3] = super::SEPARATE_RESOURCES;
 
+/// Text colour of the separate resource readouts (also what the GPU test samples).
+pub(super) const SEPARATE_READOUT_TEXT: Color = Color::srgb(0.5, 0.5, 0.5);
+
 fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
     for (prefix, id, flag) in SEPARATE_RESOURCES {
         let Some(area) = layout.panel(prefix) else {
@@ -611,9 +615,9 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
             continue;
         };
         let value = resource_text(feed, id).unwrap_or_default();
-        // Armada.exe's DilithiumDisplay, CrewDisplay and OfficerDisplay all
-        // pass the same 0.5 RGB grey to the font draw (read from the binary).
-        readout_tip(commands, root, r, value, Color::srgb(0.5, 0.5, 0.5), theme.small_size, Some(StockText::Resource(id)), resource_tip(feed, id));
+        // The three readouts all draw in one colour of their own, not the theme's text
+        // colour (read from the executable, static).
+        readout_tip(commands, root, r, value, SEPARATE_READOUT_TEXT, theme.small_size, Some(StockText::Resource(id)), resource_tip(feed, id));
     }
 }
 
@@ -763,7 +767,7 @@ fn spawn_single(
         )
     {
         let fills: &[&str] = if builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
-        // The stock HealthBar uses hull for width and shields for tint.
+        // The stock health bar uses hull for width and shields for tint.
         let (kind, tip) = if native_health {
             (StockBar::NativeHealth(r.w), Readout::Hull)
         } else {
@@ -943,7 +947,7 @@ pub(super) fn spawn(
     let origin = Vec2::new(area.x, area.y);
     let background = info_background(variant);
     if layout.has_a2_info() {
-        // The native ShipDisplay draws a half-opacity black backing in the active
+        // The native info panel draws a half-opacity black backing in the active
         // variant's own infoBlackArea before drawing the frame and contents.
         if let Some(rect) = layout.info_at(variant, &format!("infoBlackArea_{variant}")) {
             commands.spawn((node(rect), BackgroundColor(Color::BLACK.with_alpha(0.5)), Pickable::IGNORE, ChildOf(root)));
@@ -963,7 +967,7 @@ pub(super) fn spawn(
     }
 }
 
-/// Stock ShipDisplay uses the captain row for the producer's active item
+/// The stock info panel uses the captain row for the producer's active item
 /// name (read statically from Armada II). Read the same job as the build meter.
 fn rig_job_title<'a>(
     feed: &'a HudFeed,

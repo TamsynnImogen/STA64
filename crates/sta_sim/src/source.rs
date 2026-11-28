@@ -107,12 +107,6 @@ pub trait WorldSource: Send {
     fn system_view(&self) -> Vec<crate::combat::damage::SystemView> {
         Vec::new()
     }
-    /// Active warp or warp-out phases for presentation, ascending entity ID.
-    /// `true` is in warp, `false` is dropping out. Sources with only a
-    /// recorded view leave motion classification to the view's speed.
-    fn warp_phases(&self) -> Vec<(crate::EntityId, bool)> {
-        Vec::new()
-    }
     /// Current impulse speed limit for each craft, ascending entity ID.
     /// Live sources include ship upgrades; view-only sources can omit it.
     fn impulse_caps(&self) -> Vec<(crate::EntityId, crate::Fixed)> {
