@@ -124,6 +124,24 @@ jobs:
       - name: Linux deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # Why not a `[profile.ci]` without LTO: a new profile name rebuilds and
+      # caches every dependency a second time (the cache is at about 9.8 of
+      # 10 GB), and LTO only touches the linked binary, not the test build.
+      # What costs the time is LLVM code generation of the sta64 crate with
+      # codegen-units = 1 (about 10 min release build, 13 min test build on
+      # ubuntu-latest, against 26 s for `cargo check`). Cargo allows
+      # `codegen-units` per package but not `lto`, so the same release profile
+      # (opt-level, overflow checks, debug assertions, every dependency and its
+      # cache) stays and only the sta64 crate gets 16 codegen units.
+      # PRs: for every release-profile step. main: the shipped build and the
+      # bench smoke below run with the shipped profile (codegen-units = 1),
+      # then the override applies to the test build only.
+      - name: Parallel codegen for sta64 (PR)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
+          printf '[profile.release.package.sta64]\ncodegen-units = 16\n' >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -136,6 +154,12 @@ jobs:
       - run: cargo clippy --locked -p sta64 -- -D warnings
       - name: Bench smoke (sim-only)
         run: cargo run --locked -p sta64 --release -- --sim-only --scene bench/scenes/synthetic.ini --ticks 300
+      - name: Parallel codegen for sta64 tests (main)
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          mkdir -p "${CARGO_HOME:-$HOME/.cargo}"
+          printf '[profile.release.package.sta64]\ncodegen-units = 16\n' >> "${CARGO_HOME:-$HOME/.cargo}/config.toml"
       - run: cargo test --locked -p sta64 --release
 
   # One stable name for branch protection: green when every job that was

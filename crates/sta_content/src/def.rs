@@ -1207,6 +1207,9 @@ pub struct WeaponBaseDef {
     pub omega_turn: Option<Fixed>,
     /// Ordnance `seekTime`, seconds.
     pub seek_time: Option<Fixed>,
+    /// Ordnance `lifeSpan`, seconds: how long a flown shot lives (read by the sim under
+    /// `ordnance_flight`; `WeaponDef::duration` is the life of beams only).
+    pub life_span: Option<Fixed>,
     /// Ordnance `shotAccel`.
     pub shot_accel: Option<Fixed>,
     /// Ordnance `detectRadius` (mines).

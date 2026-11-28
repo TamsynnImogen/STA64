@@ -1,13 +1,16 @@
 # ADR 0011: Group movement: formations, pace and one route per group
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-11-27
 - **Deciders:** Cedric stated the guidelines in "Context" on 2026-11-27 and
   approves G1 to G14. G3 and G12 read existing game and mod data under
   [ADR 0004](0004-modding-v1.md) D1, D9 and D10 and add no mod-facing file or
   key; if they are read as modding decisions, Tammy approves them too.
   Accepted when the approvers approve the PR that merges this file; not
-  binding before.
+  binding before. The file was merged in #1278 without an approving review;
+  Cedric accepted G1 to G14 on 2026-11-27, recorded by the PR that set this
+  status. If G3 and G12 are read as modding decisions, Tammy's approval of
+  that PR confirms them.
 - **Relates to:** [ADR 0002](0002-deterministic-simulation.md);
   [ADR 0003](0003-clean-room-content-policy.md); [ADR 0004](0004-modding-v1.md)
   D1, D2, D5, D9, D10; WORKPLAN SIM-02, SIM-15, SIM-21, SIM-23, SIM-32,
@@ -313,3 +316,21 @@ on one side and arrives in formation.
 3. Does Armada I get the stuck-follower fallback (G6)?
 4. Should the group's route allow for the formation's width, not only for its
    largest craft (G5)?
+
+Raised by the first implementing package (CON-59, #1306) for the deciders;
+the decisions above are unchanged:
+
+5. The default of `FORMATION_SPACING` for content whose `RTS_CFG.h` sets
+   none is carried in CON-59's code as an interim number that this ADR does
+   not state. It is needed to scale formations whose header sets no spacing.
+   It belongs under G12, the decision that makes the spacing a rule read from
+   data with per-profile defaults, beside the key values the ADR already
+   names (G7). Recording it there is for the deciders.
+6. A formation file with one malformed row: is the whole file rejected, or
+   only that row skipped? STA64 skips the row and warns with file and line
+   (CON-59's row), so a malformed mod file can give STA64 a formation with
+   fewer slots where a game that rejects the file has none, and a mod could
+   rely on either. This is a fidelity question for G3; what the originals do
+   is read statically in #1306 and not measured. The option #1306 names:
+   reject the whole file under the classic profiles and keep skipping rows
+   for STA64's own profile.

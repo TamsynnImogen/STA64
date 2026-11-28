@@ -281,9 +281,9 @@ fn a_beam_in_flight_is_in_the_digest_and_an_empty_list_is_not() {
     assert_eq!(g.beams(), 0);
     let bytes = g.sim.snapshot();
     // The beams record, the dying record after it (#1100) and the warp ramp record after that
-    // (#1102): version 1, no rows, each; then the warp option's byte (on).
-    assert_eq!(&bytes[bytes.len() - 7..], [1, 0, 1, 0, 1, 0, 1], "the records: version 1, no rows; the option");
-    let mut old = bytes[..bytes.len() - 7].to_vec();
+    // (#1102): version 1, no rows, each; then the warp option's byte (on) and the empty flights record.
+    assert_eq!(&bytes[bytes.len() - 9..], [1, 0, 1, 0, 1, 0, 1, 1, 0], "the records: version 1, no rows; the option");
+    let mut old = bytes[..bytes.len() - 9].to_vec();
     old[4..6].copy_from_slice(&crate::snapshot::PRE_BEAMS_FORMAT.to_le_bytes());
     let previous = Sim::from_snapshot(&old, Some(g.db.clone())).unwrap();
     assert_eq!(previous.digest(), g.sim.digest());
@@ -392,10 +392,10 @@ fn a_beam_row_with_an_unknown_weapon_is_corrupt_and_one_with_a_removed_unit_is_n
     // Through a snapshot: the last record, forged with that key, is refused.
     let good = g.sim.snapshot();
     // The beams record, then the empty dying record (#1100) and the empty warp ramp record
-    // (#1102), version 1 and no rows each, and the warp option's byte close the file.
+    // (#1102), version 1 and no rows each, the warp option's byte and the empty flights record close the file.
     let record = postcard::to_allocvec(&(1u8, g.sim.weapons.beams_rec())).unwrap();
-    let tail = record.len() + 5;
-    assert_eq!(&good[good.len() - tail..good.len() - 5], &record[..], "the beams record is the last but three");
+    let tail = record.len() + 7;
+    assert_eq!(&good[good.len() - tail..good.len() - 7], &record[..], "the beams record is the last but four");
     let mut forged_rows = g.sim.weapons.beams_rec();
     forged_rows[0].weapon = sta_core::ContentKey(60_000);
     let mut forged = good[..good.len() - tail].to_vec();

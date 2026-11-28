@@ -11,7 +11,7 @@ use crate::command::{Command, CommandKind, Edit, MissionSwitch, Order};
 use crate::movement::approach_tests;
 use crate::replay::{Recorder, Replay, ReplayError};
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
-use crate::snapshot::{FORMAT_VERSION, PRE_WARP_OPTION_FORMAT, SnapshotError};
+use crate::snapshot::{PRE_WARP_OPTION_FORMAT, SnapshotError};
 use crate::{Sim, WorldSource};
 
 const HZ: u32 = TICK_HZ;
@@ -209,7 +209,7 @@ fn a_snapshot_keeps_the_option_and_one_from_before_it_loads_with_warp_allowed() 
     let s = spawn(&mut sim, "st_seer", 1, v(0, 0));
     sim.step(&[warp_move(s)]);
     let bytes = sim.snapshot();
-    assert_eq!(bytes.last(), Some(&0), "the option's byte closes the snapshot: off");
+    assert_eq!(bytes[bytes.len() - 3], 0, "the option's byte, before the empty flights record: off");
     let mut back = Sim::from_snapshot(&bytes, Some(Arc::clone(&db))).unwrap();
     assert!(back.match_warp_off());
     assert_eq!((back.digest(), back.snapshot()), (sim.digest(), bytes.clone()));
@@ -218,8 +218,8 @@ fn a_snapshot_keeps_the_option_and_one_from_before_it_loads_with_warp_allowed() 
     // the format before the option is the same bytes without it: warp is allowed there
     let on = game(&db, true);
     let current = on.snapshot();
-    assert_eq!(current.last(), Some(&1));
-    let mut old = current[..current.len() - 1].to_vec();
+    assert_eq!(current[current.len() - 3], 1);
+    let mut old = current[..current.len() - 3].to_vec();
     old[4..6].copy_from_slice(&PRE_WARP_OPTION_FORMAT.to_le_bytes());
     let loaded = Sim::from_snapshot(&old, Some(Arc::clone(&db))).expect("the previous format loads");
     assert!(!loaded.match_warp_off());
@@ -227,13 +227,14 @@ fn a_snapshot_keeps_the_option_and_one_from_before_it_loads_with_warp_allowed() 
 
     // the byte is mandatory in its format, the reserved number between the two is no format,
     // and the option cannot be off for content it does not count for
-    assert!(Sim::from_snapshot(&current[..current.len() - 1], Some(Arc::clone(&db))).is_err());
+    assert!(Sim::from_snapshot(&current[..current.len() - 3], Some(Arc::clone(&db))).is_err());
     let mut reserved = current.clone();
-    reserved[4..6].copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
-    assert_eq!(Sim::from_snapshot(&reserved, Some(Arc::clone(&db))).err(), Some(SnapshotError::FormatVersion { found: FORMAT_VERSION - 1 }));
+    reserved[4..6].copy_from_slice(&57u16.to_le_bytes());
+    assert_eq!(Sim::from_snapshot(&reserved, Some(Arc::clone(&db))).err(), Some(SnapshotError::FormatVersion { found: 57 }));
     let other = self::db(Profile::Fo4, true);
     let mut forged = game(&other, true).snapshot();
-    *forged.last_mut().unwrap() = 0;
+    let at = forged.len() - 3;
+    forged[at] = 0;
     match Sim::from_snapshot(&forged, Some(other)) {
         Err(SnapshotError::Corrupt(why)) => assert!(why.contains("warp option"), "{why}"),
         other => panic!("{:?}", other.map(|_| "loaded")),

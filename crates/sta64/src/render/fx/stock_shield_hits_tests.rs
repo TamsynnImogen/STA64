@@ -1000,3 +1000,10 @@ fn install_the_default_model_resolves_loads_and_every_vertex_lies_within_its_dat
     let (anim, _) = geo.flipbook.as_ref().expect("the cap names a flipbook");
     assert!(table.animation(anim).is_some(), "the flipbook {anim} is in no sprite table");
 }
+
+/// The cap's mesh carries the attributes the stock shot material reads (#1418).
+#[test]
+fn the_cap_mesh_carries_the_attributes_the_material_reads() {
+    let geo = cap_geometry(&authored_model()).unwrap();
+    assert!(crate::render::fx::stock_shots::missing_attributes(&geo.mesh).is_empty());
+}

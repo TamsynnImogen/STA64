@@ -2,7 +2,11 @@
 
 - **Status:** proposed
 - **Date:** 2026-11-27
-- **Deciders:** the project lead and the repository owner (the pull request that records it)
+- **Deciders:** the project lead and the repository owner (the pull request that records it).
+  The file was merged as proposed in #1275. The recommendations of that pull
+  request were accepted by the project lead on 2026-11-27; the repository
+  owner's decision is pending. Accepted when both have approved (the pull
+  request that records the decisions); not binding before.
 - **Relates to:** issue #1032; [ADR 0002](0002-deterministic-simulation.md); [ADR 0003](0003-clean-room-content-policy.md); [ADR 0004](0004-modding-v1.md) D10; [ADR 0005](0005-network-after-net-01.md) N2, N5; WORKPLAN SIM-10, SIM-11, SIM-61, UI-20, LUA-15, CON-40, CON-57
 
 ## Context
@@ -47,6 +51,14 @@ manual); their missions save their own variables through save callbacks
 
 ## Decision
 
+**Scope: skirmish saves first.** The first saves are single-player skirmish
+saves (Instant Action against computer players), saved and loaded by hand;
+mission saves follow once V4's conditions hold (see "Not in v1"). The
+container, the controller state and the client's load path are built for the
+skirmish and reused by missions.
+*Accepted by the project lead on 2026-11-27; the repository owner's decision
+is pending.*
+
 **V1. Saves are valid only for the formats and content they were made with.**
 A save loads in a build that reads its container version, its snapshot format
 and seam revision, with a content database of the same hash, the same map
@@ -59,6 +71,8 @@ make older saves unloadable; the load list says so instead of failing.
 current rate several a week, for a feature that is not the product);
 loading on a content mismatch (D10; the sim reads content by index).
 Revisited by a later ADR when the formats are declared stable.
+*No migration, refusal with the reason: accepted by the project lead on
+2026-11-27; the repository owner's decision is pending.*
 
 **V2. A save is its own container with its own version number.**
 A fixed header, readable for the load list without parsing the rest: magic,
@@ -88,6 +102,8 @@ load (ADR 0003). No thumbnail in v1.
 *Rejected:* a folder per mod (a save already names its content, and the list
 can explain a refusal); a thumbnail (an image rendered from game art in a
 file players share).
+*No thumbnail in v1: accepted by the project lead on 2026-11-27; the
+repository owner's decision is pending.*
 
 **V4. A mission's script state is restored by re-running it, not by serialising Lua.**
 A mission save carries the game's full journal from tick 0 (the replay, plus
@@ -107,6 +123,9 @@ original missions do (possible later as a faster load for converted
 missions, since STA64 writes the converter; it cannot cover hand-written
 mission scripts).
 *Accepted cost:* load time grows with the time played.
+*Re-run over serialising Lua: accepted by the project lead on 2026-11-27; the
+repository owner's decision is pending. Open questions 1 and 2 below were
+decided with it.*
 
 **V5. Skirmish controllers are saved as data.**
 The skirmish AI and the mission AI hub (per-seat flags, loaded plans by file
@@ -156,17 +175,36 @@ allowed" state (read from data: a menu caption key).
 
 ## Open questions
 
-- V4 (b): if the measurement shows commands depend on per-process hashing,
-  is fixing the seed in the bundled Lua build acceptable, or do mission saves
-  wait for the script-declared state of the rejected alternative?
-- Is a load time of minutes for a long mission acceptable for v2, with a
-  progress display, or is a bound on it a condition for enabling mission saves?
+1. V4 (b): if the measurement shows commands depend on per-process hashing,
+   is fixing the seed in the bundled Lua build acceptable, or do mission saves
+   wait for the script-declared state of the rejected alternative?
+   **Decided 2026-11-27 (the project lead; the repository owner's decision is
+   pending):** fix the seed in the bundled Lua build first, measure again, then
+   decide.
+2. Is a load time of minutes for a long mission acceptable for v2, with a
+   progress display, or is a bound on it a condition for enabling mission saves?
+   **Decided 2026-11-27 (the project lead; the repository owner's decision is
+   pending):** acceptable for v2 with a progress display; a bound is revisited
+   once the load time has been measured end to end.
+3. V5 and V4 on the mission AI hub: V5 serialises the hub (per-seat flags,
+   loaded plans by file name, the pending replan) into the controller
+   section, while V4's re-run from tick 0 rebuilds it with the script. Is the
+   hub's record kept (and checked against the re-run state at the hand-over),
+   or is V5's hub clause amended to "rebuilt by the re-run"? Until decided,
+   the WORKPLAN rows hold to V5 as written. Raised by the review of the save
+   packages' WORKPLAN rows (#1315).
+4. Matches whose map has no file (a generated random map, an unsaved map
+   started from the editor) have no map path and file hash for V1 and V2, and
+   V3 keeps their map data out of a save. Until decided, saving them is
+   refused with that reason. One option that fits V3: record the generator's
+   inputs as game state in the header and regenerate the map at load.
+   Raised with question 3.
 
 ## Evidence since the first draft
 
 Facts gathered after this draft was written; the decisions above are unchanged.
 
-- **Sim state (open PR #1307, in review).** A tests-only change
+- **Sim state (PR #1307, merged 2026-11-27).** A tests-only change
   (`crates/sta_sim/tests/save_round_trip.rs`) runs authored scenarios
   (navigation round obstacles, a formation group, queued orders, combat across
   the save point, random-number state, production, resources, the stuck-order
