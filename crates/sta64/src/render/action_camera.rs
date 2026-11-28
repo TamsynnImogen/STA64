@@ -496,6 +496,18 @@ mod tests {
         ActionCandidates { fight: ids(fight), build: ids(build), idle: ids(idle) }
     }
 
+    /// The cameras and the candidate gathering run only while a picture can be seen: a hidden picture (the Armada II
+    /// "Cinematic window" off) costs no second render.
+    #[test]
+    fn a_hidden_picture_wants_no_cameras_and_a_visible_one_does() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let picture = world.spawn((ActionPicture, InheritedVisibility::VISIBLE)).id();
+        assert!(world.run_system_once(picture_wanted).unwrap());
+        world.entity_mut(picture).insert(InheritedVisibility::HIDDEN);
+        assert!(!world.run_system_once(picture_wanted).unwrap());
+    }
+
     #[test]
     fn each_tier_is_chosen_in_priority_order() {
         assert_eq!(pick(&cands(&[5], &[3], &[1]), None, 0.0), Some((Tier::Fight, EntityId(5))));
