@@ -248,6 +248,25 @@ Recorded as [ADR 0003](docs/adr/0003-clean-room-content-policy.md); the rules be
   hand, count as game content and are never committed or released. Conversion
   happens on the player's machine from their own install into the user data
   directory (WORKPLAN LUA-15 and the note under the LUA table).
+- A fixed lookup name by which the original engine selects an entry that the
+  install's own data defines may be a named constant in code, where the code
+  needs it to find that entry at run time, with a one-line comment (rule and
+  evidence grade); a mod may define the entry under that name. Lookup names
+  only: definitions, values and every other name from game assets stay under
+  the rules above, and these names appear in code only, never in issues, PR
+  bodies, review comments, commit messages, docs, WORKPLAN or TODO.md. The
+  same holds for a fixed file path by which the original engine opens data the
+  player's install provides (a shell background picture, an intro movie): a
+  named constant in code only, with a one-line comment (rule and evidence
+  grade), identifiable by name, module or comment as belonging to its game or
+  profile where it is specific to one; the file and anything read from it are
+  never committed, and a mod may provide its own file.
+- A description, in our own words, of how a stock mission plays (what the
+  player is asked to do, in what order, what ends it) may be committed as a
+  hand-written playthrough plan for tests or as descriptive lines in docs.
+  Names from game files (units, maps, files, objects), measured thresholds and
+  timings, map positions, caption and dialogue texts and anything copied or
+  converted from the mission files stay out, as do the converted scripts.
 
 ## Builds
 
