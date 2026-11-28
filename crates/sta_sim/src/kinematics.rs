@@ -345,6 +345,48 @@ fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
     }
 }
 
+/// The rate at which a craft that is not under power loses speed, per second: each tick the
+/// speed falls by this rate times the tick's length times itself, a continuous decay at that
+/// rate stepped per tick (so after one second a little more is left than one minus the rate).
+/// The one constant for both drifts, which are the same motion in the original: a craft
+/// coasting with its engines off (`engines_off_drift`; measured, coarse, two repetitions) and a
+/// dying craft (`dying_phase`; measured, repeated), on stock Armada II. INTERIM for the exact
+/// curve.
+pub const DRIFT_DECAY: Fixed = Fixed::from_bits(19 * (1i64 << 32) / 100);
+
+/// Whether `u` coasts this tick: a craft whose engines are offline, that still has speed,
+/// under the feature switch `engines_off_drift` (the unit's, as `ContentDb::unit_features`
+/// resolves it). Measured with the engines switched off by a script; engines destroyed by
+/// damage set the same flag, and the movement code of the original tests the same
+/// condition either way (read from the executable, static), but that case was not staged.
+fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
+    u.kind == crate::world::EntityKind::Craft
+        && u.flags.contains(crate::view::UnitFlags::ENGINES_OFF)
+        && u.speed > Fixed::ZERO
+        && db.is_some_and(|db| db.unit(u.def).map_or(db.features(), |d| db.unit_features(d)).engines_off_drift)
+}
+
+/// One tick of drifting for a craft that is not under power, the one function for a craft
+/// coasting with its engines off and for a dying craft: straight on along the heading at the
+/// present speed, which then falls by [`DRIFT_DECAY`]. No turn and no power: the heading is
+/// left as it is (a spin a script gave an engines-off craft is `step_drifting_spin`'s,
+/// unchanged) and nothing steers towards a target; a coasting craft keeps its target for when
+/// its engines return.
+///
+/// A craft that was at warp is first brought down to its impulse speed and drifts from there
+/// (measured for engines going off: the normal warp exit on the next tick, then the drift).
+/// INTERIM: the drop is at once; the shape of the exit belongs to the warp kinematics (#1102).
+///
+/// The map's edge needs nothing here: the confinement that holds every unit on the map holds a
+/// drifting craft too (the caller applies it to this step's result).
+pub(crate) fn coast(u: &mut Unit) {
+    let hz = Fixed::from_int(TICK_HZ as i32);
+    u.speed = u.speed.min(u.stats.max_speed);
+    u.pos.x = u.pos.x + u.heading.0 * u.speed / hz;
+    u.pos.z = u.pos.z + u.heading.1 * u.speed / hz;
+    u.speed = u.speed - u.speed * DRIFT_DECAY / hz;
+}
+
 impl Sim {
     /// Step every mobile unit under the content's movement model; units
     /// with an approach plan (ascending id) step under it.
@@ -359,8 +401,20 @@ impl Sim {
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
         self.step_drifting_spin();
         let db = self.content.as_deref();
-        // A dying unit drifts instead (#1100, `Sim::drift_dying`).
-        for u in self.units.iter_mut().filter(|u| u.mobile() && !self.dying.contains(u.id)) {
+        // A dying unit drifts instead (#1100, `Sim::drift_dying`): it is not stepped here, and one
+        // whose engines are off as well is not coasted twice.
+        for u in self.units.iter_mut().filter(|u| (u.mobile() || drifts(db, u)) && !self.dying.contains(u.id)) {
+            if !u.mobile() {
+                // Engines offline and still moving: it coasts, held by the same confinement
+                // as a craft under power.
+                let previous = u.pos;
+                coast(u);
+                if self.confinement.is_active() && u.pos != previous {
+                    let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
+                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));
+                }
+                continue;
+            }
             if self.specials.engines_held(u.id, self.tick) {
                 u.speed = Fixed::ZERO;
                 u.omega = Fixed::ZERO;
@@ -928,5 +982,7 @@ mod smooth {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod drift_tests;
 #[cfg(test)]
 pub(crate) mod a1_tests;

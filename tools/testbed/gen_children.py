@@ -29,7 +29,7 @@ GROUPS = {
                 "shield_zero_hold", "crew_loss_on_hit"],
     "Behaviour": ["attack_buffer_roots", "attack_combat_speed", "attack_opportunity_fire", "builder_hold_fire",
                   "target_score", "idle_assist", "assist_high_autonomy_only", "assist_on_ally_fire",
-                  "transport_attack_by_weld", "warp_gates"],
+                  "transport_attack_by_weld", "warp_gates", "engines_off_drift"],
     "Economy": ["extra_resources", "officer_capacity", "pay_on_queue"],
     "Production": ["multi_yard_builds", "construction_rigs", "upgrade_pods", "hybrid_yards", "station_rotation"],
     "Fleet": ["breeders", "collective_xp", "squadrons", "wreckage", "craft_identity"],
