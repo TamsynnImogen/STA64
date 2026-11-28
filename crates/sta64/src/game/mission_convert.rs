@@ -70,6 +70,8 @@ pub struct Plan {
     /// `<data>/converted/<key>.lock`: the lock of a running conversion.
     pub lock_path: PathBuf,
     env: Env,
+    /// A mod's run only: the stock folder of the settings, tried when the install's own engine files are not accepted.
+    fallback_engine: Option<PathBuf>,
 }
 
 /// Why no run is made.
@@ -186,25 +188,42 @@ fn decide_mod(install_root: &Path, name: &str, data: &Path, env: &Env, stock_fol
             install::ModError::Mount { reason, .. } => reason,
         })
     })?;
-    let install = if has_engine_files(&install.root) {
-        install
+    // The setting must be an absolute path: a relative one would resolve against a working directory the player
+    // cannot predict.
+    if let Some(f) = stock_folder.filter(|f| !f.is_absolute()) {
+        return Err(Refusal::NoEngine(format!(
+            "the `stock_folder` of the settings file ({}) is not an absolute path: name the whole path of a stock Armada II folder",
+            f.display()
+        )));
+    }
+    let missing = |why: String| Refusal::NoEngine(format!("the mod {name}'s missions need the engine files ({ENGINE_FILES}) and {why}"));
+    let stock_ok = stock_folder.filter(|f| has_engine_files(f));
+    let (install, fallback_engine) = if has_engine_files(&install.root) {
+        // The install's own pair first; the setting is kept for the case the converter does not accept it.
+        (install, stock_ok.map(Path::to_path_buf))
     } else {
-        let missing = |why: String| Refusal::NoEngine(format!("the mod {name}'s missions need the engine files ({ENGINE_FILES}) and {why}"));
         match stock_folder {
             None => {
                 return Err(missing(format!(
-                    "they are not in {}: set `stock_folder` in the settings file ({}) to a stock Armada II folder that has them",
+                    "they are not in {}: set `stock_folder` in the settings file ({}) to the absolute path of a stock Armada II folder that has them",
                     install.root.display(),
-                    crate::ui::settings::FILE_NAME
+                    settings_file_text()
                 )));
             }
-            Some(f) if !has_engine_files(f) => {
+            Some(f) if stock_ok.is_none() => {
                 return Err(missing(format!("the `stock_folder` of the settings file ({}) does not have them", f.display())));
             }
-            Some(f) => install.with_engine(f).map_err(|e| missing(format!("`stock_folder` cannot be used: {}", install_text(&e))))?,
+            Some(f) => (install.with_engine(f).map_err(|e| missing(format!("`stock_folder` cannot be used: {}", install_text(&e))))?, None),
         }
     };
-    plan_for(install, Some(name), data, env)
+    let mut plan = plan_for(install, Some(name), data, env)?;
+    plan.fallback_engine = fallback_engine;
+    Ok(plan)
+}
+
+/// Where the settings file is, as the player is told: its full path when the platform's config folder is known.
+fn settings_file_text() -> String {
+    crate::platform::config_dir().map_or_else(|| crate::ui::settings::FILE_NAME.to_owned(), |d| d.join(crate::ui::settings::FILE_NAME).display().to_string())
 }
 
 /// The engine files an Armada II conversion reads, as the player is told about them.
@@ -232,6 +251,7 @@ fn plan_for(install: Install, active_mod: Option<&str>, data: &Path, env: &Env) 
         out_res,
         cache_dir,
         env: env.clone(),
+        fallback_engine: None,
     })
 }
 
@@ -427,7 +447,23 @@ fn run(plan: &Plan, mode: Mode, cancel: &AtomicBool, tx: &Sender<Msg>, converter
             cancel.store(true, Ordering::Relaxed);
         }
     };
-    let summary = converter(&plan.install, &opts, &mut out, cache.as_ref(), &stop, &mut sink);
+    let mut summary = converter(&plan.install, &opts, &mut out, cache.as_ref(), &stop, &mut sink);
+    // A mod's run whose discovery was refused (nothing planned, nothing cleared) with the install's own engine
+    // files: try the stock folder of the settings when there is one; else say where the setting is.
+    if plan.install.active_mod().is_some() && summary.aborted.is_some() && summary.missions.is_empty() && !summary.cleared && plan.install.engine_root() == plan.install.root {
+        match plan.fallback_engine.as_deref().and_then(|f| plan.install.clone().with_engine(f).ok()) {
+            Some(retry) => summary = converter(&retry, &opts, &mut out, cache.as_ref(), &stop, &mut sink),
+            None => {
+                if let Some(a) = summary.aborted.as_mut() {
+                    a.message = format!(
+                        "{}; if the engine files at the install's root are not the stock ones, set `stock_folder` in the settings file ({}) to the absolute path of a stock Armada II folder",
+                        a.message,
+                        settings_file_text()
+                    );
+                }
+            }
+        }
+    }
     if summary.completed()
         && let Some(inputs) = &inputs
     {
@@ -895,6 +931,59 @@ mod tests {
         assert!(matches!(r, Refusal::Output(_)), "{r:?}");
     }
 
+    #[test]
+    fn a_relative_stock_folder_is_refused_with_that_reason() {
+        let t = Tmp::new("modrel");
+        let (root, data) = (t.0.join("Made"), t.0.join("data"));
+        with_mod(&root, false);
+        let r = decide_for(&root, Some("M"), Some(&data), &env(), Some(Path::new("relative/stock"))).unwrap_err();
+        assert!(matches!(&r, Refusal::NoEngine(m) if m.contains("not an absolute path") && m.contains("relative")), "{r:?}");
+        // the missing-pair text says where the settings file is, not only its name
+        let r = decide_for(&root, Some("M"), Some(&data), &env(), None).unwrap_err();
+        let Refusal::NoEngine(m) = &r else { panic!("{r:?}") };
+        assert!(m.contains(crate::ui::settings::FILE_NAME) && m.contains("absolute path"), "{m}");
+    }
+
+    /// The install's own engine files are tried first; a pair the converter does not accept falls back to the
+    /// stock folder when one is set, and says where to set it when not.
+    #[test]
+    fn an_engine_pair_at_the_root_that_is_refused_falls_back_to_the_stock_folder_or_names_the_setting() {
+        use sta_mission_convert::install::{Abort, Stage};
+        let t = Tmp::new("modfallback");
+        let (root, data, stock) = (t.0.join("Made"), t.0.join("data"), t.0.join("Stock"));
+        with_mod(&root, true);
+        put(&stock.join("Armada2.exe"), b"");
+        put(&stock.join("armada2.map"), b"");
+        let (root_real, stock_real) = (install::realpath(&root), install::realpath(&stock));
+        let engines = Arc::new(Mutex::new(Vec::<PathBuf>::new()));
+        let seen_engines = engines.clone();
+        let converter = fake(move |i, _o, out, _c, _cancel, _sink| {
+            seen_engines.lock().unwrap().push(i.engine_root().to_path_buf());
+            if i.engine_root() == root_real {
+                // the install's own pair is refused at discovery: nothing planned, nothing cleared
+                return Summary { aborted: Some(Abort { stage: Stage::Convert, message: "the engine files are not the ones this was written against".into() }), ..Summary::default() };
+            }
+            let _ = out.finish();
+            Summary::default()
+        });
+        // with the setting: the run goes on with the stock folder
+        let mut app1 = app(&data, converter.clone());
+        let mut settings = crate::frontend::screens::Settings::default();
+        settings.stock_folder = stock.display().to_string();
+        app1.insert_resource(settings);
+        app1.world_mut().write_message(StartConversion { install_root: root.clone(), active_mod: Some("M".into()), forced: false, replace_edited: false });
+        finish_run(&mut app1);
+        assert_eq!(engines.lock().unwrap().clone(), vec![install::realpath(&root), stock_real.clone()], "the root first, then the stock folder");
+        assert!(matches!(seen(&app1)[..], [Outcome::Completed { .. }]), "{:?}", seen(&app1));
+        // without it: the abort text names the setting and where it is
+        engines.lock().unwrap().clear();
+        let mut app2 = app(&data, converter);
+        app2.world_mut().write_message(StartConversion { install_root: root.clone(), active_mod: Some("M".into()), forced: false, replace_edited: false });
+        finish_run(&mut app2);
+        assert!(matches!(&seen(&app2)[..], [Outcome::Aborted(m)] if m.contains("stock_folder") && m.contains(crate::ui::settings::FILE_NAME)), "{:?}", seen(&app2));
+        assert_eq!(engines.lock().unwrap().len(), 1, "nothing to fall back to");
+    }
+
     /// The setting reaches the run: a mod's run through the app reads the engine files in the folder the
     /// `stock_folder` setting names, and a game with no setting says what is missing and runs nothing.
     #[test]
@@ -926,10 +1015,12 @@ mod tests {
     }
 
     /// With `STA64_TEST_ROOTS_INSTALL` (an install of the mod family) and optionally `STA64_TEST_ROOTS_MOD`
-    /// (a mod of it with compiled missions): the base game is offered nothing, and the mod's run goes through the
-    /// game's own start path (the hook's message, the real converter) into a temporary data folder and converts
+    /// (a mod of it with compiled missions) and `STA64_TEST_A2_STOCK_INSTALL` (a stock Armada II folder, for an
+    /// install whose root has no engine files): the base game is offered nothing, and the mod's run goes through
+    /// the game's own start path (the hook's message, the real converter) into a temporary data folder and converts
     /// every mission of the mod. Writes only below the temporary folder, never into the install or the player's
-    /// data folder (`data_dir` is given to the context). Structure only; skips without the variables.
+    /// data folder (`data_dir` is given to the context). Structure only; skips without the variables, or when the
+    /// engine files are out of reach.
     #[test]
     fn installed_the_family_base_is_offered_nothing_and_the_mods_missions_convert_under_its_own_key() {
         let Ok(root) = std::env::var("STA64_TEST_ROOTS_INSTALL") else {
@@ -939,14 +1030,25 @@ mod tests {
         let root = PathBuf::from(root);
         let t = Tmp::new("installed");
         let data = t.0.join("data");
+        // a hand-made install is refused as the family's base game; an ordinary one by the converter's own refusal
         let base = decide_with(&root, None, Some(&data), &env());
-        assert!(matches!(base, Err(Refusal::ModFamilyBase)), "the base game of a mod family install is not offered a conversion: {base:?}");
+        assert!(matches!(base, Err(Refusal::ModFamilyBase) | Err(Refusal::Install(_))), "the base game of a mod family install is not offered a conversion: {base:?}");
         let Ok(name) = std::env::var("STA64_TEST_ROOTS_MOD") else {
             eprintln!("SKIP the mod run: set STA64_TEST_ROOTS_MOD to a mod of the install with compiled missions");
             assert!(!data.exists(), "deciding writes nothing");
             return;
         };
+        let stock = std::env::var("STA64_TEST_A2_STOCK_INSTALL").ok().map(PathBuf::from);
+        if !has_engine_files(&root) && stock.as_deref().is_none_or(|s| !has_engine_files(s)) {
+            eprintln!("SKIP the mod run: the install has no engine files at its root; set STA64_TEST_A2_STOCK_INSTALL to a stock Armada II folder");
+            return;
+        }
         let mut app = app(&data, Arc::new(real_converter));
+        if let Some(stock) = stock {
+            let mut settings = crate::frontend::screens::Settings::default();
+            settings.stock_folder = stock.display().to_string();
+            app.insert_resource(settings);
+        }
         app.world_mut().write_message(StartConversion { install_root: root.clone(), active_mod: Some(name.clone()), forced: false, replace_edited: false });
         finish_run(&mut app);
         let outcome = seen(&app).pop().expect("the run ends with a message");
@@ -955,7 +1057,6 @@ mod tests {
                 assert!(total > 0, "the mod has compiled missions");
                 assert_eq!((converted, failed), (total, 0), "every mission of the mod converts");
             }
-            Outcome::Refused(Refusal::NoEngine(m)) => panic!("the install has no engine pair and no stock folder is set: {m}"),
             other => panic!("{other:?}"),
         }
         let key = sta_core::install_key::key(&root, Some(&name));

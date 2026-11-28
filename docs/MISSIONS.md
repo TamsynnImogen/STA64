@@ -638,9 +638,13 @@ calls (`Armada2.exe` and `armada2.map`). They are looked for at the install's ow
 root first (a hand-made install has them there). Only when they are missing there is
 the stock folder looked at: the `stock_folder` line of the settings file
 (`settings.cfg`, set by hand; there is no picker) names a stock Armada II folder
-that has them; it is only read. When neither has them the run is refused, and the
-mission list says which files are missing, from which folder, and which line to
-set.
+that has them; it is only read. The line must be an absolute path (a relative one is
+refused, as the folder it would mean depends on where the game was started). When
+neither has them the run is refused, and the mission list says which files are
+missing, from which folder, and which line of which file (its full path) to set.
+Engine files at the install's root that the converter does not accept do not block the
+setting: the run then goes on with the `stock_folder` when it is set, and says so
+when it is not.
 
 The run is refused, with its reason shown, when no user data folder is known,
 when the folder is not an install the converter can read missions from, when the
