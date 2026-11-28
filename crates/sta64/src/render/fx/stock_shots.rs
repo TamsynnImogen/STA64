@@ -428,16 +428,13 @@ impl StockShot {
         self.shield_end
     }
 
-    /// Where a projectile at `body` is aimed and strikes: the hull node chosen for the shot (the centre where the model
-    /// has none, a planet's sphere point towards the muzzle; read from the executable, static); with shields up and
-    /// ordnance that does not ignore them the hit lands on the shield shape, which main draws at the centre
-    /// (kept; INTERIM). The hull-hit spark is drawn at the same point.
+    /// Where a projectile at `body` is aimed and ends: the hull node chosen for the shot (the centre where the model
+    /// has none, a planet's sphere point towards the muzzle), whatever the shields do, so the flight never changes
+    /// line (read from the executable, static: the shot is aimed at the node). With shields up and ordnance that does
+    /// not ignore them the original lands the hit on the shield shape on its way there; that crossing is not
+    /// computed: the shot is drawn on to the node (INTERIM). The hull-hit spark is drawn at the same point.
     pub(super) fn aim(&self, body: &Body) -> Vec3 {
-        if body.shields_up && !self.ignore_shield && !body.planet {
-            body.centre
-        } else {
-            beam_end(self.muzzle, body, true)
-        }
+        beam_end(self.muzzle, body, true)
     }
 
     /// Where a beam ends on the hull of its target whatever the shields show: the chosen hardpoint, the centre where

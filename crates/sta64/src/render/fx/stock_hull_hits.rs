@@ -20,8 +20,9 @@
 //!   chosen per shot by STA64's hash, INTERIM: the original's choice is not determined): its spark is drawn at that
 //!   node too. A projectile not drawn the Stock way, or whose target is out of the view, is drawn at the target's
 //!   centre. All stay in the unit's frame, so they follow it. The drawn projectile flies to the same node, so it ends
-//!   where its spark appears; with shields up (ordnance that does not ignore them) the hit lands on the shield shape
-//!   and the flight ends at the centre, as before (INTERIM).
+//!   where its spark appears, along one line whatever the shields do. With shields up (ordnance that does not ignore
+//!   them) the original lands the hit on the shield shape on its way to the node; that crossing is not computed
+//!   and the shot is drawn on to the node (INTERIM).
 //! - **Other mods' families** draw their own per-ordnance hit effects through their own hook (not read): under
 //!   Stock they get this family for now (INTERIM).
 //! - **A hit on a unit already dying draws none** (read from the executable, static; not measured).
