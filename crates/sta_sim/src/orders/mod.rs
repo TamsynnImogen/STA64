@@ -237,6 +237,10 @@ impl Sim {
         if ids.is_empty() || matches!(order, Order::Patrol { points, .. } if points.is_empty()) {
             return false;
         }
+        if let Order::MoveWarp { to, queue: true, .. } = order {
+            self.append_warp_move(player, &ids, *to);
+            return true;
+        }
         // Like every order that replaces what a craft is doing.
         self.weapons.stop_attack(&self.units, player, &ids);
         self.economy.cancel(&self.units, player, &ids);
@@ -294,7 +298,8 @@ impl Sim {
                     self.scripted.rows.insert(id, Job::AttackPoint { at: *at });
                 }
             }
-            Order::MoveWarp { to, queue, .. } => {
+            // Not queued (the queued one was appended above): the course is replaced.
+            Order::MoveWarp { to, .. } => {
                 for &id in &ids {
                     if self.approach_warp.contains(id)
                         && let Some(unit) = self.units.get(id)
@@ -308,7 +313,6 @@ impl Sim {
                         }
                     }
                     self.set_target(id, Some(*to));
-                    let _ = queue; // a queued warp move replaces the course, as the plain one does
                     self.scripted.rows.insert(id, Job::Warp);
                 }
             }
@@ -321,6 +325,40 @@ impl Sim {
             _ => return false,
         }
         true
+    }
+
+    /// A queued warp move appends: STA64's own rule (#1173). In the original a new move
+    /// order replaces the course for warp and plain moves alike (read from the executable,
+    /// static; not measured; one profile only).
+    ///
+    /// It is appended as a queued plain move is (`move_group`): a craft that is flying or
+    /// attacking keeps what it is doing and its earlier legs and gets `to` as its last leg;
+    /// an idle craft starts for `to` at once. Nothing is cancelled, but a patrol, which
+    /// never ends, is replaced, as a queued plain move does.
+    ///
+    /// Warp is a property of the craft's whole course ([`Job::Warp`] ends when no leg is
+    /// left), not of one leg: from this order on the craft warps on every leg that is far
+    /// and aligned enough, the ones queued before it included. A craft that has another
+    /// scripted order keeps it and flies the appended leg as a plain one.
+    fn append_warp_move(&mut self, player: PlayerId, ids: &[EntityId], to: Vec3) {
+        let patrols: Vec<EntityId> =
+            ids.iter().copied().filter(|id| matches!(self.scripted.job(*id), Some(Job::Patrol { .. }))).collect();
+        self.clear_scripted(player, &patrols);
+        for &id in ids {
+            // As every re-issued order: the stuck-order watch starts afresh, so what it
+            // counted on the legs before cannot end the order and drop the new leg.
+            self.watchdog.remove(id);
+            let idle = self.unit(id).is_some_and(|u| u.target.is_none()) && self.weapons.attack_of(id).is_none();
+            if idle {
+                self.set_target(id, Some(to));
+                self.movement.clear_waypoints(id);
+            } else {
+                self.movement.push_waypoint(id, to);
+            }
+            if self.scripted.job(id).is_none() {
+                self.scripted.rows.insert(id, Job::Warp);
+            }
+        }
     }
 
     /// A plain move of a craft whose physics ODF has `tooCloseForWarp`
