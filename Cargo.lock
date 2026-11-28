@@ -5868,6 +5868,7 @@ dependencies = [
  "indexmap",
  "sha2",
  "sta_core",
+ "sta_vfs",
  "thiserror 2.0.21",
 ]
 

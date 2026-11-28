@@ -423,6 +423,16 @@ fn py_basename(p: &str) -> String {
     }
 }
 
+/// One map of [`map_stems`]: `stem` (lower case) is listed under every mission its bytes name.
+fn add_stems(out: &mut IndexMap<String, Vec<String>>, stem: &str, data: &[u8]) {
+    for m in dll_names(data) {
+        let stems = out.entry(py_lower(&m)).or_default();
+        if !stems.iter().any(|s| s == stem) {
+            stems.push(stem.to_owned());
+        }
+    }
+}
+
 fn walk_stems(dir: &Path, out: &mut IndexMap<String, Vec<String>>) {
     let (mut dirs, mut files) = list_dir(dir);
     dirs.sort_by(|a, b| a.0.cmp(&b.0)); // `dirs.sort()`
@@ -437,12 +447,7 @@ fn walk_stems(dir: &Path, out: &mut IndexMap<String, Vec<String>>) {
             let Ok(data) = std::fs::read(dir.join(f)) else { continue };
             let n = f.chars().count();
             let stem = py_lower(&f.chars().take(n - 4).collect::<String>());
-            for m in dll_names(&data) {
-                let stems = out.entry(py_lower(&m)).or_default();
-                if !stems.contains(&stem) {
-                    stems.push(stem.clone());
-                }
-            }
+            add_stems(out, &stem, &data);
         }
     }
     for (_, p, is_link) in dirs {
@@ -516,21 +521,38 @@ pub struct Job {
 /// `only` (compared in lower case) selects, each with the stems it is written under.
 pub fn plan(roots: &[PathBuf], only: &[String]) -> Vec<Job> {
     let stems = map_stems(roots);
+    jobs(roots.iter().flat_map(|root| find_missions(root)), &stems, only)
+}
+
+/// [`plan`] over files the caller found itself (through a mount instead of in folders): `pairs`
+/// are the mission DLLs (`S.dsl`, `R.drl` or none) in the order to convert them, `maps` each
+/// map's stem (lower case) and bytes in the order the stems are to be listed.
+pub fn plan_resolved(pairs: Vec<(PathBuf, Option<PathBuf>)>, maps: &[(String, Vec<u8>)], only: &[String]) -> Vec<Job> {
+    let mut stems = IndexMap::new();
+    for (stem, data) in maps {
+        add_stems(&mut stems, stem, data);
+    }
+    jobs(pairs.into_iter(), &stems, only)
+}
+
+fn jobs(
+    pairs: impl Iterator<Item = (PathBuf, Option<PathBuf>)>,
+    stems: &IndexMap<String, Vec<String>>,
+    only: &[String],
+) -> Vec<Job> {
     let only: Vec<String> = only.iter().map(|x| py_lower(x)).collect();
     let mut jobs = Vec::new();
-    for root in roots {
-        for (dsl, drl) in find_missions(root) {
-            let dsl_base = dsl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let mission = mission_name(&dsl_base);
-            if !only.is_empty() && !only.contains(&py_lower(&mission)) {
-                continue;
-            }
-            let targets = match stems.get(&py_lower(&mission)).filter(|s| !s.is_empty()) {
-                Some(s) => s.clone(),
-                None => vec![py_lower(&mission)],
-            };
-            jobs.push(Job { mission, dsl, drl, targets });
+    for (dsl, drl) in pairs {
+        let dsl_base = dsl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mission = mission_name(&dsl_base);
+        if !only.is_empty() && !only.contains(&py_lower(&mission)) {
+            continue;
         }
+        let targets = match stems.get(&py_lower(&mission)).filter(|s| !s.is_empty()) {
+            Some(s) => s.clone(),
+            None => vec![py_lower(&mission)],
+        };
+        jobs.push(Job { mission, dsl, drl, targets });
     }
     jobs
 }
