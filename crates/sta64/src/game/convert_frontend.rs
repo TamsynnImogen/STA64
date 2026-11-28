@@ -525,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn the_campaigns_offer_the_conversion_for_the_base_game_only() {
+    fn the_campaigns_offer_the_conversion_for_the_base_game_and_for_the_active_mod() {
         // through the loader the game uses, not a flag set by hand
         let site = site("modrule");
         std::fs::create_dir_all(site.conv.join("missions")).unwrap();
@@ -539,7 +539,9 @@ mod tests {
         assert!(cs.convertible, "the base game with a conversion mounted");
         let modded = sta_vfs::Vfs::mount_install(&site.root, Some("Some Mod")).expect("the mod mounts");
         let (cs, _) = load_campaigns_with(&modded, Some(&site.root), Some("Some Mod"), Some(&site.conv), store).expect("campaigns");
-        assert!(!cs.convertible, "a mod's chain is never converted (D6)");
+        assert!(cs.convertible, "with a mod active the conversion of that mod is offered (#1407); it is keyed to the mod (D6)");
+        // and a mod's own converted folder is the one mounted for it, not the base game's: another folder
+        assert_ne!(sta_mission::converted::dir_in(&site.data, &site.root, Some("Some Mod")), site.conv);
         let _ = std::fs::remove_dir_all(&site.tmp);
     }
 
