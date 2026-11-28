@@ -115,15 +115,25 @@ fn only_the_armada_ii_line_follows_the_rule_and_the_other_profiles_keep_the_ray_
     }
 }
 
-/// The fixed radius is in the HUD's canvas units: on a window with twice the pixels per unit the same pointer,
-/// 20 pixels from the centre of a small unit, is within the radius; on the smaller window it is not.
+/// The pointer at `cursor` for a window of `size` (logical pixels), with the ray through the unit.
+fn point_in(app: &mut App, cursor: Vec2, size: Vec2) {
+    app.insert_resource(Aim(Some(AimState { cursor, ray: Ray3d::new(Vec3::ZERO, Dir3::NEG_Z), clip_from_world: projection(), size })));
+}
+
+/// The fixed radius is in canvas units and follows the window through the real derivation, at two window sizes
+/// and in either HUD mode: a pointer within 0.8 radii of a small unit's centre hovers it, one 1.5 radii away does
+/// not, on a small window and on a large one. (The window's size is what `track` reads; no resource carries the
+/// scale, so a switch of HUD mode cannot leave a stale one.)
 #[test]
-fn the_fixed_radius_follows_the_canvas_scale_at_two_window_sizes() {
-    for (unit_px, hovered_expected) in [(1.0, false), (2.0, true)] {
-        let mut app = app(Some(Profile::Sta2Classic), 0.0);
-        app.insert_resource(super::super::hover_pick::CanvasUnit(unit_px));
-        point_at(&mut app, CENTRE + Vec2::new(20.0, 0.0));
-        assert_eq!(hovered(&mut app).is_some(), hovered_expected, "{unit_px} px per canvas unit");
+fn the_fixed_radius_follows_the_window_through_the_real_derivation() {
+    for size in [Vec2::new(800.0, 600.0), Vec2::new(1600.0, 1200.0)] {
+        let radius = super::super::hover_pick::MIN_RADIUS_PX * super::super::hover_pick::canvas_unit(size);
+        for (factor, expected) in [(0.8, true), (1.5, false)] {
+            let mut app = app(Some(Profile::Sta2Classic), 0.0);
+            // The unit's centre on this window: the projection fills the window, so it is at the middle.
+            point_in(&mut app, size / 2.0 + Vec2::new(factor * radius, 0.0), size);
+            assert_eq!(hovered(&mut app).is_some(), expected, "window {size:?}, {factor} radii away");
+        }
     }
 }
 

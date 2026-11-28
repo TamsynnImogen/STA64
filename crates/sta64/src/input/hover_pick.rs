@@ -10,7 +10,7 @@
 //!    fails the acceptance test never blocks a farther one that passes.
 //! 3. Acceptance, in three stages: (a) the pointer is within [`MIN_RADIUS_PX`] of the projected centre (the
 //!    original works in the HUD's canvas units, so the radius is that many canvas units, converted to window
-//!    pixels by the stock HUD's canvas scale, [`CanvasUnit`]);
+//!    pixels by the canvas scale derived from the window, [`canvas_unit`]);
 //!    else (b) it is within the projected bounding-sphere radius times `1 + speed / `[`SPHERE_SPEED_DIVISOR`],
 //!    and (c) inside the container rectangle (the screen box of the projected model bounds) scaled about
 //!    its centre by `1 + speed / `[`RECT_SPEED_DIVISOR`]. (b) and (c) are both required.
@@ -26,15 +26,19 @@ use sta_sim::EntityId;
 /// unit, not a window pixel (read from the executable, static).
 pub const MIN_RADIUS_PX: f32 = 16.0;
 
-/// Window pixels per canvas unit of the stock HUD (its layout's scale), set while the stock HUD is shown; 1
-/// otherwise. Converts [`MIN_RADIUS_PX`] to the pixels the pointer and the projections are in.
-#[derive(Resource, Clone, Copy, Debug, PartialEq)]
-pub struct CanvasUnit(pub f32);
-
-impl Default for CanvasUnit {
-    fn default() -> Self {
-        CanvasUnit(1.0)
-    }
+/// Window pixels per canvas unit: the stock sheet's canvas ([`DEFAULT_CANVAS`]) fitted into the window as the
+/// stock HUD fits it (one scale, the sheet centred), which is the window's height over the canvas height unless
+/// the window is narrower than the canvas. Derived from the window every call, so it is right whatever HUD mode
+/// is showing and at every window size; there is no state to go stale. Converts [`MIN_RADIUS_PX`] to the pixels
+/// the pointer and the projections are in.
+///
+/// INTERIM, two choices of STA64's own: (1) under a stretched stock HUD the canvas unit differs per axis (the
+/// original's radius would be an ellipse in window pixels); the single centred-fit scale is used for both
+/// axes. (2) The rule belongs to the content profile, not to the HUD mode, and STA64's own HUD has no canvas:
+/// the stock sheet's canvas is used there too, as the engine's own virtual viewport (read from the
+/// executable, static: the pick projects into the HUD's canvas whatever the HUD).
+pub fn canvas_unit(window: Vec2) -> f32 {
+    crate::ui::hud::stock::layout::fit_canvas(crate::ui::hud::stock::layout::DEFAULT_CANVAS, window).0
 }
 /// The container rectangle grows by `speed / this` [exe, static].
 pub const RECT_SPEED_DIVISOR: f32 = 200.0;
@@ -136,6 +140,15 @@ mod tests {
         let c = cand(1, Vec2::new(100.0, 100.0), 2.0, Vec2::splat(2.0), 0.0);
         assert!(c.accepts(Vec2::new(100.0 + MIN_RADIUS_PX - 0.1, 100.0), 1.0));
         assert!(!c.accepts(Vec2::new(100.0 + MIN_RADIUS_PX + 3.0, 100.0), 1.0), "past the radius and outside the box");
+    }
+
+    #[test]
+    fn the_canvas_unit_is_derived_from_the_window() {
+        assert_eq!(canvas_unit(Vec2::new(1600.0, 1200.0)), 1.0);
+        assert_eq!(canvas_unit(Vec2::new(800.0, 600.0)), 0.5);
+        // The window's height decides on a wide window, its width on a narrow one.
+        assert!((canvas_unit(Vec2::new(1920.0, 1080.0)) - 0.9).abs() < 1e-6);
+        assert!((canvas_unit(Vec2::new(600.0, 1200.0)) - 0.375).abs() < 1e-6);
     }
 
     #[test]

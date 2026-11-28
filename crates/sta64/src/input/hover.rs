@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use sta_sim::{EntityId, PlayerId};
 
-use super::hover_pick::{CanvasUnit, Candidate, Sticky, pick};
+use super::hover_pick::{Candidate, Sticky, canvas_unit, pick};
 use super::orders::Aim;
 use super::select::{AimState, Targetable, target_seen, unit_under_where};
 use crate::frontend::scene::MenuScene;
@@ -109,7 +109,6 @@ pub fn track(
     menu_scene: Option<Res<MenuScene>>,
     feed: Option<Res<HudFeed>>,
     time: Option<Res<Time<Real>>>,
-    canvas: Option<Res<CanvasUnit>>,
     units: Targetable,
     rule_units: HoverUnits,
     mut sticky: Local<Sticky>,
@@ -121,7 +120,7 @@ pub fn track(
     let next = if rule {
         match (can_track(aim, over_hud, menu_scene.is_some(), link.as_deref(), feed.as_deref()), aim, link.as_deref(), feed.as_deref()) {
             (true, Some(aim), Some(link), Some(feed)) => {
-                let unit_px = canvas.map_or(1.0, |c| c.0);
+                let unit_px = canvas_unit(aim.size);
                 let picked = pick(&candidates(&aim, link, feed, &rule_units), aim.cursor, unit_px);
                 let dt = time.map_or(0.0, |t| t.delta_secs());
                 sticky.resolve(dt, picked, |id| eligible(link, feed, id).then(|| link.curr().unit(id).map_or(0.0, |u| u.speed.to_f32())))
