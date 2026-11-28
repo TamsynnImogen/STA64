@@ -49,9 +49,51 @@ pub struct WorldView {
     pub active_point_defence: Vec<(EntityId, u8)>,
     #[serde(default)]
     pub a1_specials: crate::specials::SpecialView,
+    /// Every craft in warp or dropping out of it (the attack approach and
+    /// scripted warp moves), ascending entity id. Derived from the sim's warp
+    /// record and the craft's speed; no state of its own.
+    #[serde(default)]
+    pub warp_rows: Vec<WarpRow>,
+}
+
+/// Where a craft is in its warp (SIM-36).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WarpPhase {
+    /// Speeding up from impulse speed toward warp speed.
+    Entering,
+    /// At warp speed.
+    AtWarp,
+    /// Dropping out of warp, slowing toward its limit.
+    Leaving,
+}
+
+/// One craft's warp for the renderer (#1102 part 1).
+///
+/// The ramp is the smooth speed change between impulse speed and warp speed
+/// that the kinematics run today, so `ramp_len` is that change's length in
+/// ticks. The sim does not store when a ramp began: `ramp_start` is worked out
+/// from the craft's speed, so it is exact for a ramp that runs unbroken from
+/// impulse speed (or from warp speed, leaving) and is clamped to the current
+/// tick otherwise. At warp the ramp is over and `ramp_start` is the tick it
+/// would have begun to end now (`tick - ramp_len`), not the entry tick.
+/// Interim: part 2 of #1102 stores the real start.
+///
+/// `phase` is the contract; the ramp fields are presentation hints and may
+/// become zero-length (no `Entering` row) when the measured no-ramp rule lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WarpRow {
+    pub id: EntityId,
+    pub phase: WarpPhase,
+    pub ramp_start: Tick,
+    pub ramp_len: u32,
 }
 
 impl WorldView {
+    /// The craft's warp row, if it is in warp or dropping out.
+    pub fn warp_of(&self, id: EntityId) -> Option<&WarpRow> {
+        self.warp_rows.binary_search_by_key(&id, |row| row.id).ok().map(|i| &self.warp_rows[i])
+    }
+
     pub fn point_defence_on(&self, id: EntityId, slot: u8) -> bool {
         self.active_point_defence.binary_search(&(id, slot)).is_ok()
     }

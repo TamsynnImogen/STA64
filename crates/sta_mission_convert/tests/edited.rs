@@ -17,8 +17,12 @@ use sta_mission_convert::install::{self, Event, Install, Options, Summary};
 use sta_mission_convert::output::{self, Edited, MANIFEST, OutDir, WriteError};
 use sta_mission_convert::{Pe, Result};
 
+/// Opens the output folder `root` as the command line and the game do: the folder as given, and
+/// its resolved form. `OutDir` checks before every write that the resolved folder still resolves to
+/// itself, so the second argument must be the resolved path: the temp folder lies behind a link on
+/// macOS and has another canonical form on Windows.
 fn open(root: &Path, edited: Edited) -> std::result::Result<OutDir, String> {
-    OutDir::inspect_with(root, root.to_path_buf(), false, edited)
+    OutDir::inspect_with(root, sta_mission_convert::paths::resolve(root)?, false, edited)
 }
 
 fn manifest_names(root: &Path) -> Vec<String> {
