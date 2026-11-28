@@ -49,7 +49,7 @@ From AGENTS.md, "Research and game files":
 
 AGENTS.md carries the operative wording; where the two texts ever differ, AGENTS.md is followed until this ADR is superseded.
 
-### Clarification 2026-11-28: engine lookup names
+### Clarification 2026-11-28: engine lookup names and fixed file paths
 
 *Records a decision taken by Cedric (`cedrichaase`) on 2026-11-28 as an easily reversible one (AGENTS.md, "Decisions: ADRs and experiments": one revert removes the constants, and no save, replay, protocol, content or mod format depends on them). It is in use from that date and is recorded here so that this ADR stays true. Tammy (`TamsynnImogen`) is informed through the pull request that records it and is free to object; if she does, the constants are reverted. Reversal: revert the constants and the AGENTS.md sentence that goes with this note, and mark this note withdrawn.*
 
@@ -59,8 +59,10 @@ Clarification: a fixed lookup name by which the original engine selects an entry
 
 Limits:
 
-- This covers lookup names only. It does not cover the definitions themselves, values, or any other names from game assets (units, maps, missions, files, textures); those stay under the rules above.
-- The names appear in code only: not in issues, pull request bodies, review comments, commit messages, docs, WORKPLAN or TODO.md.
+- This covers lookup names and fixed file paths only (see the extension below). It does not cover the definitions themselves, values, or any other names from game assets (units, maps, missions, files, textures); those stay under the rules above.
+- The names and paths appear in code only: not in issues, pull request bodies, review comments, commit messages, docs, WORKPLAN or TODO.md.
+
+Extension, same day (the same decider): the same exception holds for a fixed file path by which the original engine opens data that the player's install provides (by kind: a shell background picture, an intro movie). It may be a named constant in STA64's code only, where the code needs it to open that file at run time. Each such constant has a one-line comment with the rule and the evidence grade. Where the path is specific to one game or profile, it must be identifiable which one, by the constant's name, its module or the comment. The file itself and anything read from it are never committed, and a mod may provide its own file under that path. `main` already carries such constants for the intro movies, and the campaign-screen work (draft PR #1374) depends on this extension.
 
 Alternatives considered and not chosen:
 

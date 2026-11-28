@@ -254,7 +254,13 @@ Recorded as [ADR 0003](docs/adr/0003-clean-room-content-policy.md); the rules be
   evidence grade); a mod may define the entry under that name. Lookup names
   only: definitions, values and every other name from game assets stay under
   the rules above, and these names appear in code only, never in issues, PR
-  bodies, review comments, commit messages, docs, WORKPLAN or TODO.md.
+  bodies, review comments, commit messages, docs, WORKPLAN or TODO.md. The
+  same holds for a fixed file path by which the original engine opens data the
+  player's install provides (a shell background picture, an intro movie): a
+  named constant in code only, with a one-line comment (rule and evidence
+  grade), identifiable by name, module or comment as belonging to its game or
+  profile where it is specific to one; the file and anything read from it are
+  never committed, and a mod may provide its own file.
 
 ## Builds
 
