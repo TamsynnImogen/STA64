@@ -47,7 +47,7 @@ pub(crate) struct Situation<'a> {
     /// meets the map plane.
     pub moves: bool,
     /// The click on open ground would be a warp move (`orders::world_warp`: Alt held, on Armada II
-    /// content; with the queue modifier it is a queued warp move).
+    /// content, and warp on offer: `sim_link::warp_allowed`; with the queue modifier it is a queued warp move).
     pub warp: bool,
     /// The pointer is over the minimap's square (it is HUD, but its right-click is an order).
     pub minimap: Option<MinimapPointer>,
@@ -163,13 +163,13 @@ pub fn cursor(
         let at = crate::ui::radar::click_at(s, m, r.normalized?, bevy::picking::pointer::PointerButton::Secondary);
         Some(MinimapPointer {
             inside_map: at.inside_map,
-            plain: keys.as_deref().is_some_and(|k| super::orders::minimap_plain(k, content.as_deref().map(|c| &*c.0))),
+            plain: keys.as_deref().is_some_and(|k| super::orders::minimap_plain(k, content.as_deref().map(|c| &*c.0))) || !crate::sim_link::warp_allowed(link.curr(), content.as_deref().map(|c| &*c.0)),
             movers: !heights.is_empty(),
         })
     });
     // The armed pick (the HUD's system) writes over this when it is on.
     let over_hud = hud.is_some_and(|h| h.0);
-    let warp = keys.as_deref().is_some_and(|k| super::orders::world_warp(k, content.as_deref().map(|c| &*c.0)));
+    let warp = keys.as_deref().is_some_and(|k| super::orders::world_warp(k, content.as_deref().map(|c| &*c.0))) && crate::sim_link::warp_allowed(link.curr(), content.as_deref().map(|c| &*c.0));
     wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, warp, minimap });
     let want = match icon {
         Some(Order::Attack { .. }) => SystemCursorIcon::Crosshair,
@@ -453,6 +453,47 @@ mod tests {
         assert_eq!(app2.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_warp");
         assert_eq!(kind_cursor(&cmds), Some("c_warp"));
         assert!(matches!(&cmds[..], [CommandKind::Order(Order::MoveWarp { queue: true, .. })]), "{cmds:?}");
+        // Warp off: no warp cursor and a plain move, even with Alt held and with the queue modifier too. Each of the
+        // three terms: the content's own switch, the mission switch the view carries and the match option.
+        struct Frozen(Arc<WorldView>);
+        impl WorldSource for Frozen {
+            fn step(&mut self, _: &[sta_sim::command::Command]) -> TickOutput {
+                TickOutput { view: self.0.clone(), events: vec![] }
+            }
+            fn view(&self) -> Arc<WorldView> {
+                self.0.clone()
+            }
+        }
+        for (term, queue) in [("content", false), ("mission switch", false), ("match option", false), ("content", true), ("match option", true)] {
+            let (mut app4, _) = app_as(1, A2);
+            app4.init_resource::<crate::ui::cursor::WantedCursor>();
+            match term {
+                "content" => {
+                    let db = (*app4.world().resource::<ContentRes>().0).clone();
+                    app4.insert_resource(ContentRes(Arc::new(db.clone().with_rules(db.rules().clone().with_warp(Some(false))))));
+                }
+                other => {
+                    let mut view = (**app4.world().resource::<SimLink>().curr()).clone();
+                    if other == "mission switch" {
+                        view.attrs.mission_switches.allow_warp = false;
+                    } else {
+                        view.attrs.match_warp_off = true;
+                    }
+                    app4.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+                }
+            }
+            app4.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
+            if queue {
+                app4.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::ShiftLeft);
+            }
+            let cmds = right_click_at(&mut app4, 20000.0);
+            app4.world_mut().run_system_once(cursor).unwrap();
+            assert_eq!(app4.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_move", "{term} queue {queue}: {cmds:?}");
+            assert_eq!(kind_cursor(&cmds), Some("c_move"), "{term} queue {queue}: {cmds:?}");
+            if queue {
+                assert!(matches!(&cmds[..], [CommandKind::Order(Order::Move { queue: true, .. })]), "queue + warp off = a queued PLAIN move: {cmds:?}");
+            }
+        }
         // A pointer whose ray misses the map plane: nothing to warp to.
         let (mut app3, _) = app_as(1, A2);
         app3.init_resource::<crate::ui::cursor::WantedCursor>();
