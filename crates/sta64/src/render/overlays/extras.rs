@@ -10,10 +10,13 @@
 //! - The number is the unit's control group, 1 to 9; a unit in no group shows none. Interim: a unit in
 //!   several STA64 groups shows the first, and how the original's group indices map to the keys is not
 //!   established.
-//! - Interim: the font. The engine's default font is used by the original; which picture font that is
-//!   and at what size is not identified, so STA64 draws the digit in the mod's sprite font.
+//! - Font: the default text role of the stock font rule ([`StockRole::Default`]), top left justified
+//!   [static]. Where the rule does not hold (an install without the stock role fonts) the digit keeps
+//!   the mod's sprite font at a fixed size: INTERIM, fallback only.
 //! - Omitted (marked): the sprite laid under the number, read through the key `group_background` with a
-//!   tint [static]; it is not drawn.
+//!   tint [static]; it is not drawn (the tint's colour value is not established).
+//! - Group index and number format: the digit is the control group's number as STA64 numbers its groups
+//!   and a plain integer; the original's group index mapping and format string were not read: INTERIM.
 //! - The damaged-system icons are not part of this module (not established, see `TODO.md`).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -30,7 +33,8 @@ use crate::input::select::ControlGroups;
 use crate::render::units::SelectRadius;
 use crate::sim_link::{ContentRes, Selection, SimEntities, SimLink};
 use crate::ui::profile::UiProfile;
-use crate::ui::sprite_font::{SpriteText, SpriteTextStyle, sprite_text};
+use crate::ui::sprite_font::{SpriteText, SpriteTextStyle, StockRoleMark, sprite_text};
+use crate::ui::stock_font::StockRole;
 
 /// The text colour of the number [static].
 pub const NUMBER_COLOUR: Color = Color::srgb(0.8, 0.7, 0.2);
@@ -107,7 +111,14 @@ pub fn reconcile(commands: &mut Commands, existing: &mut ExtraQuery, want: &BTre
             continue;
         }
         let node = Node { position_type: PositionType::Absolute, left: Val::Px(p.pos.x / ui_scale), top: Val::Px(p.pos.y / ui_scale), ..default() };
-        commands.spawn((Name::new("group number"), *x, node, sprite_text(p.text.clone(), 16.0, NUMBER_COLOUR), SpriteTextStyle { native: true, ..default() }));
+        commands.spawn((
+            Name::new("group number"),
+            *x,
+            node,
+            sprite_text(p.text.clone(), 16.0, NUMBER_COLOUR),
+            SpriteTextStyle { native: true, ..default() },
+            StockRoleMark::new(StockRole::Default),
+        ));
     }
 }
 
@@ -239,6 +250,10 @@ mod tests {
         let count = |app: &mut App| app.world_mut().query::<&GroupNumber>().iter(app.world()).count();
         run(&mut app, BTreeMap::from([(one, placed("3", 5.0)), (two, placed("2", 6.0))]));
         assert_eq!(count(&mut app), 2);
+        // The digit is text of the stock font rule's default role (it takes the rule where the rule holds).
+        let mut marks = app.world_mut().query::<&StockRoleMark>();
+        assert!(marks.iter(app.world()).all(|m| m.role == Some(StockRole::Default)));
+        assert_eq!(marks.iter(app.world()).count(), 2);
         run(&mut app, BTreeMap::from([(one, placed("4", 7.0))]));
         assert_eq!(count(&mut app), 1, "the other number is gone, this one stays");
         let mut q = app.world_mut().query::<(&Node, &SpriteText)>();
