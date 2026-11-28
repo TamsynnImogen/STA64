@@ -38,7 +38,8 @@
 //! - every `Hit` on a dying unit counts as a hit, whatever its weapon;
 //! - a dying yard's build queue holds (as in stasis) until removal;
 //! - the `isHero` class key, which gives the long phase whatever the speed (read from the
-//!   executable, static), is not read: every unit follows its speed.
+//!   executable, static), is not read: every unit follows its speed;
+//! - the late ticks are counted in STA64 ticks, as many as were measured in the original's.
 
 use serde::{Deserialize, Serialize};
 use sta_content::ContentDb;
@@ -50,15 +51,14 @@ use crate::view::UnitFlags;
 use crate::world::{Entities, EntityKind, Fnv, Table};
 use crate::Sim;
 
-/// Phase length of a unit at rest or slow at hull zero: three seconds (measured, repeated).
+/// Phase length of a unit at rest or slow at hull zero (measured, repeated).
 pub const DYING_STANDING_TICKS: Tick = 3 * TICK_HZ as Tick;
-/// Phase length of a unit faster than [`DYING_MOVING_SPEED`] at hull zero: five seconds
-/// (measured, repeated).
+/// Phase length of a unit faster than [`DYING_MOVING_SPEED`] at hull zero (measured, repeated).
 pub const DYING_MOVING_TICKS: Tick = 5 * TICK_HZ as Tick;
-/// Removal comes this many ticks after the phase length (measured, repeated, on the original's
-/// 50 Hz clock; kept as STA64 ticks).
+/// Removal comes this many ticks after the phase length (measured, repeated, in the original's
+/// own ticks; INTERIM: kept as the same count of STA64 ticks).
 pub const DYING_LATE_TICKS: Tick = 2;
-/// What each further hit takes off the phase: half a second (measured, repeated).
+/// What each further hit takes off the phase (measured, repeated).
 pub const DYING_HIT_STEP_TICKS: Tick = TICK_HZ as Tick / 2;
 /// A unit faster than this, in units per second, takes the long phase (read from the
 /// executable, static; both sides of it measured).
