@@ -7,17 +7,23 @@
 //! - Position: its top left corner sits one quarter of the box width right of the box's right edge and
 //!   one quarter of its height above its top edge, in camera pixels [static].
 //! - Colour: the digit's colour is a constant of the engine [static]; see [`NUMBER_COLOUR`].
-//! - The number is the unit's control group, 1 to 9; a unit in no group shows none. Interim: a unit in
-//!   several STA64 groups shows the first, and how the original's group indices map to the keys is not
-//!   established.
+//! - The number is the unit's control group, 1 to 9; a unit in no group shows none. A unit belongs to ONE group:
+//!   binding it to another removes it from the first (measured, frame, modded bench, one observation; the
+//!   binding in `input/select.rs` already does so), so the first-of-several rule below never applies. It is
+//!   drawn when the unit is selected, hovered or both, at the top right of its selection mark (measured, frame,
+//!   modded bench: the three cases at one window size, the placement at two); two selected units in different
+//!   groups each show their own digit (one observation). Not measured: two-digit numbers, group zero. How the
+//!   original's group indices map to the keys is not established.
 //! - Font: the default text role of the stock font rule ([`StockRole::Default`]), top left justified
 //!   [static]. Where the rule does not hold (an install without the stock role fonts) the digit keeps
 //!   the mod's sprite font at a fixed size: INTERIM, fallback only.
-//! - Omitted (marked): the sprite laid under the number, read through the key `group_background` with a
-//!   tint [static]; it is not drawn (the tint's colour value is not established).
+//! - Backing: a solid box behind the digit, tight to it (measured, frame, modded bench: drawn in the three cases at one
+//!   window size, its height scaling with the window). INTERIM: its tint is not established, so it takes the nearest
+//!   existing stock tint ([`BACKING`], the info panel's backing); the sprite the static read names for it
+//!   (`group_background`) is not read.
 //! - Group index and number format: the digit is the control group's number as STA64 numbers its groups
 //!   and a plain integer; the original's group index mapping and format string were not read: INTERIM.
-//! - The damaged-system icons are not part of this module (not established, see `TODO.md`).
+//! - The damaged-system icons are in [`super::systems`].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,6 +41,9 @@ use crate::sim_link::{ContentRes, Selection, SimEntities, SimLink};
 use crate::ui::profile::UiProfile;
 use crate::ui::sprite_font::{SpriteText, SpriteTextStyle, StockRoleMark, sprite_text};
 use crate::ui::stock_font::StockRole;
+
+/// The backing behind the digit: the info panel's own backing, solid (INTERIM; the original's tint is not established).
+pub const BACKING: Color = Color::BLACK;
 
 /// The text colour of the number [static].
 pub const NUMBER_COLOUR: Color = Color::srgb(0.8, 0.7, 0.2);
@@ -115,6 +124,7 @@ pub fn reconcile(commands: &mut Commands, existing: &mut ExtraQuery, want: &BTre
             Name::new("group number"),
             *x,
             node,
+            BackgroundColor(BACKING),
             sprite_text(p.text.clone(), 16.0, NUMBER_COLOUR),
             SpriteTextStyle { native: true, ..default() },
             StockRoleMark::new(StockRole::Default),
@@ -259,6 +269,10 @@ mod tests {
         let mut q = app.world_mut().query::<(&Node, &SpriteText)>();
         let (n, t) = q.single(app.world()).unwrap();
         assert_eq!((t.text.as_str(), n.left), ("4", Val::Px(7.0)));
+        // Every digit sits on its solid backing box.
+        let mut backs = app.world_mut().query::<(&GroupNumber, &BackgroundColor)>();
+        assert!(backs.iter(app.world()).all(|(_, b)| b.0 == BACKING && b.0.alpha() == 1.0));
+        assert_eq!(backs.iter(app.world()).count(), 1);
         run(&mut app, BTreeMap::new());
         assert_eq!(count(&mut app), 0);
     }
