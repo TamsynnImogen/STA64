@@ -183,6 +183,7 @@ pub const fn region(slot: SaveSlot) -> Region {
 }
 
 /// The slots a screen shows (the question's, when one is asked, are on top of these).
+#[cfg(test)]
 pub fn slots_of(mode: SaveMode, asking: bool) -> Vec<SaveSlot> {
     let mut v = vec![SaveSlot::Panel, SaveSlot::Title, SaveSlot::List, SaveSlot::Detail, SaveSlot::Status, SaveSlot::Primary, SaveSlot::Delete, SaveSlot::Back];
     if mode == SaveMode::Save {
@@ -210,9 +211,9 @@ pub struct SaveList;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SaveRow(pub usize);
 
-/// On a row that is greyed out: its save cannot be loaded here.
-#[derive(Component)]
-pub struct RowGreyed;
+/// On every row: whether its save can be loaded here. A row that cannot is greyed out (dim text).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowLoadable(pub bool);
 
 /// The name field.
 #[derive(Component)]
@@ -326,7 +327,7 @@ fn rows_list(theme: &Theme, rows: &[(String, bool)], selected: Option<usize>, vi
                     kit_text(theme, text.clone(), theme.small_size, colour),
                 ],
             );
-            (row, if *loadable { None } else { Some(RowGreyed) })
+            (row, RowLoadable(*loadable))
         })
         .collect();
     (
@@ -660,11 +661,6 @@ fn close_on_leave(state: Option<Res<State<AppState>>>, mut screen: ResMut<SaveSc
     if screen.open && state.is_some_and(|s| Some(*s.get()) != screen.origin) {
         screen.open = false;
     }
-}
-
-/// Run condition for the in-game menu's keys: the screen is not over it.
-pub fn screen_closed(screen: Option<Res<SaveScreen>>) -> bool {
-    !screen.is_some_and(|s| s.open)
 }
 
 #[allow(clippy::too_many_arguments)]

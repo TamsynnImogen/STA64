@@ -175,7 +175,7 @@ fn a_file_of_another_version_and_one_of_other_content_are_listed_greyed_with_the
     assert!(s.entries[v].refusal.as_deref().is_some_and(|r| r.contains("version 9") && r.contains("reads version")), "{:?}", s.entries[v].refusal);
     assert!(s.entries[c].refusal.as_deref().is_some_and(|r| r.contains("other content")), "{:?}", s.entries[c].refusal);
     assert_eq!(s.entries.iter().filter(|e| e.loadable()).count(), 1);
-    let greyed = a.world_mut().query::<(&SaveRow, &RowGreyed)>().iter(a.world()).map(|(r, _)| r.0).collect::<Vec<_>>();
+    let greyed = a.world_mut().query::<(&SaveRow, &RowLoadable)>().iter(a.world()).filter(|(_, l)| !l.0).map(|(r, _)| r.0).collect::<Vec<_>>();
     assert_eq!(greyed.len(), 2);
     assert!(greyed.contains(&v) && greyed.contains(&c));
     assert!(texts(&mut a).iter().any(|t| t.contains("other content")), "the reason is on the screen");
