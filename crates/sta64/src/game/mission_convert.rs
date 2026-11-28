@@ -5,9 +5,12 @@
 //! (`sta_mission_convert::install`, LUA-15i). This module is the part that needs no screen:
 //!
 //! * [`decide`] says whether a run is allowed and where it reads and writes ([`Plan`]), or why
-//!   not ([`Refusal`]): base game only (ADR 0004 D6: a mod's chain is never converted), some mission
-//!   DLL in the install, an output and cache folder the converter accepts (never inside an install,
-//!   a game folder or the checkout).
+//!   not ([`Refusal`]): for a plain stock install its own missions (some mission DLL in it); for the
+//!   mod family's own base game nothing (its missions are scripts already, and the stock campaign
+//!   at the install's root is not converted under it); with a mod active that mod's compiled
+//!   missions, from the install and that mod only (ADR 0004 D6: the output and the cache follow the
+//!   install and the mod they were made for); an output and cache folder the converter accepts
+//!   (never inside an install, a game folder or the checkout).
 //! * A message [`StartConversion`] starts a run (`forced` ignores the cache and the stamp), a
 //!   message [`CancelConversion`] asks the running one to stop between two missions. The run is one
 //!   `std::thread` that owns the output folder writer, the cache and the decoder and calls
@@ -72,12 +75,19 @@ pub struct Plan {
 /// Why no run is made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    /// A mod is active (D6): the conversion covers the base game, which stays mounted.
-    ModActive(String),
+    /// The mounted game is the mod family's own base game and no mod is active: its missions are
+    /// scripts already, and the stock campaign found at the install's root is not converted under it
+    /// (ADR 0004 D6: a conversion layer follows the install and the mod it was made for).
+    ModFamilyBase,
     /// No user data folder is known.
     NoDataDir,
     /// The folder is not an install the converter can read missions from.
     Install(InstallError),
+    /// The active mod cannot be opened with this install (the mount's own reason).
+    Mod(String),
+    /// A mod's missions need the engine files and none are in reach; the text says what is missing
+    /// and where to name a folder that has them.
+    NoEngine(String),
     /// The install has no mission DLL: nothing to convert.
     NoMissionDlls,
     /// The output folder is refused (inside an install, a game folder or the checkout, or it
@@ -90,18 +100,19 @@ pub enum Refusal {
 impl Refusal {
     /// A refusal the player is told about; the others are the normal "nothing to do here".
     pub fn is_fault(&self) -> bool {
-        matches!(self, Refusal::Output(_) | Refusal::Cache(_) | Refusal::NoDataDir | Refusal::Install(_))
+        matches!(self, Refusal::Output(_) | Refusal::Cache(_) | Refusal::NoDataDir | Refusal::Install(_) | Refusal::Mod(_) | Refusal::NoEngine(_))
     }
 }
 
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Refusal::ModActive(m) => write!(f, "the mod {m} is active: only the base game's missions are converted"),
+            Refusal::ModFamilyBase => f.write_str("this is the mod family's own base game: its missions are scripts already, and the stock campaign at the install's root is not converted under it"),
             Refusal::NoDataDir => f.write_str("no user data folder is known to keep converted missions in"),
             Refusal::Install(e) => write!(f, "this folder has no missions to convert: {}", install_text(e)),
+            Refusal::Mod(m) => write!(f, "the active mod cannot be opened with this install: {m}"),
             Refusal::NoMissionDlls => f.write_str("the install has no mission DLLs to convert"),
-            Refusal::Output(m) | Refusal::Cache(m) => f.write_str(m),
+            Refusal::NoEngine(m) | Refusal::Output(m) | Refusal::Cache(m) => f.write_str(m),
         }
     }
 }
@@ -126,19 +137,91 @@ pub fn decide(install_root: &Path, active_mod: Option<&str>, data_dir: Option<&P
 
 /// [`decide`] with the surroundings given (the checkout the output must stay out of, ...).
 pub fn decide_with(install_root: &Path, active_mod: Option<&str>, data_dir: Option<&Path>, env: &Env) -> Result<Plan, Refusal> {
-    if let Some(m) = active_mod.filter(|m| !m.is_empty()) {
-        return Err(Refusal::ModActive(m.to_owned()));
-    }
+    decide_for(install_root, active_mod, data_dir, env, None)
+}
+
+/// [`decide_with`] and the stock Armada II folder the player named (`stock_folder` of the settings file),
+/// where a mod's missions find their engine files when the install's own root has none.
+pub fn decide_for(install_root: &Path, active_mod: Option<&str>, data_dir: Option<&Path>, env: &Env, stock_folder: Option<&Path>) -> Result<Plan, Refusal> {
     let data = data_dir.ok_or(Refusal::NoDataDir)?;
+    match active_mod.filter(|m| !m.is_empty()) {
+        Some(name) => decide_mod(install_root, name, data, env, stock_folder),
+        None => decide_base(install_root, data, env),
+    }
+}
+
+/// The base game of an install: a plain stock install is offered its own missions; the mod family's
+/// own base game is not (its missions are scripts, and the stock campaign at the root of a hand-made
+/// install is not converted under it).
+fn decide_base(install_root: &Path, data: &Path, env: &Env) -> Result<Plan, Refusal> {
     let install = Install::open(install_root).map_err(Refusal::Install)?;
     if sta_mission_convert::convert::find_missions(&install.missions_dir).is_empty() {
         return Err(Refusal::NoMissionDlls);
     }
-    let out_dir = sta_mission::converted::dir_in(data, &install.root, None);
+    if mod_family_base(&install.root) {
+        return Err(Refusal::ModFamilyBase);
+    }
+    plan_for(install, None, data, env)
+}
+
+/// Whether the install, mounted with no mod, is the mod family's own base game (Roots, Fleet Operations
+/// 3.x): the profile the mount detects. A mount that fails or detects another profile is not.
+pub fn mod_family_base(install_root: &Path) -> bool {
+    sta_vfs::Vfs::mount_install(install_root, None).is_ok_and(|v| is_family_base(sta_content::Profile::detect(&v)))
+}
+
+/// The profiles of the mod family's own base games (ADR 0004 D5).
+pub fn is_family_base(profile: sta_content::Profile) -> bool {
+    matches!(profile, sta_content::Profile::Fo3 | sta_content::Profile::Fo4)
+}
+
+/// The active mod's compiled missions, from this install and that mod only (D6). The engine files
+/// the Armada II conversion names its calls from are looked for at the install's own root first (a
+/// hand-made install has the stock pair there); only when it is missing there is the player's stock
+/// folder looked at; when neither has them the refusal says what is missing and where to name a folder.
+fn decide_mod(install_root: &Path, name: &str, data: &Path, env: &Env, stock_folder: Option<&Path>) -> Result<Plan, Refusal> {
+    let install = Install::open_mod(install_root, name).map_err(|e| {
+        Refusal::Mod(match e {
+            install::ModError::NotAFolder { path } => format!("{} is not a folder", path.display()),
+            install::ModError::Mount { reason, .. } => reason,
+        })
+    })?;
+    let install = if has_engine_files(&install.root) {
+        install
+    } else {
+        let missing = |why: String| Refusal::NoEngine(format!("the mod {name}'s missions need the engine files ({ENGINE_FILES}) and {why}"));
+        match stock_folder {
+            None => {
+                return Err(missing(format!(
+                    "they are not in {}: set `stock_folder` in the settings file ({}) to a stock Armada II folder that has them",
+                    install.root.display(),
+                    crate::ui::settings::FILE_NAME
+                )));
+            }
+            Some(f) if !has_engine_files(f) => {
+                return Err(missing(format!("the `stock_folder` of the settings file ({}) does not have them", f.display())));
+            }
+            Some(f) => install.with_engine(f).map_err(|e| missing(format!("`stock_folder` cannot be used: {}", install_text(&e))))?,
+        }
+    };
+    plan_for(install, Some(name), data, env)
+}
+
+/// The engine files an Armada II conversion reads, as the player is told about them.
+const ENGINE_FILES: &str = "Armada2.exe and armada2.map";
+
+/// Whether `dir` holds the engine pair (the names in any case).
+fn has_engine_files(dir: &Path) -> bool {
+    sorted_files(dir, &|n| n == "armada2.exe" || n == "armada2.map").len() == 2
+}
+
+/// The folders of a run for `install` (and `active_mod`), checked.
+fn plan_for(install: Install, active_mod: Option<&str>, data: &Path, env: &Env) -> Result<Plan, Refusal> {
+    let out_dir = sta_mission::converted::dir_in(data, &install.root, active_mod);
     let out_res = install::resolve_output(&out_dir, &install, env).map_err(Refusal::Output)?;
-    let cache_dir = sta_mission::converted::cache_dir_in(data, &install.root);
+    let cache_dir = sta_mission::converted::cache_dir_for(data, &install.root, active_mod);
     install::open_cache(&cache_dir, &out_res, &install, env).map_err(Refusal::Cache)?;
-    let key = sta_core::install_key::key(&install.root, None);
+    let key = sta_core::install_key::key(&install.root, active_mod);
     let beside = |ext: &str| data.join("converted").join(format!("{key}.{ext}"));
     Ok(Plan {
         stamp_path: beside("stamp"),
@@ -316,9 +399,12 @@ fn run(plan: &Plan, mode: Mode, cancel: &AtomicBool, tx: &Sender<Msg>, converter
         Lock::Busy => return Done::Busy,
         other => other,
     };
-    // The inputs as they are before the run: a file changed during it is another stamp next time.
-    let inputs = stamp_text(plan);
-    if !forced && stamp_matches(plan, &inputs) {
+    // The inputs as they are before the run: a file changed during it is another stamp next time. The
+    // stamp covers the base game's missions, which lie in one folder; a mod's missions come through the
+    // install's mount, so a mod's run has no stamp and leans on the cache, which skips every unchanged
+    // mission (its key covers the DLLs, the engine files and the converter build).
+    let inputs = plan.install.active_mod().is_none().then(|| stamp_text(plan));
+    if !forced && inputs.as_deref().is_some_and(|i| stamp_matches(plan, i)) {
         return Done::Skipped;
     }
     // From here the folder changes: no stamp stays that could skip after a stop.
@@ -342,7 +428,9 @@ fn run(plan: &Plan, mode: Mode, cancel: &AtomicBool, tx: &Sender<Msg>, converter
         }
     };
     let summary = converter(&plan.install, &opts, &mut out, cache.as_ref(), &stop, &mut sink);
-    if summary.completed() {
+    if summary.completed()
+        && let Some(inputs) = &inputs
+    {
         // the scripts the folder must hold: those written and those kept for the player's edit
         let expected: std::collections::BTreeSet<&String> = summary.missions.iter().flat_map(|m| m.written.iter().chain(&m.kept)).collect();
         let lines: String = expected.iter().map(|n| format!("script {n}\n")).collect();
@@ -353,11 +441,11 @@ fn run(plan: &Plan, mode: Mode, cancel: &AtomicBool, tx: &Sender<Msg>, converter
 
 // ------------------------------------------------------------------ what the game sees
 
-/// Start a run for the install, for the base game (`active_mod` is passed so that a mod is refused
-/// here, D6, whatever the sender knows). `forced`: ignore the cache and the stamp (convert again);
-/// the scripts the player edited are kept all the same. `replace_edited`: move them aside (as
-/// `<name>.old`) and write the tool's own in their place; only an explicit request says so.
-/// Answered with [`Outcome::AlreadyRunning`] while a run is going.
+/// Start a run for the install: for its base game (`active_mod` none), or for the missions of the
+/// active mod (D6: the output and the cache follow the install and the mod). `forced`: ignore the
+/// cache and the stamp (convert again); the scripts the player edited are kept all the same.
+/// `replace_edited`: move them aside (as `<name>.old`) and write the tool's own in their place; only
+/// an explicit request says so. Answered with [`Outcome::AlreadyRunning`] while a run is going.
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct StartConversion {
     pub install_root: PathBuf,
@@ -492,6 +580,7 @@ fn finish(state: &mut ConversionState, fin: &mut MessageWriter<ConversionFinishe
 fn start(
     mut requests: MessageReader<StartConversion>,
     ctx: Res<ConvertContext>,
+    settings: Option<Res<crate::frontend::screens::Settings>>,
     mut state: ResMut<ConversionState>,
     mut active: ResMut<ActiveRun>,
     mut fin: MessageWriter<ConversionFinished>,
@@ -501,7 +590,8 @@ fn start(
             fin.write(ConversionFinished { outcome: Outcome::AlreadyRunning });
             continue;
         }
-        let plan = match decide_with(&req.install_root, req.active_mod.as_deref(), ctx.data_dir.as_deref(), &ctx.env) {
+        let stock = settings.as_ref().map(|s| s.stock_folder.trim()).filter(|f| !f.is_empty()).map(PathBuf::from);
+        let plan = match decide_for(&req.install_root, req.active_mod.as_deref(), ctx.data_dir.as_deref(), &ctx.env, stock.as_deref()) {
             Ok(p) => p,
             Err(r) => {
                 *state = ConversionState { runs: state.runs, ..ConversionState::default() };
@@ -672,8 +762,8 @@ mod tests {
         assert_eq!(plan.install.root, install::realpath(&root));
         // an empty mod name is no mod
         assert!(decide_with(&root, Some(""), Some(&data), &env()).is_ok());
-        // a mod is active: base game only (D6)
-        assert_eq!(decide_with(&root, Some("Fleet Ops"), Some(&data), &env()).unwrap_err(), Refusal::ModActive("Fleet Ops".into()));
+        // a mod the install does not have: refused with the mount's reason
+        assert!(matches!(decide_with(&root, Some("Fleet Ops"), Some(&data), &env()), Err(Refusal::Mod(_))));
         // no data folder
         assert_eq!(decide_with(&root, None, None, &env()).unwrap_err(), Refusal::NoDataDir);
         // nothing to convert: an install without mission DLLs
@@ -692,7 +782,7 @@ mod tests {
         let inside = root.join("userdata");
         let r = decide_with(&root, None, Some(&inside), &env()).unwrap_err();
         assert!(matches!(&r, Refusal::Output(m) if m.contains("inside the install")), "{r:?}");
-        assert!(r.is_fault() && !Refusal::NoMissionDlls.is_fault() && !Refusal::ModActive("x".into()).is_fault());
+        assert!(r.is_fault() && !Refusal::NoMissionDlls.is_fault() && !Refusal::ModFamilyBase.is_fault() && Refusal::Mod("x".into()).is_fault() && Refusal::NoEngine("x".into()).is_fault());
         // the checkout is refused
         let repo = t.0.join("checkout");
         std::fs::create_dir_all(&repo).unwrap();
@@ -700,9 +790,166 @@ mod tests {
         let r = decide_with(&root, None, Some(&repo.join("data")), &env).unwrap_err();
         assert!(matches!(&r, Refusal::Output(m) if m.contains("repository")), "{r:?}");
         // every refusal has a text
-        for r in [Refusal::NoDataDir, Refusal::NoMissionDlls, Refusal::ModActive("m".into())] {
+        for r in [Refusal::NoDataDir, Refusal::NoMissionDlls, Refusal::ModFamilyBase, Refusal::Mod("m".into()), Refusal::NoEngine("m".into())] {
             assert!(!r.to_string().is_empty());
         }
+    }
+
+    // ---- #1407: the offer follows the install and the mod
+
+    /// A hand-made install of the mod family: a complete stock install at the root (executable, mission DLLs) whose
+    /// mount detects the mod family's profile (an explicit profile in the data folder's `info.ini`).
+    fn hand_made(root: &Path) {
+        install(root, b"junk");
+        put(&root.join("Data/info.ini"), b"[Mod]\nProfile=fo4\n");
+    }
+
+    #[test]
+    fn the_mod_familys_base_game_is_offered_nothing_and_a_plain_stock_install_is_unchanged() {
+        let t = Tmp::new("family");
+        let data = t.0.join("data");
+        let (stock, made) = (t.0.join("Stock"), t.0.join("Made"));
+        install(&stock, b"junk");
+        hand_made(&made);
+        // (a) the engine pair and the stock missions at the root do not by themselves make an offer
+        put(&made.join("Armada2.exe"), b"");
+        put(&made.join("armada2.map"), b"");
+        assert_eq!(decide_with(&made, None, Some(&data), &env()).unwrap_err(), Refusal::ModFamilyBase);
+        assert!(!Refusal::ModFamilyBase.is_fault(), "the normal nothing to do, not a fault");
+        // (c) a plain stock install: as before
+        assert!(decide_with(&stock, None, Some(&data), &env()).is_ok());
+        // Fleet Operations 3.x is a base game of the family too; Armada II's own profile is not
+        put(&made.join("Data/info.ini"), b"[Mod]\nProfile=fo3\n");
+        assert_eq!(decide_with(&made, None, Some(&data), &env()).unwrap_err(), Refusal::ModFamilyBase);
+        put(&made.join("Data/info.ini"), b"[Mod]\nProfile=sta2classic\n");
+        assert!(decide_with(&made, None, Some(&data), &env()).is_ok(), "an Armada II profile is a plain stock install");
+        // nothing was written
+        assert!(!data.exists());
+    }
+
+    /// An install hosting the mod `M`, with the engine pair at its root when `engine`.
+    fn with_mod(root: &Path, engine: bool) {
+        put(&root.join("Data/Mods/M/info.ini"), b"[Mod]\nName=M\n");
+        if engine {
+            put(&root.join("Armada2.exe"), b"");
+            put(&root.join("ARMADA2.MAP"), b"");
+        }
+    }
+
+    #[test]
+    fn a_mods_missions_are_offered_keyed_by_the_install_and_the_mod_with_the_engine_pair_at_the_root() {
+        let t = Tmp::new("modplan");
+        let (root, data) = (t.0.join("Made"), t.0.join("data"));
+        hand_made(&root);
+        with_mod(&root, true);
+        let base = decide_with(&root, None, Some(&data), &env()).unwrap_err();
+        assert_eq!(base, Refusal::ModFamilyBase, "the base game of the same install is not offered");
+        // (b) the mod is: the engine files are looked for at the install's root first
+        let plan = decide_with(&root, Some("M"), Some(&data), &env()).unwrap();
+        assert_eq!(plan.install.active_mod(), Some("M"));
+        assert_eq!(plan.install.engine_root(), install::realpath(&root));
+        assert_eq!(plan.out_dir, sta_mission::converted::dir_in(&data, &root, Some("M")), "the folder the game mounts for this mod");
+        assert_eq!(plan.cache_dir, sta_mission::converted::cache_dir_for(&data, &root, Some("M")));
+        assert!(plan.key.ends_with("+m"), "{}", plan.key);
+        assert_ne!(plan.out_dir, sta_mission::converted::dir_in(&data, &root, None), "never the base game's folder");
+        assert_eq!(plan.stamp_path, data.join("converted").join(format!("{}.stamp", plan.key)));
+        // the mod's own key for another mod is another folder, and the same mod in another case is the mount's to accept
+        assert_ne!(sta_mission::converted::dir_in(&data, &root, Some("Other")), plan.out_dir);
+        // the mount's reason when the install does not have the mod
+        let r = decide_with(&root, Some("Gone"), Some(&data), &env()).unwrap_err();
+        assert!(matches!(&r, Refusal::Mod(m) if !m.is_empty()) && r.is_fault(), "{r:?}");
+        // a mod name that is a path is the mount's to refuse
+        assert!(matches!(decide_with(&root, Some("../x"), Some(&data), &env()), Err(Refusal::Mod(_))));
+        // no data folder
+        assert_eq!(decide_with(&root, Some("M"), None, &env()).unwrap_err(), Refusal::NoDataDir);
+    }
+
+    #[test]
+    fn without_the_engine_pair_at_the_root_a_mod_needs_the_stock_folder_setting_and_the_refusal_says_what_is_missing() {
+        let t = Tmp::new("modengine");
+        let (root, data, stock, empty) = (t.0.join("Made"), t.0.join("data"), t.0.join("Stock"), t.0.join("Empty"));
+        with_mod(&root, false);
+        put(&stock.join("Armada2.exe"), b"");
+        put(&stock.join("armada2.map"), b"");
+        std::fs::create_dir_all(&empty).unwrap();
+        // neither: the text names the files, the install's folder and the setting
+        let r = decide_for(&root, Some("M"), Some(&data), &env(), None).unwrap_err();
+        let Refusal::NoEngine(m) = &r else { panic!("{r:?}") };
+        assert!(m.contains("Armada2.exe") && m.contains("armada2.map") && m.contains("stock_folder") && m.contains("settings.cfg"), "{m}");
+        assert!(m.contains(&install::realpath(&root).display().to_string()), "{m}");
+        assert!(r.is_fault(), "the player is told");
+        // a stock folder that lacks them: the text says that folder does not have them
+        let r = decide_for(&root, Some("M"), Some(&data), &env(), Some(&empty)).unwrap_err();
+        assert!(matches!(&r, Refusal::NoEngine(m) if m.contains("does not have them") && m.contains("Empty")), "{r:?}");
+        // a stock folder that has them: the plan reads the engine files there and writes under the mod's key
+        let plan = decide_for(&root, Some("M"), Some(&data), &env(), Some(&stock)).unwrap();
+        assert_eq!(plan.install.engine_root(), install::realpath(&stock));
+        assert_eq!(plan.out_dir, sta_mission::converted::dir_in(&data, &root, Some("M")));
+        // the install's own root wins over the setting
+        with_mod(&root, true);
+        let plan = decide_for(&root, Some("M"), Some(&data), &env(), Some(&stock)).unwrap();
+        assert_eq!(plan.install.engine_root(), install::realpath(&root));
+        // no output or cache below the stock folder the run only reads
+        let inside = stock.join("userdata");
+        let r = decide_for(&root, Some("M"), Some(&inside), &env(), Some(&stock)).unwrap_err();
+        assert!(matches!(r, Refusal::Output(_)), "{r:?}");
+    }
+
+    /// The setting reaches the run: a mod's run through the app reads the engine files in the folder the
+    /// `stock_folder` setting names, and a game with no setting says what is missing and runs nothing.
+    #[test]
+    fn the_stock_folder_setting_reaches_a_mods_run() {
+        let t = Tmp::new("modrun");
+        let (root, data, stock) = (t.0.join("Made"), t.0.join("data"), t.0.join("Stock"));
+        with_mod(&root, false);
+        put(&stock.join("Armada2.exe"), b"");
+        put(&stock.join("armada2.map"), b"");
+        let engine = Arc::new(Mutex::new(None::<PathBuf>));
+        let seen_engine = engine.clone();
+        let converter = fake(move |i, _o, out, _c, _cancel, _sink| {
+            *seen_engine.lock().unwrap() = Some(i.engine_root().to_path_buf());
+            let _ = out.finish();
+            Summary::default()
+        });
+        let mut app = app(&data, converter.clone());
+        app.world_mut().write_message(StartConversion { install_root: root.clone(), active_mod: Some("M".into()), forced: false, replace_edited: false });
+        app.update();
+        assert!(matches!(&seen(&app)[..], [Outcome::Refused(Refusal::NoEngine(_))]), "{:?}", seen(&app));
+        assert!(engine.lock().unwrap().is_none(), "nothing ran");
+        let mut settings = crate::frontend::screens::Settings::default();
+        settings.stock_folder = stock.display().to_string();
+        app.insert_resource(settings);
+        app.world_mut().write_message(StartConversion { install_root: root.clone(), active_mod: Some("M".into()), forced: false, replace_edited: false });
+        finish_run(&mut app);
+        assert_eq!(engine.lock().unwrap().clone(), Some(install::realpath(&stock)));
+        assert!(!data.join("converted").join(format!("{}.stamp", sta_core::install_key::key(&root, Some("M")))).exists(), "a mod's run keeps no stamp");
+    }
+
+    /// With `STA64_TEST_ROOTS_INSTALL` (an install of the mod family) and optionally `STA64_TEST_ROOTS_MOD`
+    /// (a mod of it with compiled missions): the base game is offered nothing, and the mod's run is decided under
+    /// its own key. Structure only; skips without the variables.
+    #[test]
+    fn installed_the_family_base_is_offered_nothing_and_the_mod_gets_its_own_plan() {
+        let Ok(root) = std::env::var("STA64_TEST_ROOTS_INSTALL") else {
+            eprintln!("SKIP: set STA64_TEST_ROOTS_INSTALL to an install of the mod family");
+            return;
+        };
+        let root = PathBuf::from(root);
+        let t = Tmp::new("installed");
+        let data = t.0.join("data");
+        let base = decide_with(&root, None, Some(&data), &env());
+        assert!(base.is_err(), "the base game of a mod family install is not offered a conversion: {base:?}");
+        if let Ok(name) = std::env::var("STA64_TEST_ROOTS_MOD") {
+            match decide_with(&root, Some(&name), Some(&data), &env()) {
+                Ok(plan) => {
+                    assert_eq!(plan.install.active_mod(), Some(name.as_str()));
+                    assert!(plan.key.contains('+'), "{}", plan.key);
+                }
+                Err(Refusal::NoEngine(m)) => assert!(m.contains("stock_folder"), "{m}"),
+                Err(other) => panic!("{other:?}"),
+            }
+        }
+        assert!(!data.exists(), "deciding writes nothing");
     }
 
     // ---- the worker through an App
@@ -818,7 +1065,7 @@ mod tests {
         let mut app = app(&data, walks(1));
         app.world_mut().write_message(StartConversion { install_root: root.clone(), active_mod: Some("Mod".into()), forced: false, replace_edited: false });
         app.update();
-        assert_eq!(seen(&app), vec![Outcome::Refused(Refusal::ModActive("Mod".into()))]);
+        assert!(matches!(&seen(&app)[..], [Outcome::Refused(Refusal::Mod(_))]), "{:?}", seen(&app));
         assert!(!state(&app).running && !app.world().resource::<ActiveRun>().is_running());
         assert!(!Outcome::Refused(Refusal::NoDataDir).changed());
         assert!(!data.exists(), "a refusal writes nothing");
