@@ -1016,6 +1016,43 @@ pub fn additive_state(d: &mut RenderPipelineDescriptor) {
     }
 }
 
+/// The vertex attributes the material's fragment stage reads (its inputs: world position, normal, uv and the colour at
+/// location 5): the ones a mesh drawn with [`StockShotMaterial`] must carry, or its pipeline cannot be built (the
+/// validation error ends the game, #1418). Names of the ones a mesh lacks; empty when it is complete.
+///
+/// Every mesh a stock effect hands to the material, by where it is built (the table test of each module checks them):
+/// shots, flares, hull-hit and death sparks, impact flares (one batch mesh per sprite, [`fill_batch_mesh`]); shield caps
+/// (`stock_shield_hits`); shields-down bands (`stock_shields_down`); explosion ring and cluster quad
+/// (`stock_explosions`). The other users of the unit quad (the warp flash, the sprite nodes of models, the special
+/// effects) draw it with other materials, whose shaders do not need a vertex colour.
+#[cfg(test)]
+pub(super) fn missing_attributes(mesh: &Mesh) -> Vec<&'static str> {
+    [
+        ("position", Mesh::ATTRIBUTE_POSITION.id),
+        ("normal", Mesh::ATTRIBUTE_NORMAL.id),
+        ("uv", Mesh::ATTRIBUTE_UV_0.id),
+        ("colour", Mesh::ATTRIBUTE_COLOR.id),
+    ]
+    .into_iter()
+    .filter(|(_, id)| mesh.attribute(*id).is_none())
+    .map(|(name, _)| name)
+    .collect()
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    /// Every shot, flare and spark of every sprite is drawn from a batch mesh filled by one function: it has all four.
+    #[test]
+    fn a_batch_mesh_carries_the_attributes_the_material_reads() {
+        let mut m = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        assert_eq!(missing_attributes(&m).len(), 4, "a new batch mesh is empty (and hidden until filled)");
+        fill_batch_mesh(&mut m, vec![[0.0; 3]; 3], vec![[0.0; 2]; 3], vec![[1.0; 4]; 3], vec![0, 1, 2]);
+        assert!(missing_attributes(&m).is_empty());
+    }
+}
+
 impl Material for StockShotMaterial {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path(AssetPath::parse("embedded://sta64/render/fx/stock_shots.wesl").into_owned())
@@ -1164,16 +1201,21 @@ fn draw_shots(
         // The batch sorts among the blended things at its centroid; its vertices are relative to it.
         let centre = g.pos.iter().fold(Vec3::ZERO, |a, p| a + Vec3::from(*p)) / g.pos.len() as f32;
         let pos: Vec<[f32; 3]> = g.pos.iter().map(|p| (Vec3::from(*p) - centre).to_array()).collect();
-        let normals = vec![[0.0, 0.0, 1.0]; pos.len()];
         cmds.entity(b.entity).try_insert((Visibility::Inherited, Transform::from_translation(centre)));
         if let Some(mut m) = meshes.get_mut(&b.mesh) {
-            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
-            m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, g.uv);
-            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, g.col);
-            m.insert_indices(Indices::U32(g.idx));
+            fill_batch_mesh(&mut m, pos, g.uv, g.col, g.idx);
         }
     }
+}
+
+/// Give a batch's mesh everything the material's fragment stage reads (position, normal, uv, colour) and its indices.
+fn fill_batch_mesh(m: &mut Mesh, pos: Vec<[f32; 3]>, uv: Vec<[f32; 2]>, col: Vec<[f32; 4]>, idx: Vec<u32>) {
+    let normals = vec![[0.0, 0.0, 1.0]; pos.len()];
+    m.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+    m.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    m.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+    m.insert_indices(Indices::U32(idx));
 }
 
 pub struct StockShotsPlugin;

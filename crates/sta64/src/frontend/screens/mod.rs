@@ -237,6 +237,13 @@ impl Plugin for ScreensPlugin {
                 .after(crate::ui::theme::WidgetPaint)
                 .after(crate::ui::theme::KitSet)
                 .run_if(in_state(AppState::FrontEnd)))
+            .init_resource::<crate::frontend::campaign::shell_art::ShellArt>()
+            .add_systems(Update, (crate::frontend::campaign::shell_art::load_art, crate::frontend::campaign::shell_art::sync_backdrop)
+                .chain()
+                .in_set(GameSet::Ui)
+                .after(rebuild)
+                .after(crate::frontend::campaign::rebuild)
+                .run_if(in_state(AppState::FrontEnd)))
             .add_systems(Update, preview::sync_preview
                 .in_set(GameSet::Ui)
                 .after(rebuild)

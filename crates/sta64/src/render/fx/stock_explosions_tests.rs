@@ -374,3 +374,81 @@ fn the_cluster_is_spawned_animated_and_hidden_and_the_ring_is_tinted_and_ended()
     }
     assert!(app.world().get_entity(ring).is_err(), "the ring ended");
 }
+
+/// Every mesh the explosion module hands to the stock shot material carries the attributes its fragment stage reads
+/// (#1418: a ring and a cluster quad without a vertex colour made the pipeline fail validation and ended the game).
+#[test]
+fn every_explosion_mesh_carries_the_attributes_the_material_reads() {
+    use crate::render::fx::stock_shots::missing_attributes;
+    let meshes: Vec<(String, Mesh)> = [1u32, 6, 16].into_iter().map(|rays| (format!("ring of {rays} rays"), ring_mesh(rays))).chain([("cluster quad".to_owned(), cluster_quad())]).collect();
+    for (name, mesh) in &meshes {
+        assert!(missing_attributes(mesh).is_empty(), "{name} lacks {:?}", missing_attributes(mesh));
+        // The colour is white, one per vertex: the look is unchanged.
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colours)) = mesh.attribute(Mesh::ATTRIBUTE_COLOR) else { panic!("{name}: colour is not four floats") };
+        assert_eq!(colours.len(), mesh.count_vertices(), "{name}");
+        assert!(colours.iter().all(|c| *c == [1.0; 4]), "{name}");
+    }
+    // The check itself catches the defect: the plain unit quad has no colour.
+    assert_eq!(missing_attributes(&crate::render::sprites::unit_quad()), ["colour"]);
+}
+
+/// With `STA64_GPU_TESTS=1` and a hardware adapter: one stock explosion ring and one cluster quad drawn through the real
+/// pipeline: the frame is rendered with no render error (a validation error ends the app) and the effect changes it.
+/// Prints SKIP and passes otherwise; never run by default, in CI or on a user's display.
+#[test]
+fn gpu_a_stock_explosion_draws_through_the_real_pipeline_without_a_render_error() {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::camera::RenderTarget;
+    use bevy::render::RenderPlugin;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+    use bevy::window::ExitCondition;
+    use std::sync::{Arc, Mutex};
+
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 to draw the explosion through the real pipeline");
+        return;
+    }
+    let _serial = crate::bench::frames::gpu_serial();
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+            .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+            .set(ImagePlugin::default_linear())
+            .disable::<bevy::log::LogPlugin>()
+            .disable::<bevy::winit::WinitPlugin>(),
+    );
+    if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>()
+        && crate::bench::frames::is_software_adapter(info.device_type, &info.name)
+    {
+        eprintln!("SKIP: only a software adapter is available ({})", info.name);
+        return;
+    }
+    app.add_plugins(crate::render::fx::stock_shots::StockShotsMaterialPlugin).insert_resource(ClearColor(Color::BLACK));
+    let sheet = Image::new(Extent3d { width: 2, height: 2, depth_or_array_layers: 1 }, TextureDimension::D2, vec![255u8; 16], TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+    let texture = app.world_mut().resource_mut::<Assets<Image>>().add(sheet);
+    let params = ShotParams { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), flags: Vec4::ZERO, tint: Vec4::ONE };
+    let (quad, ring) = app.world_mut().resource_scope(|w, mut meshes: Mut<Assets<Mesh>>| (meshes.add(cluster_quad()), meshes.add(ring_mesh(6))));
+    let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params, texture });
+    let mut target = Image::new_target_texture(64, 64, TextureFormat::Rgba8UnormSrgb, None);
+    target.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    let target = app.world_mut().resource_mut::<Assets<Image>>().add(target);
+    app.world_mut().spawn((Camera3d::default(), RenderTarget::from(target.clone()), Msaa::Off, Transform::from_xyz(0.0, 0.0, 12.0).looking_at(Vec3::ZERO, Vec3::Y)));
+    app.world_mut().spawn((Mesh3d(quad), MeshMaterial3d(material.clone()), Transform::from_scale(Vec3::splat(4.0))));
+    app.world_mut().spawn((Mesh3d(ring), MeshMaterial3d(material), Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::splat(1.5)), bevy::camera::visibility::NoFrustumCulling));
+    app.finish();
+    app.cleanup();
+    let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+    let out = Arc::clone(&frames);
+    app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| out.lock().unwrap().push(shot.image.clone()));
+    for _ in 0..60 {
+        app.update();
+        assert!(app.world().resource::<Messages<AppExit>>().is_empty(), "a render error ended the app");
+        if !frames.lock().unwrap().is_empty() {
+            break;
+        }
+    }
+    let frame = frames.lock().unwrap().first().cloned().expect("no capture").try_into_dynamic().unwrap().to_rgba8();
+    assert!(frame.pixels().any(|p| p.0[0] > 8 || p.0[1] > 8 || p.0[2] > 8), "the explosion changed the frame");
+}
