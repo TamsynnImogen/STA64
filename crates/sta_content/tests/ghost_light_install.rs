@@ -2,7 +2,7 @@
 //! and the Armada II family gives the three colours and the team factor. Structure only: no value is asserted.
 //! Absent installs are skipped. Key names: read from data.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sta_content::{GhostLighting, OdfIndex};
 use sta_vfs::Vfs;
@@ -26,7 +26,7 @@ fn keys(root: &Path, modname: Option<&str>, required: bool) -> Option<(Option<Gh
 
 #[test]
 fn installs_read_the_ghost_lighting_keys_without_warnings() {
-    let mut cases = vec![
+    let cases = vec![
         ("A2", sta_testkit::game_root("Star Trek Armada II (Stock)"), true),
         ("Evolution", sta_testkit::game_root("Star Trek Armada II Evolution"), true),
         ("A1", sta_testkit::game_root("Star Trek Armada"), false),

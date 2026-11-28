@@ -12,7 +12,7 @@
 //!   ODF's `amt<slot>`: `amtlatinum` on Fleet Ops 4.0's tritanium moon);
 //! - normal start stock comes from the race ODF, independently of unit costs.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use sta_content::race::{skirmish_races, StartingResources};
 use sta_content::resources::{self, SLOTS};

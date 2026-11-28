@@ -3,8 +3,6 @@
 //! (stock Armada II: D/J unpopulated, H sparse, K light, L medium, M heavy; pod
 //! `partySize` 100, `orbitRange` 150).
 
-use std::path::Path;
-
 use sta_content::{ContentDb, OdfIndex, Overrides, PlanetRole, Profile, Warning, odf::load_with};
 use sta_core::Fixed;
 use sta_vfs::Vfs;

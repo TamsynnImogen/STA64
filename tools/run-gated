@@ -11,6 +11,7 @@
 #   --gpu         also set STA64_GPU_TESTS=1 (the GPU opt-in tests; off unless asked)
 #   --group NAME  only this group (first-game, stock-second, mod-family, fo327, dominion-war, evolution); repeatable
 #   --dry-run     print the cargo command of each group and run nothing
+#   --light       leave the client (`sta64`) out: the light crates only, for a machine that must not build it now
 #
 # Each group runs `tools/agent-cargo test --workspace` once with only that group's variables set (through cargo's
 # `--config env.NAME=...` form), filtered to the tests whose name contains "install" (the naming convention of a gated
@@ -43,13 +44,14 @@ mod_of() {
   esac
 }
 
-list=0 gpu=0 dry=0
+list=0 gpu=0 dry=0 light=0
 only=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) list=1 ;;
     --gpu) gpu=1 ;;
     --dry-run) dry=1 ;;
+    --light) light=1 ;;
     --group) shift; only+=("${1:-}") ;;
     -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     *) echo "run-gated: unknown argument $1" >&2; exit 2 ;;
@@ -125,7 +127,9 @@ for g in "${selected[@]}"; do
   if [ $gpu -eq 1 ]; then
     config+=(--config 'env.STA64_GPU_TESTS="1"')
   fi
-  cmd=("$here/agent-cargo" test --locked --workspace --no-fail-fast "${config[@]}" -- install --nocapture)
+  scope=(--workspace)
+  [ $light -eq 1 ] && scope+=(--exclude sta64)
+  cmd=("$here/agent-cargo" test --locked "${scope[@]}" --no-fail-fast "${config[@]}" -- install --nocapture)
   if [ $dry -eq 1 ]; then
     printf '%-14s ' "$g"; printf '%q ' "${cmd[@]}" | sed "s|$path|<path>|g"; echo
     continue

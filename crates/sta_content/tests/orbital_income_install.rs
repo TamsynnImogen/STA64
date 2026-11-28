@@ -4,7 +4,7 @@
 //! `p_mining` eligibility read from the executable, static; the free-unit
 //! extension follows #1091's shipped implementation and data, not measured.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sta_content::{ContentDb, OdfIndex, Profile, Warning};
 use sta_vfs::Vfs;
@@ -41,7 +41,7 @@ fn about_keys(w: &[Warning]) -> Vec<String> {
 
 #[test]
 fn installs_parse_the_income_keys_without_warnings() {
-    let mut cases = vec![
+    let cases = vec![
         ("A2", sta_testkit::game_root("Star Trek Armada II (Stock)"), None, true, false),
         ("Classic", sta_testkit::game_root(ROOTS), Some("STA2 Classic Mod"), true, false),
         ("Classic Enhanced", sta_testkit::game_root(ROOTS), Some("STA2 Classic Mod Enhanced Gameplay"), true, false),

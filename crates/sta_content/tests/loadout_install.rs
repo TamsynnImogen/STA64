@@ -3,12 +3,12 @@
 //! authored faction pods and effects can be valid units without visible SODs.
 //! This checks authored placement, not missing FO lifecycle parity.
 //!
-//! Installs: the Heroic folders of FO4 (with its "Fleet Ops 4.0" mod), FO, DW
-//! and A2, plus `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`) when set. An install
-//! whose folder is absent, or that does not mount (GOG's plain A2 folder has
-//! no `Data`), is skipped.
+//! Installs: those of the mod family (with its "Fleet Ops 4.0" mod), FO, DW
+//! and A2 (the kinds' variables, docs/GATED_TESTS.md). An install whose folder
+//! is absent, or that does not mount (GOG's plain A2 folder has no `Data`), is
+//! skipped.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use sta_assets::find_model;
 use sta_content::odf::CRAFT_CLASSES;
@@ -58,7 +58,7 @@ fn report(label: &str, rows: &[Start]) {
 
 /// The installs to check: `(label, install root, active mod)`.
 fn installs() -> Vec<(String, PathBuf, Option<String>)> {
-    let mut v: Vec<(String, PathBuf, Option<String>)> = vec![
+    let v: Vec<(String, PathBuf, Option<String>)> = vec![
         (
             "FO4".into(),
             sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots"),

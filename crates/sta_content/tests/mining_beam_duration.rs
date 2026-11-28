@@ -2,8 +2,6 @@
 //! (`minebm`) is not one of the drawn beam classes. Authored numbers; the install-gated part
 //! asserts the rule on real data and no values.
 
-use std::path::Path;
-
 use sta_content::{ContentDb, OdfIndex, Overrides, Profile, WeaponKind, odf::load_with};
 use sta_vfs::Vfs;
 

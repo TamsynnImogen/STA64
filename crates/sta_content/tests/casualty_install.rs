@@ -2,8 +2,6 @@
 //! crew-casualty keys the sim reads (counts of definitions with a non-default
 //! value are printed with `--nocapture`). Absent installs are skipped.
 
-use std::path::Path;
-
 use sta_content::{ContentDb, OdfIndex};
 use sta_vfs::Vfs;
 

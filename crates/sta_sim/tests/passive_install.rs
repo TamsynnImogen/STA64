@@ -1,10 +1,9 @@
 //! SIM-24, install-gated: on every installed Fleet Operations lineage, a unit
 //! carrying `resourceweapon` hardpoints raises its owner's stock by exactly the
 //! ODF amounts per second (time base: measured on the original Roots, see the
-//! PR). Installs: the Heroic folders, plus `STA64_TEST_INSTALL`
-//! (+ `STA64_TEST_MOD`). Absent or unmountable installs are skipped.
+//! PR). Installs: the kinds' variables (docs/GATED_TESTS.md). Absent or unmountable installs are skipped.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use sta_content::{ContentDb, MapDef, MapObject, OdfIndex};
@@ -16,13 +15,12 @@ use sta_vfs::Vfs;
 
 fn installs() -> Vec<(String, PathBuf, Option<String>)> {
     let roots = || sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
-    let mut v = vec![
+    vec![
         ("Roots".to_owned(), roots(), None),
         ("FO4".to_owned(), roots(), Some("Fleet Ops 4.0".to_owned())),
         ("FO".to_owned(), sta_testkit::game_root("Star Trek Armada II Fleet Operations"), None),
         ("A2".to_owned(), sta_testkit::game_root("Star Trek Armada II (Stock)"), None),
-    ];
-    v
+    ]
 }
 
 fn seat(id: u8) -> PlayerSetup {

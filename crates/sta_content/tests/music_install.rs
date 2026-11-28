@@ -3,8 +3,6 @@
 //! and every track of it, in both modes, exists in the install's `sounds/music`.
 //! Read from data; an absent or unmountable install is skipped.
 
-use std::path::Path;
-
 use sta_content::{OdfIndex, Races};
 use sta_vfs::Vfs;
 

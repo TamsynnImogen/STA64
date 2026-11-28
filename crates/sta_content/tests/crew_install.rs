@@ -3,8 +3,6 @@
 //! starbase; Fleet Ops Roots gives its playable races none. Absent or
 //! unmountable installs are skipped.
 
-use std::path::Path;
-
 use sta_content::{ContentDb, OdfIndex};
 use sta_vfs::Vfs;
 
@@ -47,7 +45,7 @@ fn classic_ordnance_and_units_carry_the_crew_loss_keys() {
     if !root.is_dir() {
         return;
     }
-    let Ok(vfs) = Vfs::mount_install(root, Some("STA2 Classic Mod")) else { return };
+    let Ok(vfs) = Vfs::mount_install(&root, Some("STA2 Classic Mod")) else { return };
     let (index, _) = OdfIndex::build(&vfs);
     let Ok((db, _)) = ContentDb::load(&vfs, &index) else { return };
     let close = |f: sta_core::Fixed, v: f32| (f.to_f32() - v).abs() < 1e-4;

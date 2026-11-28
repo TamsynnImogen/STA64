@@ -2,8 +2,6 @@
 //! reads for a team's race (`maxOfficerMultiplier`, the derived or authored
 //! latinum factor) and `MAX_CREW`. Absent installs are skipped. Read from data.
 
-use std::path::Path;
-
 use sta_content::{ContentDb, OdfIndex};
 use sta_core::Fixed;
 use sta_vfs::Vfs;
