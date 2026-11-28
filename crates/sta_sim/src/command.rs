@@ -324,7 +324,7 @@ pub enum Edit {
     MaxOfficers(PlayerId, Fixed),
     /// Mission `SetCrew` / `Entity.crew` (SIM-54): a craft's or station's
     /// current crew, negative read as 0 and clamped to the unit's own current
-    /// maximum crew (`Craft::SetCrew`, read from the executable, static; it is
+    /// maximum crew (read from the executable, static; it is
     /// not clamped to the global `MAX_CREW`). Where the casualty model runs
     /// (the unit's features have `crew_loss_on_hit`) the derelict check of
     /// SIM-39 follows: crew under 1 latches the unit derelict and a later edit

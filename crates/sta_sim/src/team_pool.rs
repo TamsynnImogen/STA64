@@ -110,7 +110,7 @@ fn trunc(v: Fixed) -> Fixed {
     Fixed::from_bits((v.to_bits() / (1 << 32)) << 32)
 }
 
-/// A2 `Team::AddCrew` (0x4974b0, read from the executable, static): over
+/// The A2 rule for adding crew to a team (read from the executable, static): over
 /// capacity a positive add is dropped and a negative one applied; otherwise
 /// the sum, clamped to capacity. No floor at 0.
 fn a2_add(pool: Fixed, x: Fixed, capacity: Fixed) -> Fixed {
