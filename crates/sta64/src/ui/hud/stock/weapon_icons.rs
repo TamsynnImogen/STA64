@@ -8,9 +8,9 @@ use super::super::{HudFeed, model::tech_state};
 use super::node;
 use crate::ui::{gui_sprites::GuiImage, notices::Tooltip};
 
-/// The native consecutive weapon reader at RVA 0x10c790 stops at the first
-/// absent `weaponN`; its UI has 32 slots (RVA 0x1ee05c). Missing icon positions
-/// or unresolved weapons do not change later slots' one-based ODF ordinals.
+/// The native consecutive weapon reader stops at the first absent `weaponN`; its UI has
+/// 32 slots (read from the executable, static). Missing icon positions or unresolved
+/// weapons do not change later slots' one-based ODF ordinals.
 const WEAPON_SLOTS: usize = 32;
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,9 +21,8 @@ pub(in crate::ui::hud) struct WeaponIcon {
     weapon: ContentKey,
 }
 
-// FleetOpsHook ShipSystemIcon_Render (0x1ed458) follows these RGB globals
-// back to ArmadaL's ST3D_Colour initializers at 0x61ffb0, 0x61fff0 and
-// 0x620070. The depleted underlay is literal RGB in the DLL at 0x1ed773.
+// The ready, negative and tech-locked colours are the native icon's own colour constants,
+// and the depleted underlay is a literal colour of its own (read from the executable, static).
 pub(super) const READY: Color = Color::srgb(0.0, 1.0, 0.0);
 const NEGATIVE: Color = Color::srgb(1.0, 1.0, 0.0);
 const TECH_LOCKED: Color = Color::srgb(0.5, 0.5, 0.5);
@@ -68,8 +67,8 @@ fn icon_rect(
     size: super::super::layout::R,
     position: Vec2,
 ) -> super::super::layout::R {
-    // Native RVA 0x1ed5c0–0x1ed658 scales both coordinates as percentages of
-    // infoSingleSystemsDisplay, then centres infoSingleSystemsIcon at that point.
+    // The native placement scales both coordinates as percentages of infoSingleSystemsDisplay,
+    // then centres infoSingleSystemsIcon at that point (read from the executable, static).
     super::super::layout::R::new(
         display.x + display.w * position.x * 0.01 - size.w * 0.5,
         display.y + display.h * position.y * 0.01 - size.h * 0.5,
@@ -111,7 +110,7 @@ pub(super) fn spawn(
         };
         let stem = weapon_stem(&weapon.odf);
         let mut image = GuiImage::new(format!("i_{stem}")).with_color(READY);
-        // The pinned DLL at RVA 0x10f2fc names this ordered fallback.
+        // The native icon names this ordered fallback (read from the executable, static).
         image.names.push("systemicon_default".to_owned());
         let tip = weapon.raw.str("tooltip").unwrap_or(&weapon.odf);
         let mut tooltip = Tooltip::new(crate::ui::i18n::tooltip_key(tip));

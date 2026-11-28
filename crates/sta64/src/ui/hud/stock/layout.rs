@@ -160,7 +160,7 @@ impl StockLayout {
         self
     }
 
-    /// ShipDisplay uses the yard flag to select the stock Armada II builder
+    /// The native info panel uses the yard flag to select the stock Armada II builder
     /// card. The group thresholds are separate from single-object mode.
     pub(in crate::ui::hud) fn info_variant(&self, info: &Info) -> usize {
         match info {
@@ -329,7 +329,7 @@ impl StockLayout {
         self.info_area(variant).map_or(Vec2::ZERO, |r| Vec2::new(r.x, r.y))
     }
 
-    /// Place a panel-relative ShipDisplay rectangle from the active canvas origin.
+    /// Place a panel-relative info panel rectangle from the active canvas origin.
     pub(in crate::ui::hud) fn info_at(&self, variant: usize, key: &str) -> Option<R> {
         let area = self.info_raw(variant)?;
         let rect = self.raw_rect(key)?;
