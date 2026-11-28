@@ -168,6 +168,7 @@ impl Profile {
             },
             // FOH rows: damage controls, PD cycles, resources, officers, rigs.
             Profile::Fo4 => Features {
+                warp_gates: true,
                 weapon_damage_controls: true,
                 point_defense_cycles: true,
                 turrets: true,
@@ -238,6 +239,8 @@ impl Profile {
             Profile::Sta2Classic => Features {
                 shield_zero_hold: true,
                 beam_damage_at_end: true,
+                warp_gates: true,
+                dying_phase: true,
                 engines_off_drift: true,
                 turrets: true,
                 point_defense_cycles: true,
@@ -532,7 +535,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 44] = [
+pub const FEATURE_NAMES: [&str; 46] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -576,6 +579,8 @@ pub const FEATURE_NAMES: [&str; 44] = [
     "crew_weapon_delay",
     "shield_zero_hold",
     "beam_damage_at_end",
+    "warp_gates",
+    "dying_phase",
     "engines_off_drift",
 ];
 
@@ -625,6 +630,8 @@ impl Features {
             "crew_weapon_delay" => &mut self.crew_weapon_delay,
             "shield_zero_hold" => &mut self.shield_zero_hold,
             "beam_damage_at_end" => &mut self.beam_damage_at_end,
+            "warp_gates" => &mut self.warp_gates,
+            "dying_phase" => &mut self.dying_phase,
             "engines_off_drift" => &mut self.engines_off_drift,
             _ => return None,
         })
@@ -842,7 +849,8 @@ mod tests {
                 "target_score",
                 "idle_assist",
                 "assist_high_autonomy_only",
-                "transport_attack_by_weld"
+                "transport_attack_by_weld",
+                "warp_gates"
             ]
         );
         assert!(!Profile::Fo4.features().pay_on_queue);
@@ -888,6 +896,8 @@ mod tests {
             "assist_on_ally_fire",
             "shield_zero_hold",
             "beam_damage_at_end",
+            "warp_gates",
+            "dying_phase",
             "engines_off_drift"
         ]);
     }

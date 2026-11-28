@@ -183,6 +183,7 @@ impl Sim {
         self.scripted.remove(id);
         self.switches.remove(id);
         self.alerts.remove(id);
+        self.dying.remove(id);
         if let Some(by) = destroyed_by {
             self.events.push(SimEvent::Destroyed { id, by });
         }
@@ -266,7 +267,9 @@ impl Sim {
                 u.hull[0] = (u.hull[0] - amount).max(floor).min(u.hull[0]);
                 let taken = before - u.hull[0];
                 if u.hull[0] <= Fixed::ZERO {
-                    return self.despawn(id, None);
+                    // Under `dying_phase` a script's lethal damage starts the dying phase
+                    // (measured, repeated); without it the unit is removed at once.
+                    return self.kill_by_damage(id);
                 }
                 if taken > Fixed::ZERO && let Some(db) = self.content.as_deref() {
                     self.recrew.note_damage(&self.units, db, id, Fixed::ZERO, taken, self.tick);

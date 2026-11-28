@@ -83,8 +83,7 @@ fn a_craft_under_way_coasts_on_its_heading_with_falling_speed_and_keeps_its_orde
     }
     // After one second: the share of the constant is gone, to within the tick-wise rounding.
     let kept = (last.speed / start.speed).to_f32();
-    let (num, den) = DRIFT_DECAY;
-    let per_tick = 1.0 - num as f32 / den as f32 / HZ as f32;
+    let per_tick = 1.0 - DRIFT_DECAY.to_f32() / HZ as f32;
     let expected = (0..HZ).fold(1.0f32, |kept, _| kept * per_tick);
     assert!((kept - expected).abs() < 0.002, "kept {kept} of the speed in a second, expected {expected}");
 }
@@ -193,8 +192,7 @@ fn a_craft_at_warp_drops_to_impulse_before_it_coasts() {
     run(&mut sim, Vec::new(), 60 * HZ);
     // The whole coast is what impulse speed gives under the decay: the speed over the rate.
     let far = sim.unit(ship).unwrap().pos.z - at_warp.pos.z;
-    let (num, den) = DRIFT_DECAY;
-    let limit = at_warp.stats.max_speed * n(den) / n(num) + n(50);
+    let limit = at_warp.stats.max_speed / DRIFT_DECAY + n(50);
     assert!(far > n(100) && far < limit, "coasted {far:?}, at most {limit:?} from impulse");
 }
 
@@ -268,4 +266,29 @@ fn a_coasting_craft_stays_on_the_map() {
     }
     assert!(farthest > hi.z - n(300), "the coast reached the edge region: {farthest:?}");
     assert!(farthest <= hi.z, "and never left the map: {farthest:?} beyond {:?}", hi.z);
+}
+
+/// A dying craft whose engines are off as well is moved once a tick, by the dying drift alone:
+/// the movement step leaves a dying craft to it. Both drifts are the one function, so the step
+/// is the speed along the heading and the decay is the one rate.
+#[test]
+fn a_dying_craft_with_its_engines_off_is_moved_once_a_tick() {
+    let (mut sim, db, ship) = game(Profile::Sta2Classic);
+    assert!(db.features().dying_phase && db.features().engines_off_drift);
+    run(&mut sim, vec![order(Order::Move { units: vec![ship], to: v(0, 6000), queue: false, mode: None })], 4 * HZ);
+    sim.step(&[engines(ship, false)]);
+    let kill = Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Damage(ship, n(1_000_000))) };
+    sim.step(&[kill]);
+    assert!(sim.dying_ends(ship).is_some(), "the craft is in its dying phase");
+    assert!(sim.unit(ship).unwrap().flags.contains(UnitFlags::ENGINES_OFF));
+    let hz = n(HZ as i32);
+    let mut last = sim.unit(ship).unwrap().clone();
+    assert!(last.speed > Fixed::ZERO);
+    for tick in 0..HZ {
+        sim.step(&[]);
+        let Some(u) = sim.unit(ship).cloned() else { break };
+        assert_eq!(u.pos.z, last.pos.z + last.heading.1 * last.speed / hz, "tick {tick}: one step of the speed, not two");
+        assert_eq!(u.speed, last.speed - last.speed * DRIFT_DECAY / hz, "tick {tick}: the decay applied once");
+        last = u;
+    }
 }

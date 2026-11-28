@@ -104,25 +104,45 @@ pub fn fit_canvas(canvas: Vec2, screen: Vec2) -> (f32, R) {
     (scale, R::new(origin.x, origin.y, size.x, size.y))
 }
 
+/// The sheet's canvas (the stock default when the cfg names none).
+fn canvas_of(cfg: &GuiLayout) -> Vec2 {
+    if cfg.canvas.0 > 0 && cfg.canvas.1 > 0 {
+        Vec2::new(cfg.canvas.0 as f32, cfg.canvas.1 as f32)
+    } else {
+        Vec2::new(1600.0, 1200.0)
+    }
+}
+
+/// `(scale, scale_x, hud)` of a canvas on a screen under `fit`.
+fn fit_scales(canvas: Vec2, screen: Vec2, fit: HudFit) -> (f32, f32, R) {
+    match fit {
+        HudFit::Centred => {
+            let (scale, hud) = fit_canvas(canvas, screen);
+            (scale, scale, hud)
+        }
+        HudFit::Stretched => (screen.y / canvas.y, screen.x / canvas.x, R::new(0.0, 0.0, screen.x, screen.y)),
+    }
+}
+
 impl StockLayout {
     pub fn new(cfg: &GuiLayout, screen: Vec2) -> Self {
         Self::with_fit(cfg, screen, HudFit::Centred)
     }
 
     pub fn with_fit(cfg: &GuiLayout, screen: Vec2, fit: HudFit) -> Self {
-        let canvas = if cfg.canvas.0 > 0 && cfg.canvas.1 > 0 {
-            Vec2::new(cfg.canvas.0 as f32, cfg.canvas.1 as f32)
-        } else {
-            Vec2::new(1600.0, 1200.0)
-        };
-        let (scale, scale_x, hud) = match fit {
-            HudFit::Centred => {
-                let (scale, hud) = fit_canvas(canvas, screen);
-                (scale, scale, hud)
-            }
-            HudFit::Stretched => (screen.y / canvas.y, screen.x / canvas.x, R::new(0.0, 0.0, screen.x, screen.y)),
-        };
+        let canvas = canvas_of(cfg);
+        let (scale, scale_x, hud) = fit_scales(canvas, screen, fit);
         Self { cfg: cfg.clone(), screen, canvas, fit, scale, scale_x, hud, a2_info: false }
+    }
+
+    /// `(screen, hud height)` of the layout [`for_aspect_fit`](Self::for_aspect_fit) would build,
+    /// without building it, in the HUD's 1080-line theme units: the window and the height of the
+    /// HUD's area (the whole window when stretched, the centred area otherwise).
+    pub fn extent_for_aspect(cfg: &GuiLayout, aspect: f32, fit: HudFit) -> (Vec2, f32) {
+        let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 16.0 / 9.0 };
+        let screen = Vec2::new(super::super::layout::SCREEN_H * aspect, super::super::layout::SCREEN_H);
+        let (_, _, hud) = fit_scales(canvas_of(cfg), screen, fit);
+        (screen, hud.h)
     }
 
     /// The layout for a window of this aspect, in the HUD's 1080-line theme units.

@@ -343,30 +343,53 @@ impl PopulationRules {
 /// (stock Armada II, STA2 Classic and Classic Enhanced) and 999999 (Roots,
 /// Fleet Ops 4.0 and 3.2.7, which never warp on an attack): read from the
 /// data; the stock and Classic values are measured.
+///
+/// A second key, `cfgTOO_CLOSE_TO_WARP`, is the same for a warp move (#1102, D10): the craft
+/// asks for warp only while it is strictly farther than this from the point it flies to,
+/// centre to point (read from the executable, static; not measured). INTERIM: where the
+/// header does not set it, [`ApproachRules::DEFAULT_TOO_CLOSE_TO_WARP`], the distance STA64's
+/// warp move used before it read the key (the original's own default is not settled), so
+/// content without the key behaves as before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApproachRules {
     pub min_move_warp_distance: Fixed,
+    pub too_close_to_warp: Fixed,
 }
 
 impl Default for ApproachRules {
     fn default() -> Self {
-        ApproachRules { min_move_warp_distance: Fixed::from_int(1500) }
+        ApproachRules { min_move_warp_distance: Fixed::from_int(1500), too_close_to_warp: Self::DEFAULT_TOO_CLOSE_TO_WARP }
     }
 }
 
 impl ApproachRules {
-    const KEYS: [&'static str; 1] = ["cfg_MIN_MOVE_WARP_DISTANCE"];
+    const KEYS: [&'static str; 2] = ["cfg_MIN_MOVE_WARP_DISTANCE", "cfgTOO_CLOSE_TO_WARP"];
 
+    /// INTERIM default of `cfgTOO_CLOSE_TO_WARP`: STA64's own, see the type's documentation.
+    pub const DEFAULT_TOO_CLOSE_TO_WARP: Fixed = Fixed::from_int(800);
+
+    /// `None` when the header sets neither key. A key that is set but is no distance warns
+    /// and keeps its default; the other key is still read.
     fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
-        cfg.raw(Self::KEYS[0])?;
-        // As the header's `float` reads (f32); clamped so the fixed point holds it.
-        match cfg.f32(Self::KEYS[0]).filter(|v| v.is_finite() && *v >= 0.0) {
-            Some(v) => Some(ApproachRules { min_move_warp_distance: Fixed::from_f64(v.min(1.0e9) as f64) }),
-            None => {
-                warnings.push(Warning::new("RTS_CFG.h", format!("{} is not a distance; the engine default is used", Self::KEYS[0])));
-                None
+        let mut read = |key: &str, default: &str| -> Option<Fixed> {
+            cfg.raw(key)?;
+            // As the header's `float` reads (f32); clamped so the fixed point holds it.
+            let value = cfg.f32(key).filter(|v| v.is_finite() && *v >= 0.0).map(|v| Fixed::from_f64(v.min(1.0e9) as f64));
+            if value.is_none() {
+                warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a distance; {default} is used")));
             }
+            value
+        };
+        let attack = read(Self::KEYS[0], "the engine default");
+        let warp_move = read(Self::KEYS[1], "STA64's default");
+        if attack.is_none() && warp_move.is_none() {
+            return None;
         }
+        let d = ApproachRules::default();
+        Some(ApproachRules {
+            min_move_warp_distance: attack.unwrap_or(d.min_move_warp_distance),
+            too_close_to_warp: warp_move.unwrap_or(d.too_close_to_warp),
+        })
     }
 }
 
@@ -1255,10 +1278,17 @@ impl Rules {
         }
         // Only when it differs from the engine default, so an absent key and
         // the default digest alike and content without it keeps its hash.
-        if self.approach() != ApproachRules::default() {
+        let (approach, approach_default) = (self.approach(), ApproachRules::default());
+        if approach.min_move_warp_distance != approach_default.min_move_warp_distance {
             out.push(DigestEntry::new(
                 format!("RTS_CFG.h:{}", ApproachRules::KEYS[0]),
-                crate::digest::fixed_text(self.approach().min_move_warp_distance),
+                crate::digest::fixed_text(approach.min_move_warp_distance),
+            ));
+        }
+        if approach.too_close_to_warp != approach_default.too_close_to_warp {
+            out.push(DigestEntry::new(
+                format!("RTS_CFG.h:{}", ApproachRules::KEYS[1]),
+                crate::digest::fixed_text(approach.too_close_to_warp),
             ));
         }
         if self.a1_dogfight.pursuit_angle != A1DogfightRules::default().pursuit_angle {
@@ -1600,6 +1630,39 @@ mod group_tests {
 mod approach_tests {
     use super::*;
 
+    /// `cfgTOO_CLOSE_TO_WARP` (#1102): typed, read beside the attack key without disturbing it,
+    /// and digested only off its default. Values authored for the test.
+    #[test]
+    fn the_warp_move_distance_is_typed_and_digested_only_off_its_default() {
+        let digest = |r: &Rules| crate::digest::ContentDigest::from_entries(r.digest_entries());
+        let key = "RTS_CFG.h:cfgTOO_CLOSE_TO_WARP";
+        let (none, _) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
+        assert_eq!(none.approach().too_close_to_warp, ApproachRules::DEFAULT_TOO_CLOSE_TO_WARP);
+        assert!(digest(&none).get(key).is_none());
+
+        let (set, w) = Rules::from_header("float cfgTOO_CLOSE_TO_WARP = 640.0;\n");
+        assert!(w.is_empty());
+        assert_eq!(set.approach().too_close_to_warp, Fixed::from_int(640));
+        assert_eq!(set.approach().min_move_warp_distance, ApproachRules::default().min_move_warp_distance, "the attack key keeps its default");
+        assert_eq!(digest(&set).get(key), Some(crate::digest::fixed_text(Fixed::from_int(640)).as_str()));
+        assert!(digest(&set).get("RTS_CFG.h:cfg_MIN_MOVE_WARP_DISTANCE").is_none());
+        assert_ne!(digest(&set).hash64(), digest(&none).hash64());
+
+        // Set to the default: the same digest as a header without the key.
+        let default = ApproachRules::DEFAULT_TOO_CLOSE_TO_WARP.to_f32();
+        let (explicit, _) = Rules::from_header(&format!("float cfgTOO_CLOSE_TO_WARP = {default:.1};\n"));
+        assert_eq!(digest(&explicit).hash64(), digest(&none).hash64());
+
+        // Both keys, and a bad value for one: the other is still read.
+        let (both, w) = Rules::from_header("float cfg_MIN_MOVE_WARP_DISTANCE = 1200.0;\nfloat cfgTOO_CLOSE_TO_WARP = 640.0;\n");
+        assert!(w.is_empty());
+        assert_eq!((both.approach().min_move_warp_distance, both.approach().too_close_to_warp), (Fixed::from_int(1200), Fixed::from_int(640)));
+        let (bad, w) = Rules::from_header("float cfg_MIN_MOVE_WARP_DISTANCE = 1200.0;\nfloat cfgTOO_CLOSE_TO_WARP = near;\n");
+        assert_eq!(w.len(), 1);
+        assert_eq!((bad.approach().min_move_warp_distance, bad.approach().too_close_to_warp), (Fixed::from_int(1200), ApproachRules::DEFAULT_TOO_CLOSE_TO_WARP));
+        assert!(crate::TYPED_CFG_KEYS.contains(&"cfgTOO_CLOSE_TO_WARP"));
+    }
+
     #[test]
     fn the_warp_distance_is_typed_and_digested_only_off_the_engine_default() {
         let (none, _) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
@@ -1802,7 +1865,7 @@ mod cfg_tests {
         // that resolve into MP_OFFICER_LIMIT, and the attack warp distance,
         // which is digested only when it differs from the engine default.
         // The two facing keys are digested only when set (SIM-39).
-        let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) });
+        let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100), too_close_to_warp: Fixed::from_int(900) });
         rules.upgrade_pod_maximum_tier = Some(9);
         rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2), officers: None };
         rules.cfg.facing_weight = Some(Fixed::ONE);

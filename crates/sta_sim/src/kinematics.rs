@@ -345,12 +345,14 @@ fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
     }
 }
 
-/// The rate at which a coasting craft loses speed (`engines_off_drift`), per second, as
-/// numerator and denominator: each tick the speed falls by this rate times the tick's length
-/// times itself, a continuous decay at that rate stepped per tick (so after one second a
-/// little more is left than one minus the rate). Measured, coarse (two repetitions), on
-/// stock Armada II. INTERIM for the exact curve.
-pub(crate) const DRIFT_DECAY: (i32, i32) = (19, 100);
+/// The rate at which a craft that is not under power loses speed, per second: each tick the
+/// speed falls by this rate times the tick's length times itself, a continuous decay at that
+/// rate stepped per tick (so after one second a little more is left than one minus the rate).
+/// The one constant for both drifts, which are the same motion in the original: a craft
+/// coasting with its engines off (`engines_off_drift`; measured, coarse, two repetitions) and a
+/// dying craft (`dying_phase`; measured, repeated), on stock Armada II. INTERIM for the exact
+/// curve.
+pub const DRIFT_DECAY: Fixed = Fixed::from_bits(19 * (1i64 << 32) / 100);
 
 /// Whether `u` coasts this tick: a craft whose engines are offline, that still has speed,
 /// under the feature switch `engines_off_drift` (the unit's, as `ContentDb::unit_features`
@@ -364,24 +366,25 @@ fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
         && db.is_some_and(|db| db.unit(u.def).map_or(db.features(), |d| db.unit_features(d)).engines_off_drift)
 }
 
-/// One tick of coasting: straight on along the heading at the present speed, which then
-/// falls by [`DRIFT_DECAY`]. No turn and no power: the heading is left as it is (a spin a
-/// script gave an engines-off craft is `step_drifting_spin`'s, unchanged) and nothing steers
-/// towards the target, which the craft keeps for when its engines return.
+/// One tick of drifting for a craft that is not under power, the one function for a craft
+/// coasting with its engines off and for a dying craft: straight on along the heading at the
+/// present speed, which then falls by [`DRIFT_DECAY`]. No turn and no power: the heading is
+/// left as it is (a spin a script gave an engines-off craft is `step_drifting_spin`'s,
+/// unchanged) and nothing steers towards a target; a coasting craft keeps its target for when
+/// its engines return.
 ///
-/// A craft that was at warp is first brought down to its impulse speed and coasts from
-/// there (measured: the normal warp exit on the next tick, then the drift). INTERIM: the
-/// drop is at once; the shape of the exit belongs to the warp kinematics (#1102).
+/// A craft that was at warp is first brought down to its impulse speed and drifts from there
+/// (measured for engines going off: the normal warp exit on the next tick, then the drift).
+/// INTERIM: the drop is at once; the shape of the exit belongs to the warp kinematics (#1102).
 ///
-/// The map's edge needs nothing here: the confinement that holds every unit on the map
-/// holds a coasting craft too (it is applied to this step's result by the caller).
-fn coast(u: &mut Unit) {
+/// The map's edge needs nothing here: the confinement that holds every unit on the map holds a
+/// drifting craft too (the caller applies it to this step's result).
+pub(crate) fn coast(u: &mut Unit) {
+    let hz = Fixed::from_int(TICK_HZ as i32);
     u.speed = u.speed.min(u.stats.max_speed);
-    let step = u.speed * dt();
-    u.pos.x = u.pos.x + u.heading.0 * step;
-    u.pos.z = u.pos.z + u.heading.1 * step;
-    let loss = u.speed * Fixed::from_int(DRIFT_DECAY.0) / Fixed::from_int(DRIFT_DECAY.1 * TICK_HZ as i32);
-    u.speed = (u.speed - loss).max(Fixed::ZERO);
+    u.pos.x = u.pos.x + u.heading.0 * u.speed / hz;
+    u.pos.z = u.pos.z + u.heading.1 * u.speed / hz;
+    u.speed = u.speed - u.speed * DRIFT_DECAY / hz;
 }
 
 impl Sim {
@@ -398,7 +401,9 @@ impl Sim {
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
         self.step_drifting_spin();
         let db = self.content.as_deref();
-        for u in self.units.iter_mut().filter(|u| u.mobile() || drifts(db, u)) {
+        // A dying unit drifts instead (#1100, `Sim::drift_dying`): it is not stepped here, and one
+        // whose engines are off as well is not coasted twice.
+        for u in self.units.iter_mut().filter(|u| (u.mobile() || drifts(db, u)) && !self.dying.contains(u.id)) {
             if !u.mobile() {
                 // Engines offline and still moving: it coasts, held by the same confinement
                 // as a craft under power.
