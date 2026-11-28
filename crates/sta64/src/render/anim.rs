@@ -962,7 +962,7 @@ mod tests {
     }
 
     /// A drop-off's track loops while a freighter is docked and rests on the first key before
-    /// and after (the engine's flag 1 at `SetDock`, animation off when the freighter leaves).
+    /// and after (the engine's flag 1 when the freighter docks, animation off when it leaves).
     #[test]
     fn a_drop_offs_track_loops_while_docked_and_rests_otherwise() {
         // 60 fps frames; the sim ticks at 30 Hz, so tick 30..300 is about frames 60..600.
