@@ -205,6 +205,24 @@ fn a_unit_faster_than_the_threshold_takes_the_long_phase_and_drifts_on_its_headi
     assert_eq!(g.until_removed(t), ends);
 }
 
+#[test]
+fn a_unit_killed_at_warp_drifts_from_no_more_than_its_impulse_speed() {
+    let mut g = game(db(true));
+    let t = g.put("fx_frigate", 2, v(0, 0));
+    g.put("fx_frigate", 1, v(3000, 0));
+    g.run(1);
+    let impulse = g.sim.unit(t).unwrap().stats.max_speed;
+    g.sim.units.get_mut(t).unwrap().speed = impulse * Fixed::from_int(5);
+    let k = g.kill_by_damage(t);
+    assert_eq!(g.sim.dying_ends(t), Some(k + DYING_MOVING_TICKS + DYING_LATE_TICKS), "the long phase");
+    assert!(g.sim.unit(t).unwrap().speed <= impulse, "capped from the first dying tick");
+    let z = g.sim.unit(t).unwrap().pos.z;
+    g.run(1);
+    let u = g.sim.unit(t).unwrap();
+    assert!(u.speed > Fixed::ZERO && u.speed <= impulse);
+    assert!(u.pos.z - z <= impulse / Fixed::from_int(sta_core::TICK_HZ as i32), "no step faster than impulse");
+}
+
 /// A launcher whose one torpedo is in flight to a frigate at rest. Returns the game, the
 /// launcher, the target and the tick that torpedo arrives on, from a copy run ahead.
 fn torpedo_in_flight(db: Arc<ContentDb>) -> (Game, EntityId, EntityId, u64) {

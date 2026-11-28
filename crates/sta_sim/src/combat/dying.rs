@@ -39,7 +39,9 @@
 //! - a dying yard's build queue holds (as in stasis) until removal;
 //! - the `isHero` class key, which gives the long phase whatever the speed (read from the
 //!   executable, static), is not read: every unit follows its speed;
-//! - the late ticks are counted in STA64 ticks, as many as were measured in the original's.
+//! - the late ticks are counted in STA64 ticks, as many as the bench counted at its finer tick;
+//! - a unit killed at warp drifts from its impulse speed (dying was measured at impulse-range
+//!   speeds only).
 
 use serde::{Deserialize, Serialize};
 use sta_content::ContentDb;
@@ -55,8 +57,9 @@ use crate::Sim;
 pub const DYING_STANDING_TICKS: Tick = 3 * TICK_HZ as Tick;
 /// Phase length of a unit faster than [`DYING_MOVING_SPEED`] at hull zero (measured, repeated).
 pub const DYING_MOVING_TICKS: Tick = 5 * TICK_HZ as Tick;
-/// Removal comes this many ticks after the phase length (measured, repeated, in the original's
-/// own ticks; INTERIM: kept as the same count of STA64 ticks).
+/// Removal comes this many ticks after the phase length (measured, repeated). INTERIM: the bench
+/// counted them at a finer tick than STA64's and attributes them to counting and rounding; the
+/// same count of STA64 ticks is a longer time.
 pub const DYING_LATE_TICKS: Tick = 2;
 /// What each further hit takes off the phase (measured, repeated).
 pub const DYING_HIT_STEP_TICKS: Tick = TICK_HZ as Tick / 2;
@@ -238,6 +241,9 @@ impl Sim {
             u.flags = u.flags.with(UnitFlags::DYING, true);
             u.target = None;
             u.omega = Fixed::ZERO;
+            // INTERIM: a unit killed at warp drifts from its impulse speed, not its warp speed;
+            // dying was measured at impulse-range speeds only.
+            u.speed = u.speed.min(u.stats.max_speed);
             // Its orders end: attack, scripted job, course, mining and the stuck-order watch.
             self.weapons.stop_attack(&self.units, PlayerId::SCRIPT, &[id]);
             self.scripted.remove(id);
