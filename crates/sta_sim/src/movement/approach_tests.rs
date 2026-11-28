@@ -231,10 +231,27 @@ fn warp_state_is_in_the_digest_and_survives_a_snapshot() {
     assert!(back.approach_warp.contains(EntityId(1)));
 }
 
+/// [`db`] with the feature switch `warp_shape` off: warp as every profile without the measured
+/// shape flies it (a speed ramp both ways, straight at warp, braking to turn).
+pub(crate) fn db_ramped(profile: Profile, warp_distance: Option<i32>) -> ContentDb {
+    let base = db(profile, warp_distance);
+    let mut features = base.features().clone();
+    features.warp_shape = false;
+    let mut b = ContentDb::builder().profile(base.profile()).features(features);
+    for w in base.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in base.units() {
+        b = b.unit(u.clone());
+    }
+    b.build().unwrap().with_rules(base.rules().clone())
+}
+
+/// Without `warp_shape`: the rows are derived from the speed ramp.
 #[test]
 fn the_view_carries_warp_rows_for_an_attack_approach_sorted_by_id() {
     use crate::view::{WarpPhase, WarpRow};
-    let mut sim = sim(db(Profile::Sta2Classic, Some(1100)));
+    let mut sim = sim(db_ramped(Profile::Sta2Classic, Some(1100)));
     let db = Arc::clone(sim.content.as_ref().unwrap());
     // Spawned high id first, so the order of the rows is not the order of spawning.
     let late = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(60, 0), AHEAD).unwrap();

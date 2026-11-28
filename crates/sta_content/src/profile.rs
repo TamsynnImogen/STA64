@@ -242,6 +242,7 @@ impl Profile {
                 warp_gates: true,
                 dying_phase: true,
                 engines_off_drift: true,
+                warp_shape: true,
                 turrets: true,
                 point_defense_cycles: true,
                 weapon_shot_timing: true,
@@ -535,7 +536,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 46] = [
+pub const FEATURE_NAMES: [&str; 47] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -582,6 +583,7 @@ pub const FEATURE_NAMES: [&str; 46] = [
     "warp_gates",
     "dying_phase",
     "engines_off_drift",
+    "warp_shape",
 ];
 
 impl Features {
@@ -633,6 +635,7 @@ impl Features {
             "warp_gates" => &mut self.warp_gates,
             "dying_phase" => &mut self.dying_phase,
             "engines_off_drift" => &mut self.engines_off_drift,
+            "warp_shape" => &mut self.warp_shape,
             _ => return None,
         })
     }
@@ -898,7 +901,8 @@ mod tests {
             "beam_damage_at_end",
             "warp_gates",
             "dying_phase",
-            "engines_off_drift"
+            "engines_off_drift",
+            "warp_shape"
         ]);
     }
 
