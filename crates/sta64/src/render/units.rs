@@ -1304,6 +1304,56 @@ mod view_tests {
         panic!("never reached tick {tick}");
     }
 
+    /// The hull is drawn through the whole dying phase, in either look (#1153): the unit's root entity exists and is not
+    /// hidden on every tick from the first one it is flagged dying until the last before its removal, and is gone
+    /// after it (the explosion and chunks belong to the removal, not to the phase).
+    #[test]
+    fn a_dying_units_hull_is_drawn_from_its_dying_flag_until_its_removal_in_either_look() {
+        for look in [crate::render::profile::RenderProfile::Stock, crate::render::profile::RenderProfile::Refit] {
+            let db = defs();
+            let ship = |dying: bool| {
+                let mut u = on(&db, 3, "ship_test");
+                u.owner = PlayerId(1);
+                if dying {
+                    u.hull[0] = Fixed::ZERO;
+                    u.flags = UnitFlags::DYING;
+                }
+                u
+            };
+            let seen = || vec![(PlayerId(1), vec![EntityId(3)])];
+            let views = vec![
+                view(0, vec![ship(false)], seen()),
+                view(1, vec![ship(true)], seen()),
+                view(2, vec![ship(true)], seen()),
+                view(3, vec![ship(true)], seen()),
+                view(4, Vec::new(), vec![(PlayerId(1), Vec::new())]),
+            ];
+            let mut app = app_with(Box::new(Views(views, 0)), Some(PlayerId(1)));
+            app.add_plugins(AssetPlugin::default())
+                .init_asset::<Mesh>()
+                .init_asset::<StandardMaterial>()
+                .init_asset::<Image>()
+                .init_resource::<TextureCache>()
+                .init_resource::<PartCache>()
+                .insert_resource(SpriteTables(Arc::new(Default::default())))
+                .insert_resource(Mounted(sta_vfs::Vfs::default()))
+                .insert_resource(ContentRes(db.clone()))
+                .insert_resource(look);
+            let drawn = |app: &mut App| {
+                radius(app, 3).map(|(e, _)| app.world().get::<Visibility>(e).is_none_or(|v| *v != Visibility::Hidden))
+            };
+            run_to(&mut app, 0);
+            assert_eq!(drawn(&mut app), Some(true), "{look:?}: alive");
+            for tick in 1..=3 {
+                run_to(&mut app, tick);
+                assert!(app.world().resource::<SimLink>().curr().unit(EntityId(3)).is_some_and(|u| u.flags.contains(UnitFlags::DYING)));
+                assert_eq!(drawn(&mut app), Some(true), "{look:?}: dying, tick {tick}");
+            }
+            run_to(&mut app, 4);
+            assert_eq!(drawn(&mut app), None, "{look:?}: removed");
+        }
+    }
+
     /// An object that leaves the local team's view is despawned, and the entity made when it is
     /// seen again must have its click radius: `attach_models` (which runs here, with a mount
     /// that has no models) gives none to a planet (its body is the map's) or to a node whose
