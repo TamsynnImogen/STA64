@@ -43,7 +43,7 @@ pub(crate) fn db(profile: Profile, warp_distance: Option<i32>) -> ContentDb {
     target.hardpoints.clear();
     let mut rules = Rules::default();
     if let Some(w) = warp_distance {
-        rules = rules.with_approach(ApproachRules { min_move_warp_distance: n(w) });
+        rules = rules.with_approach(ApproachRules { min_move_warp_distance: n(w), ..ApproachRules::default() });
     }
     ContentDb::builder()
         .profile(profile)
