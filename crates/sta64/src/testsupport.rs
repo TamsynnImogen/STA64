@@ -3,7 +3,7 @@
 //! and only when the install they name is of that kind (read-only profile detection through the mount the game uses).
 //! Removed when every crate's tests have moved (issue #1352).
 
-pub(crate) use sta_testkit::{Found, Kind, a_map, skip};
+pub(crate) use sta_testkit::{Found, Kind, skip};
 
 fn profile_of(kind: Kind) -> Option<sta_content::Profile> {
     use sta_content::Profile;

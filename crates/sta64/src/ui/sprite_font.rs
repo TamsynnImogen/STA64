@@ -1637,7 +1637,6 @@ impl Plugin for SpriteFontPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     const SAMPLE: &str = "sprite_table\n@referenceWidth=256\n@referenceHeight=128\n\n@animation f_a_uv\noffset 3 0.0 step\n@keyframes\n0\t0\t# \n10\t0\t#!\n20\t0\t#\"\n\n@animation f_a_w\nwidth 3 0.0 step\n@keyframes\n5\n8.5\n6\n\n@animation f_b_uv\noffset 2 0.0 step\n@keyframes\n0\t30\n12\t30\n\n@animation f_b_w\nwidth 2 0.0 step\n@keyframes\n7\n9\n\npagea\ttex_a\t\t0\t0\t0\t12\t@anim=f_a_uv\t@anim=f_a_w\npageb\ttex_b\t\t0\t0\t0\t12\t@anim=f_b_uv\t@anim=f_b_w\n";
 

@@ -234,7 +234,6 @@ impl Plugin for RadarFogPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     /// A 4 x 4 cell grid over (0,0)..(4*CELL, 4*CELL): the lower left quadrant visible,
     /// the lower right explored, the rest never seen.
