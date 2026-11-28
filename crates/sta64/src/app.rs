@@ -153,6 +153,12 @@ pub struct LaunchConfig {
     pub frame_camera: Option<FrameCamera>,
     /// `--postfx bloom,smaa`: opt-in post effects (render/post.rs).
     pub postfx: Vec<String>,
+    /// `--wireframe [overlay|lines|only]`: draw the models as wireframe (render/wireframe.rs).
+    pub wireframe: Option<crate::render::wireframe::WireframeMode>,
+    /// `--wireframe-color RRGGBB` (sRGB; default white).
+    pub wireframe_color: Option<[u8; 3]>,
+    /// `--wireframe-width <pixels>` (default 1).
+    pub wireframe_width: Option<f32>,
     /// `--install-content`: with `--headless --frames`, build the scene on the install's
     /// content and draw it with the map view's renderers (TOOL-17).
     pub install_content: bool,
@@ -203,6 +209,10 @@ Test bench (docs/TESTBENCH.md):
   --frame-size <WxH>       frame size (default: 640x360)
   --frame-camera still|fly with --install-content frames: print the billboard nebulae around the eye at each
                            frame's tick; fly also moves the camera along a fixed path on the anim clock
+  --wireframe[=<mode>]     draw ship, station and object models as wireframe (debug and promo renders; needs a GPU with
+                           POLYGON_MODE_LINE): overlay (default: lines over the filled models), lines (no fill, usual
+                           background), only (lines on black, all else hidden); also --wireframe-color <RRGGBB>
+                           (default ffffff) and --wireframe-width <pixels> (default 1; wider lines break close to the camera)
   --install-content        with --headless --frames: the install's own content (--install-root, --mod): the
                            scene's Map=, its units' models, sky, nebulae, planets and effects (no window, no audio)
   --perf <out.json>        with --headless --install-content: a performance run of the scene's map (docs/TESTBENCH.md,
@@ -217,6 +227,16 @@ Test bench (docs/TESTBENCH.md):
 
   --help                   this text
 ";
+
+/// `RRGGBB` or `#RRGGBB`.
+fn parse_rgb(s: &str) -> Option<[u8; 3]> {
+    let h = s.strip_prefix('#').unwrap_or(s);
+    if h.len() != 6 || !h.is_ascii() {
+        return None;
+    }
+    let c = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+    Some([c(0)?, c(2)?, c(4)?])
+}
 
 /// Bench step per frame when `--clock bench` gives none: 60 frames a second.
 const BENCH_STEP: f64 = 1.0 / 60.0;
@@ -307,6 +327,22 @@ impl LaunchConfig {
                 },
                 "--postfx" => cfg.postfx.extend(value(&mut args)),
                 "--install-content" => cfg.install_content = true,
+                w if w == "--wireframe" || w.starts_with("--wireframe=") => {
+                    use crate::render::wireframe::WireframeMode;
+                    let given = w.strip_prefix("--wireframe=").map(str::to_owned).or_else(|| args.next_if(|a| WireframeMode::parse(a).is_some()));
+                    match given.as_deref().map_or(Some(WireframeMode::Overlay), WireframeMode::parse) {
+                        Some(m) => cfg.wireframe = Some(m),
+                        None => cfg.unknown.push(format!("{w} (overlay, lines or only)")),
+                    }
+                }
+                "--wireframe-color" => match value(&mut args).and_then(|v| parse_rgb(&v)) {
+                    Some(c) => cfg.wireframe_color = Some(c),
+                    None => cfg.unknown.push("--wireframe-color (needs RRGGBB)".into()),
+                },
+                "--wireframe-width" => match value(&mut args).and_then(|v| v.parse::<f32>().ok()).filter(|w| *w > 0.0 && w.is_finite()) {
+                    Some(w) => cfg.wireframe_width = Some(w),
+                    None => cfg.unknown.push("--wireframe-width (needs a width in pixels)".into()),
+                },
                 "--perf" | "--perf-frames" | "--perf-warmup" | "--perf-reps" | "--perf-variants" | "--perf-camera" | "--perf-systems" | "--perf-no-sync" => {
                     let v = if a == "--perf-systems" || a == "--perf-no-sync" { None } else { value(&mut args) };
                     if let Err(e) = cfg.perf.get_or_insert_with(Default::default).set(&a, v.as_deref()) {
@@ -414,6 +450,23 @@ mod tests {
         assert_eq!((c.frame_camera, c.frames.as_slice(), c.unknown.is_empty()), (Some(FrameCamera::Fly), &[10][..], true));
         assert_eq!(parse("--frame-camera spin").unknown.len(), 1);
         assert!(USAGE.contains("--frame-camera"));
+    }
+
+    #[test]
+    fn wireframe_takes_an_optional_mode_a_colour_and_a_width() {
+        use crate::render::wireframe::WireframeMode::*;
+        assert_eq!(parse("").wireframe, None);
+        assert_eq!(parse("--wireframe").wireframe, Some(Overlay));
+        assert_eq!(parse("--wireframe only").wireframe, Some(Only));
+        assert_eq!(parse("--wireframe=lines").wireframe, Some(Lines));
+        let c = parse("--wireframe --scene s.ini --wireframe-color #F0A44B --wireframe-width 2.5");
+        assert_eq!((c.wireframe, c.wireframe_color, c.wireframe_width), (Some(Overlay), Some([0xf0, 0xa4, 0x4b]), Some(2.5)));
+        assert_eq!(c.scene, Some(PathBuf::from("s.ini")));
+        assert!(c.unknown.is_empty());
+        assert_eq!(parse("--wireframe=fill").unknown.len(), 1);
+        assert_eq!(parse("--wireframe-color red").unknown.len(), 1);
+        assert_eq!(parse("--wireframe-width 0").unknown.len(), 1);
+        assert!(USAGE.contains("--wireframe"));
     }
 
     #[test]

@@ -564,6 +564,22 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   (`Scene.marks`, `state`) keeps STA64's empty map: the map's own units fight and
   would change what a scene measures, and the original's marks name only the scene's
   objects. A pair with no map and no `Launch=` draws on the empty map, as before.
+- **Wireframe renders** (`--wireframe[=overlay|lines|only]`, `--wireframe-color RRGGBB`,
+  `--wireframe-width <px>`; `crates/sta64/src/render/wireframe.rs`): a debug and
+  promotional view that draws the models of the sim's units (ships, stations, the
+  objects the sim has; not the sky, nebulae, planets' art or effects) as lines, with
+  Bevy's own `WireframePlugin`, so the lines are the mesh the engine draws, whatever its
+  material. `overlay` (the default) keeps the fill and draws the lines over it; `lines`
+  drops the fill and keeps the background; `only` also hides everything else on a black
+  background, so the line pixels can be isolated exactly. The camera, clock and scene are
+  untouched: passes of the same scene and tick are pixel-aligned, so a normal frame, a
+  `lines` frame and a frame of the scene without the unit can be differenced or blended.
+  It needs a GPU with `POLYGON_MODE_LINE` and `IMMEDIATES` (Bevy's default settings
+  already enable what the adapter has); without them `sta64` says so and exits 78.
+  Widths above 1 pixel are drawn as quads pulled from the vertex buffer and break when an
+  edge crosses the near plane (a ship close up), so the default is 1. Without the flag
+  nothing is added. Works in the windowed views and in `--headless --install-content`
+  frames, not in the stand-in frames.
 - **Frames from the install** (`sta64 --headless --scene S --frames T,.. --install-root R
   [--mod M] --install-content`, what `sta-bench pair` starts; `--sta64`/`$STA64_BIN`).
   The bench's sim is built on the install's content with the pair's map, and what
