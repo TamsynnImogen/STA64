@@ -2,8 +2,8 @@
 //! `STA64_TEST_A1_INSTALL` (skipped when the variable is not set). The tests convert at run time
 //! with the Rust converter (`sta_mission_convert`, the library the game calls; no Python, no
 //! `objdump`) into a temporary folder that is removed with the test, and check that every function
-//! of every mission decodes completely (from the converter's own report: no game text reaches the
-//! test or its output), that every converted mission loads and runs on an empty view without an
+//! of every mission decodes completely (from the counts in the converter's result, #1378: no game
+//! text reaches the test or its output, and a mission without counts fails the test), that every converted mission loads and runs on an empty view without an
 //! error in the converted code, and how far the first mission gets in the campaign runner with the
 //! stand-in host.
 //!
@@ -23,8 +23,8 @@ use sta_vfs::Vfs;
 
 const TICKS: u64 = 9000;
 
-/// Per mission (the map's stem, lower case): (rules, then for each role "complete+partial/total").
-type Coverage = BTreeMap<String, (u32, BTreeMap<String, (u32, u32, u32)>)>;
+/// Per mission (the map's stem, lower case): (rules, then for each role complete, partial, total).
+type Coverage = BTreeMap<String, (usize, BTreeMap<String, (usize, usize, usize)>)>;
 
 /// Converts `only` (everything when `None`) into a temporary folder of the test's own.
 fn convert(install: &str, only: Option<&str>, tag: &str, unmapped: bool) -> (support::Conversion, Coverage) {
@@ -32,27 +32,19 @@ fn convert(install: &str, only: Option<&str>, tag: &str, unmapped: bool) -> (sup
     let conv = support::convert(Path::new(install), tag, &only, unmapped);
     let report = conv.run.console.join("\n");
     assert!(!report.contains("registration:"), "rule set-up code of a mission was not converted");
-    let cov = coverage(&report);
+    let cov = coverage(&conv.run);
     (conv, cov)
 }
 
-/// The converter's report line for a mission, of the shape
-/// `  <map> (<mission>): rules <n>, <role> <complete>+<partial>p/<total>, ...`.
-fn coverage(report: &str) -> Coverage {
+/// What the converter decoded of every mission it converted, from the counts its result
+/// carries. A converted mission without counts is a failure of the test, never a skipped check.
+fn coverage(run: &support::Run) -> Coverage {
     let mut out = Coverage::new();
-    for line in report.lines() {
-        let Some((head, rest)) = line.trim().split_once(": rules ") else { continue };
-        let map = head.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-        let mut parts = rest.split(", ");
-        let rules: u32 = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
-        let mut roles = BTreeMap::new();
-        for p in parts {
-            let Some((role, counts)) = p.split_once(' ') else { continue };
-            let Some((done, total)) = counts.split_once('/') else { continue };
-            let Some((complete, partial)) = done.trim_end_matches('p').split_once('+') else { continue };
-            roles.insert(role.to_owned(), (complete.parse().unwrap_or(0), partial.parse().unwrap_or(0), total.parse().unwrap_or(0)));
-        }
-        out.insert(map, (rules, roles));
+    for (i, m) in run.summary.missions.iter().enumerate().filter(|(_, m)| m.converted) {
+        let counts = m.counts.as_ref().unwrap_or_else(|| panic!("mission #{i} converted but its result carries no counts"));
+        let roles = counts.roles.iter().map(|(role, c)| (role.clone(), (c.complete, c.partial, c.total))).collect();
+        let before = out.insert(m.mission.to_ascii_lowercase(), (counts.rules, roles));
+        assert!(before.is_none(), "mission #{i} is reported twice");
     }
     out
 }
@@ -67,11 +59,12 @@ fn a1_campaign_decode_coverage_does_not_regress() {
     assert!(!cov.is_empty(), "the converter reported no mission");
     assert_eq!(conv.run.summary.failed_missions(), 0, "a mission of the install did not convert");
     assert_eq!(cov.len(), conv.run.converted().len(), "one report line for every converted mission");
-    let mut sum: BTreeMap<String, (u32, u32, u32)> = BTreeMap::new();
+    let mut sum: BTreeMap<String, (usize, usize, usize)> = BTreeMap::new();
     let mut rules = 0;
     for (i, (map, (r, roles))) in cov.iter().enumerate() {
         assert!(conv.dir().join(format!("missions/{map}.lua")).is_file(), "mission #{i}: its script was written");
         assert!(*r > 0, "mission #{i}: no rules found");
+        assert!(!roles.is_empty(), "mission #{i}: no function counted");
         rules += r;
         for (role, (c, p, t)) in roles {
             // every rule, condition, action, step and init function decodes completely
@@ -86,7 +79,7 @@ fn a1_campaign_decode_coverage_does_not_regress() {
     // What the totals must be follows from the conversion itself: one condition per rule, one
     // init function per mission.
     assert_eq!(sum.get("condition").map(|s| s.2), Some(rules), "one condition for every rule");
-    assert_eq!(sum.get("init").map(|s| s.2), Some(cov.len() as u32), "one init function for every mission");
+    assert_eq!(sum.get("init").map(|s| s.2), Some(cov.len()), "one init function for every mission");
 }
 
 /// Rule STA64 follows: a DLL pair that no map of the install names is not converted by default;
@@ -282,7 +275,7 @@ fn the_first_converted_a1_mission_runs_in_the_campaign_runner() {
     assert!(p.started, "{:?}", p.start_error);
     assert!(p.errors.is_empty(), "{:?}", p.errors);
     assert!(p.step_errors.is_empty(), "{:?}", p.step_errors);
-    assert_eq!(Some(p.rules), cov.get(&stem).map(|c| c.0), "every rule the converter reports for the mission is registered");
+    assert_eq!(Some(p.rules as usize), cov.get(&stem).map(|c| c.0), "every rule the converter reports for the mission is registered");
     assert!(!p.rules_held.is_empty(), "no rule of the mission ever held");
     assert!(p.handles_resolved > 0, "no label of the map resolved ({} unresolved)", p.unresolved.len());
     // UI-36: the opening cineractive finishes (its path ends and `isCineractiveDone` reads 1), so

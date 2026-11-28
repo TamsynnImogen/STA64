@@ -182,12 +182,15 @@ fn the_cache_answers_without_parsing_and_a_miss_is_converted_and_a_hit_marks_the
     // hits: the panicking decoder is never asked, and no entry is added or removed
     let r = go(&root, &out, Some(&cache), &[], &never, None);
     assert!(r.summary.missions.iter().all(|m| m.cached && m.converted && !m.failed()), "{:?}", r.summary);
+    // the cache keeps the script and the console lines, not the numbers (#1378)
+    assert!(r.summary.missions.iter().all(|m| m.counts.is_none()));
     assert_eq!(fs::read_dir(&cdir).unwrap().count(), 2);
     // a changed DLL is another key: not cached any more, so it is converted (and fails: junk)
     fs::write(root.join("missions/x2S.dsl"), b"junk mission two, changed").unwrap();
     let r = go(&root, &out, Some(&cache), &[], &never, None);
     let by: Vec<(bool, bool)> = r.summary.missions.iter().map(|m| (m.cached, m.failed())).collect();
     assert_eq!(by, [(true, false), (false, true)]);
+    assert!(r.summary.missions.iter().all(|m| m.counts.is_none()), "a mission that failed has no counts either");
     // the file of the mission that no longer converts is gone with the full run's clearing
     assert_eq!(lua_files(&out), ["fed1.lua"]);
     // no cache at all: nothing is answered from one
