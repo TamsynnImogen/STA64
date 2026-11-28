@@ -37,9 +37,14 @@ game uses). They are removed when every crate's tests have moved.
 ```sh
 cp tools/gated.example tools/gated.local     # once; git-ignored; fill in the folders of this machine
 tools/run-gated --list                       # which groups have a path set, and whether the folder exists
-tools/run-gated                              # every group with a path set
-tools/run-gated --group mod-family --gpu     # one group, with the GPU opt-in
+tools/run-gated                              # every group with a path set, the light crates only
+tools/run-gated --client --group mod-family  # also the client's gated tests, one group
+tools/run-gated --client --gpu               # the client's, with the GPU opt-in
 ```
+
+By default the runner leaves the client (`sta64`) out: its tests need a heavy build and plenty of free memory,
+which can bring a busy machine down. `--client` adds it, one group at a time (use `--group`), and the runner says
+so before it starts. It never launches a game either way.
 
 `tools/run-gated` runs `tools/agent-cargo test --workspace` once per group, with only that group's variables set
 (cargo's `--config env.NAME=...` form), filtered to the tests whose name contains `install`, and prints per group
