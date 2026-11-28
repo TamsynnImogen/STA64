@@ -777,6 +777,44 @@ fn two_apps_host_join_choose_launch_and_play_in_step() {
     assert_eq!((s.player_name.as_str(), s.relay.as_str()), ("Picard", r.local_addr().to_string().as_str()));
 }
 
+#[test]
+fn the_host_sets_warp_allowed_while_the_room_is_open_and_the_joiner_only_sees_it() {
+    let r = relay();
+    let mut d = data();
+    d.content = Arc::new(sta_content::ContentDb::builder().profile(sta_content::Profile::Sta2Classic).build().unwrap());
+    let (mut h, mut g) = (app_with(d.clone(), None, 1.0), app_with(d, None, 1.0));
+    host_through_screens(&mut h, &r, "Picard", "");
+    pump_apps(&mut [&mut h], "the host is in the lobby", |a| in_screen(a[0], Screen::Lobby));
+    let code = session_of(&h).code().to_string();
+    join_through_screens(&mut g, &r, "Riker", &code.to_lowercase(), "");
+    pump_apps(&mut [&mut h, &mut g], "both lobbies show both players", |a| {
+        in_screen(a[1], Screen::Lobby) && session_of(a[1]).view().seats.len() == 2 && session_of(a[1]).view().seats[1].kind == Kind::Human
+    });
+    assert!(has_text(&mut h, "Warp: On") && has_text(&mut g, "Warp: On"), "on by default");
+    assert!(act_entity(&mut h, MpAct::ToggleWarp).is_some(), "the host may set it");
+    assert!(act_entity(&mut g, MpAct::ToggleWarp).is_none(), "the joiner may not");
+    press(&mut h, MpAct::ToggleWarp);
+    pump_apps(&mut [&mut h, &mut g], "the host's choice reaches the joiner", |a| !session_of(a[1]).view().options.allow_warp);
+    assert!(has_text(&mut h, "Warp: Off") && has_text(&mut g, "Warp: Off"), "both screens show the choice");
+    assert!(act_entity(&mut g, MpAct::ToggleWarp).is_none(), "still read-only for the joiner");
+    // A change of the host's settings takes the ready marks back; ready again, then launch: the option is in both starts.
+    press(&mut g, MpAct::ToggleReady);
+    pump_apps(&mut [&mut h, &mut g], "the host may launch", |a| act_entity(a[0], MpAct::Launch).is_some());
+    press(&mut h, MpAct::Launch);
+    pump_apps(&mut [&mut h, &mut g], "both apps have a match", |a| a[0].world().resource::<NetLaunch>().0.is_some() && a[1].world().resource::<NetLaunch>().0.is_some());
+    let (mh, mg) = (h.world_mut().resource_mut::<NetLaunch>().0.take().unwrap(), g.world_mut().resource_mut::<NetLaunch>().0.take().unwrap());
+    assert!(!mh.start.options.allow_warp && !mg.start.options.allow_warp);
+}
+
+#[test]
+fn warp_allowed_is_not_offered_in_the_lobby_where_the_content_lacks_it() {
+    let r = relay();
+    let mut h = app();
+    host_through_screens(&mut h, &r, "Picard", "");
+    pump_apps(&mut [&mut h], "the host is in the lobby", |a| in_screen(a[0], Screen::Lobby));
+    assert!(act_entity(&mut h, MpAct::ToggleWarp).is_none() && !has_text(&mut h, "Warp:"));
+}
+
 fn app_has_no_drop(app: &mut App, slot: usize, col: DropCol) -> bool {
     !app.world_mut().query::<&LobbyDrop>().iter(app.world()).any(|d| d.slot == slot && d.col == col)
 }
