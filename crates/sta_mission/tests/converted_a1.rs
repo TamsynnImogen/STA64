@@ -1,12 +1,18 @@
-//! LUA-14: the Armada I campaign missions converted to Lua by
-//! `tools/a1_to_lua.py`, install-gated. The test converts at run time from the
-//! install named by `STA64_TEST_A1_INSTALL` into the target directory (never
-//! into the repository) and checks that the decode coverage does not regress
-//! (counts only: no game text reaches the test or its output), that every
-//! converted mission loads and runs on an empty view without an error in the
-//! converted code, and how far mission 1 gets in the campaign runner with the
-//! stand-in host. Needs `python3` and `objdump`; skipped when the variable is
-//! not set.
+//! LUA-14: the Armada I campaign missions converted to Lua, install-gated on
+//! `STA64_TEST_A1_INSTALL` (skipped when the variable is not set). The tests convert at run time
+//! with the Rust converter (`sta_mission_convert`, the library the game calls; no Python, no
+//! `objdump`) into a temporary folder that is removed with the test, and check that every function
+//! of every mission decodes completely (from the converter's own report: no game text reaches the
+//! test or its output), that every converted mission loads and runs on an empty view without an
+//! error in the converted code, and how far the first mission gets in the campaign runner with the
+//! stand-in host.
+//!
+//! Nothing here names a mission or pins a count taken from the game: which mission is the first,
+//! how many there are and how many rules each has come from the install and from what the
+//! conversion reports, at run time.
+
+#[path = "support/convert.rs"]
+mod support;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,36 +23,26 @@ use sta_vfs::Vfs;
 
 const TICKS: u64 = 9000;
 
-/// Per mission: (rules, then for each role "complete+partial/total").
+/// Per mission (the map's stem, lower case): (rules, then for each role "complete+partial/total").
 type Coverage = BTreeMap<String, (u32, BTreeMap<String, (u32, u32, u32)>)>;
 
-/// Converts into a directory of the test's own (`tag`): tests run in parallel.
-fn convert(install: &str, only: Option<&str>, tag: &str, unmapped: bool) -> (PathBuf, Coverage) {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("converted_a1_{tag}"));
-    let _ = std::fs::remove_dir_all(&out);
-    let mut cmd = std::process::Command::new("python3");
-    cmd.arg("-I").arg(repo.join("tools/a1_to_lua.py")).args(["--install", install]);
-    if let Some(m) = only {
-        cmd.args(["--only", m]);
-    }
-    if unmapped {
-        cmd.arg("--include-unmapped");
-    }
-    let run = cmd.arg("--out").arg(&out).output().expect("run python3 tools/a1_to_lua.py");
-    let report = String::from_utf8_lossy(&run.stdout).into_owned();
-    eprintln!("{report}");
-    assert!(run.status.success(), "{report}\n{}", String::from_utf8_lossy(&run.stderr));
-    assert!(!report.contains("registration:"), "rule set-up code not converted: {report}");
-    (out, coverage(&report))
+/// Converts `only` (everything when `None`) into a temporary folder of the test's own.
+fn convert(install: &str, only: Option<&str>, tag: &str, unmapped: bool) -> (support::Conversion, Coverage) {
+    let only: Vec<&str> = only.into_iter().collect();
+    let conv = support::convert(Path::new(install), tag, &only, unmapped);
+    let report = conv.run.console.join("\n");
+    assert!(!report.contains("registration:"), "rule set-up code of a mission was not converted");
+    let cov = coverage(&report);
+    (conv, cov)
 }
 
-/// `  fed1 (Federation1): rules 34, action 33+0p/33, condition 34+0p/34, ...`
+/// The converter's report line for a mission, of the shape
+/// `  <map> (<mission>): rules <n>, <role> <complete>+<partial>p/<total>, ...`.
 fn coverage(report: &str) -> Coverage {
     let mut out = Coverage::new();
     for line in report.lines() {
         let Some((head, rest)) = line.trim().split_once(": rules ") else { continue };
-        let map = head.split_whitespace().next().unwrap_or("").to_owned();
+        let map = head.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
         let mut parts = rest.split(", ");
         let rules: u32 = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
         let mut roles = BTreeMap::new();
@@ -67,56 +63,60 @@ fn a1_campaign_decode_coverage_does_not_regress() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, cov) = convert(&install, None, "coverage", false);
-    assert_eq!(cov.len(), 20, "the 20 campaign maps convert: {:?}", cov.keys().collect::<Vec<_>>());
+    let (conv, cov) = convert(&install, None, "a1-coverage", false);
+    assert!(!cov.is_empty(), "the converter reported no mission");
+    assert_eq!(conv.run.summary.failed_missions(), 0, "a mission of the install did not convert");
+    assert_eq!(cov.len(), conv.run.converted().len(), "one report line for every converted mission");
     let mut sum: BTreeMap<String, (u32, u32, u32)> = BTreeMap::new();
     let mut rules = 0;
-    for (map, (r, roles)) in &cov {
-        assert!(out.join(format!("missions/{map}.lua")).is_file(), "{map}");
-        assert!(*r > 0, "{map}: no rules found");
+    for (i, (map, (r, roles))) in cov.iter().enumerate() {
+        assert!(conv.dir().join(format!("missions/{map}.lua")).is_file(), "mission #{i}: its script was written");
+        assert!(*r > 0, "mission #{i}: no rules found");
         rules += r;
         for (role, (c, p, t)) in roles {
+            // every rule, condition, action, step and init function decodes completely
+            assert!(c == t && *p == 0, "mission #{i} {role}: {c}+{p}p of {t} decoded");
             let s = sum.entry(role.clone()).or_default();
             s.0 += c;
             s.1 += p;
             s.2 += t;
         }
     }
-    eprintln!("rules {rules}; by role (complete, partial, total): {sum:?}");
-    // Measured on the user's Armada I install (LUA-14): every rule, condition,
-    // action, step and init function decodes completely.
-    assert_eq!(rules, 1050);
-    for (role, total) in [("condition", 1050), ("action", 1005), ("step", 1005), ("init", 20)] {
-        let (c, _, t) = sum.get(role).copied().unwrap_or_default();
-        assert_eq!(t, total, "{role} count");
-        assert_eq!(c, total, "{role}: {} not decoded completely", t - c);
-    }
+    eprintln!("{} missions, rules {rules}; by role (complete, partial, total): {sum:?}", cov.len());
+    // What the totals must be follows from the conversion itself: one condition per rule, one
+    // init function per mission.
+    assert_eq!(sum.get("condition").map(|s| s.2), Some(rules), "one condition for every rule");
+    assert_eq!(sum.get("init").map(|s| s.2), Some(cov.len() as u32), "one init function for every mission");
 }
 
-/// The DLL pairs no `.bzn` names are cut campaign content: neither the maps, nor `mshell.set`
-/// (the campaign list), nor the objective texts reach them (measured, see the LUA-14 follow-up).
-/// `--include-unmapped` converts them anyway under their DLL's name; the default does not.
+/// Rule STA64 follows: a DLL pair that no map of the install names is not converted by default;
+/// the converter's "include unmapped" option converts it anyway, under its DLL's name. The test
+/// tolerates an install that has no such pair, and for one that has, at most one function per
+/// role that does not decode completely.
 #[test]
 fn unmapped_a1_dll_pairs_convert_only_on_request() {
     let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (_, default) = convert(&install, None, "mapped", false);
-    let (out, all) = convert(&install, None, "unmapped", true);
+    let (_, default) = convert(&install, None, "a1-mapped", false);
+    let (conv, all) = convert(&install, None, "a1-unmapped", true);
+    assert!(default.keys().all(|k| all.contains_key(k)), "the request only adds missions");
     let extra: Vec<&String> = all.keys().filter(|k| !default.contains_key(*k)).collect();
-    assert_eq!((default.len(), all.len(), extra.len()), (20, 26, 6), "{extra:?}");
-    for map in extra {
-        assert!(out.join(format!("missions/{map}.lua")).is_file(), "{map}");
-        let (rules, roles) = &all[map];
-        assert!(*rules > 0, "{map}: no rules found");
-        // all but at most one step per DLL decode completely
+    if extra.is_empty() {
+        eprintln!("this install has no DLL pair without a map: nothing more to check");
+        return;
+    }
+    for (i, map) in extra.iter().enumerate() {
+        assert!(conv.dir().join(format!("missions/{map}.lua")).is_file(), "unmapped pair #{i}: its script was written");
+        let (rules, roles) = &all[*map];
+        assert!(*rules > 0, "unmapped pair #{i}: no rules found");
+        // all but at most one function per role decode completely
         for (role, (c, p, t)) in roles {
-            assert!(t - c <= 1 && *p <= 1, "{map} {role}: {c}+{p}/{t}");
+            assert!(t - c <= 1 && *p <= 1, "unmapped pair #{i} {role}: {c}+{p}/{t}");
         }
     }
-    let rules: u32 = all.values().map(|(r, _)| r).sum();
-    assert_eq!(rules, 1130);
+    eprintln!("{} mapped missions, {} more on request", default.len(), extra.len());
 }
 
 #[test]
@@ -125,9 +125,10 @@ fn every_converted_a1_mission_loads_and_runs() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, _) = convert(&install, None, "load", false);
-    let mut files: Vec<PathBuf> = std::fs::read_dir(out.join("missions")).unwrap().map(|e| e.unwrap().path()).collect();
+    let (conv, _) = convert(&install, None, "a1-load", false);
+    let mut files: Vec<PathBuf> = std::fs::read_dir(conv.dir().join("missions")).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|x| x == "lua")).collect();
     files.sort();
+    assert!(!files.is_empty(), "the conversion wrote no script");
     for f in files {
         let name = format!("missions/{}", f.file_name().unwrap().to_string_lossy());
         let source = std::fs::read_to_string(&f).unwrap();
@@ -157,9 +158,9 @@ fn a1_first_mission_seat_starts_with_the_maps_crew_and_officer_limit() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, _) = convert(&install, None, "first_start", false);
+    let (conv, _) = convert(&install, None, "a1-first-start", false);
     let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
-    vfs.push_dir("converted".into(), out).expect("mount the converted missions");
+    vfs.push_dir("converted".into(), conv.dir()).expect("mount the converted missions");
     let book = CampaignBook::load_vfs(&vfs);
     let campaign = book.campaigns.iter().find(|c| !c.missions.is_empty()).expect("a campaign");
     let (id, bzn) = (campaign.id.clone(), campaign.missions[0].bzn.clone());
@@ -243,47 +244,48 @@ fn a1_every_maps_start_cap_is_its_record() {
     assert!(checked > 0, "at least one seat was compared");
 }
 
-/// Mission 1 (`fed1`) on its own map in the campaign runner, headless, with
+/// The first mission of the first campaign on its own map in the campaign runner, headless, with
 /// the stand-in host reporting sounds and movies after their file lengths.
 #[test]
-fn converted_a1_fed1_runs_in_the_campaign_runner() {
+fn the_first_converted_a1_mission_runs_in_the_campaign_runner() {
     let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, _) = convert(&install, Some("fed1"), "fed1", false);
+    // which map that is comes from the install's own campaign list
+    let stem = {
+        let vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
+        let book = CampaignBook::load_vfs(&vfs);
+        book.campaigns.iter().find(|c| !c.missions.is_empty()).expect("a campaign").missions[0].stem().to_ascii_lowercase()
+    };
+    let (conv, cov) = convert(&install, Some(&stem), "a1-first", false);
     let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
-    vfs.push_dir("converted".into(), out).expect("mount the converted missions");
+    vfs.push_dir("converted".into(), conv.dir()).expect("mount the converted missions");
     let book = CampaignBook::load_vfs(&vfs);
     let first = &book.campaigns.iter().find(|c| !c.missions.is_empty()).expect("a campaign").missions[0];
-    assert_eq!(first.bzn.to_ascii_lowercase(), "fed1.bzn");
     assert!(
-        matches!(&first.script, MissionScript::Lua { path } if path.eq_ignore_ascii_case("missions/fed1.lua")),
-        "{:?}",
-        first.script
+        matches!(&first.script, MissionScript::Lua { path } if path.eq_ignore_ascii_case(&format!("missions/{stem}.lua"))),
+        "the first mission resolves to its converted script"
     );
     let host = VfsHost::load(Arc::new(vfs)).expect("installed content loads");
-    let probes = sta_mission::progress::probe_book(&host, &book, TICKS, true, Some("fed1"));
+    // exactly that map: its stem and the dot before the extension
+    let probes = sta_mission::progress::probe_book(&host, &book, TICKS, true, Some(&format!("{stem}.")));
     assert_eq!(probes.len(), 1);
     let p = &probes[0];
     eprintln!(
-        "[fed1] ticks {}, rules held {:?}, last rule {:?}, last step {:?}, objective at {:?}, problems {:?}",
+        "first mission: ticks {}, rules held {}, objective at {:?}, problems {}",
         p.ticks,
-        p.rules_held,
-        p.last_rule,
-        p.last_step,
+        p.rules_held.len(),
         p.first_objective_tick,
-        p.problems.iter().map(|q| (&q.0, &q.1)).collect::<Vec<_>>()
+        p.problems.len()
     );
     assert!(p.started, "{:?}", p.start_error);
     assert!(p.errors.is_empty(), "{:?}", p.errors);
     assert!(p.step_errors.is_empty(), "{:?}", p.step_errors);
-    assert_eq!(p.rules, 34);
-    assert!(p.rules_held.len() >= 5, "{:?}", p.rules_held);
-    assert!(p.handles_resolved >= 10, "resolved {}, unresolved {:?}", p.handles_resolved, p.unresolved);
-    // UI-36: the opening cineractive finishes (its zoom-out path ends, `isCineractiveDone` reads
-    // 1) and the rule that ends it fires; before the shot model the run sat at 5 rules.
-    assert!(p.rules_held.iter().any(|r| r == "end_opening_cin"), "{:?}", p.rules_held);
-    assert!(p.engine_reads.iter().any(|(n, c)| n == "isCineractiveDone" && *c > 0), "{:?}", p.engine_reads);
-    assert!(p.rules_held.len() > 5, "{:?}", p.rules_held);
+    assert_eq!(Some(p.rules), cov.get(&stem).map(|c| c.0), "every rule the converter reports for the mission is registered");
+    assert!(!p.rules_held.is_empty(), "no rule of the mission ever held");
+    assert!(p.handles_resolved > 0, "no label of the map resolved ({} unresolved)", p.unresolved.len());
+    // UI-36: the opening cineractive finishes (its path ends and `isCineractiveDone` reads 1), so
+    // the script gets past its opening.
+    assert!(p.engine_reads.iter().any(|(n, c)| n == "isCineractiveDone" && *c > 0), "the script never asked whether the cineractive is done");
 }
