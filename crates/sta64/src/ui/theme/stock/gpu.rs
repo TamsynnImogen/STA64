@@ -102,9 +102,7 @@ fn gallery_renders_on_gpu() {
         return;
     }
     let mounted = || {
-        let install = std::env::var("STA64_TEST_INSTALL").ok()?;
-        let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
-        sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).ok()
+        sta_testkit::find(sta_testkit::Kind::Any)?.mount()
     };
     let size = UVec2::new(1600, 900);
     for profile in [UiProfile::Lcars, UiProfile::Armada2, UiProfile::FleetOps] {

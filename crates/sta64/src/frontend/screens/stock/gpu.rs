@@ -145,9 +145,8 @@ fn main_menu_renders_without_a_window() {
     }
     capture(UVec2::new(1920, 1080), "short-mod", Some("Roots"), None, Screen::Main);
     capture(UVec2::new(1920, 1080), "long-mod", Some("Expanded Fleet Operations and Starship Construction Project"), None, Screen::Main);
-    if let Ok(install) = std::env::var("STA64_TEST_INSTALL") {
-        let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
-        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
+    if let Some(found) = sta_testkit::find(sta_testkit::Kind::Any) {
+        let vfs = sta_vfs::Vfs::mount_install(&found.root, found.active_mod.as_deref())
             .expect("main-menu capture install mount");
         capture(UVec2::new(1920, 1080), "mounted", None, Some(vfs), Screen::Main);
     }
@@ -170,9 +169,8 @@ fn graphics_options_render_without_a_window() {
     ] {
         capture(size, name, None, None, Screen::Settings);
     }
-    if let Ok(install) = std::env::var("STA64_TEST_INSTALL") {
-        let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
-        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
+    if let Some(found) = sta_testkit::find(sta_testkit::Kind::Any) {
+        let vfs = sta_vfs::Vfs::mount_install(&found.root, found.active_mod.as_deref())
             .expect("graphics capture install mount");
         capture(UVec2::new(1920, 1080), "mounted", None, Some(vfs), Screen::Settings);
     }

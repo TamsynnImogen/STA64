@@ -310,10 +310,7 @@ mod tests {
 
     #[test]
     fn installed_fo4_avatar_choices_replace_the_local_starter() {
-        let Some(install) = std::env::var_os("STA64_TEST_INSTALL") else {
-            eprintln!("SKIP: set STA64_TEST_INSTALL to the install containing FO4");
-            return;
-        };
+        let Some(install) = sta_testkit::install(sta_testkit::Kind::ModFamily) else { return };
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), Some("FO4")).unwrap();
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let (db, _) = ContentDb::load(&vfs, &index).unwrap();

@@ -2101,14 +2101,8 @@ mod tests {
                 None,
             ),
         ];
-        if let Ok(root) = std::env::var("STA64_TEST_INSTALL") {
-            v.push((
-                "env".into(),
-                root.into(),
-                std::env::var("STA64_TEST_MOD")
-                    .ok()
-                    .filter(|m| !m.is_empty()),
-            ));
+        if let Some(found) = sta_testkit::find(sta_testkit::Kind::Any) {
+            v.push(("env".into(), found.root, found.active_mod));
         }
         v
     }

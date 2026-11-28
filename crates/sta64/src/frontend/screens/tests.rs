@@ -1028,11 +1028,9 @@ fn setup_renders_race_captions_and_refreshes_strings_without_replacing_ids() {
 
 #[test]
 fn installed_race_display_keys_resolve_federation_caption() {
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-        eprintln!("SKIP: set STA64_TEST_INSTALL and STA64_TEST_MOD for installed race captions");
-        return;
-    };
-    let active = std::env::var("STA64_TEST_MOD").ok();
+    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+    let root = found.root_string();
+    let active = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active.as_deref()).unwrap();
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (races, warnings) = Races::load(&vfs, &index);

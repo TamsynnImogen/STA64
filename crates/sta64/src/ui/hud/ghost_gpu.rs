@@ -16,14 +16,13 @@ fn installed_ghost_is_readable_without_lights() {
         || std::env::var("STA64_GHOST_TESTS").as_deref() != Ok("1")
     {
         eprintln!(
-            "SKIP: set STA64_GPU_TESTS=1 STA64_GHOST_TESTS=1 and STA64_TEST_INSTALL/STA64_TEST_MOD"
+            "SKIP: set STA64_GPU_TESTS=1 STA64_GHOST_TESTS=1 and an install variable (docs/GATED_TESTS.md)"
         );
         return;
     }
-    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let active_mod = std::env::var("STA64_TEST_MOD")
-        .ok()
-        .filter(|m| !m.is_empty());
+    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let install = found.root_string();
+    let active_mod = found.active_mod.clone();
     let vfs =
         sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
     let model_key = std::env::var("STA64_TEST_MODEL").unwrap_or_else(|_| "fyard".into());

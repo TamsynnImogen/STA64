@@ -469,13 +469,11 @@ cinematicDisplayArea = 20 30 360 240
     /// scaled sheet with its display inside it, at every window aspect.
     #[test]
     fn installed_sheet_panel_lies_inside_the_sheet_at_every_aspect() {
-        let Some(root) = std::env::var_os("STA64_TEST_INSTALL") else {
-            eprintln!("SKIP: set STA64_TEST_INSTALL=<Armada II family root>");
-            return;
-        };
+        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
         let sheet = std::env::var("STA64_TEST_CFG").unwrap_or_else(|_| "gui_fed.cfg".into());
         // Sheets are named per race and per family; an install without this one is skipped.
-        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty()).as_deref()).expect("install");
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), found.active_mod.as_deref()).expect("install");
         if vfs.read(&format!("misc/{sheet}")).is_none() {
             eprintln!("SKIP: no {sheet} in this install (set STA64_TEST_CFG to one it has)");
             return;

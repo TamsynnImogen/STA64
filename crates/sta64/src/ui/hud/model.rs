@@ -1794,8 +1794,9 @@ mod tests {
     /// kinds, not by class labels or speed.
     #[test]
     fn installed_builders_split_by_what_they_build() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let active = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let active = found.active_mod.clone();
         let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active.as_deref()) else { return };
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let Ok((db, _)) = ContentDb::load(&vfs, &index) else { return };
@@ -2205,7 +2206,7 @@ mod tests {
     /// order, and with a restricted tree the omitted item's cell is empty.
     #[test]
     fn installed_command_metadata_keeps_the_palette_cells_apart() {
-        let vars = ["STA64_TEST_A1_INSTALL", "STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL", "STA64_TEST_INSTALL"];
+        let vars = ["STA64_TEST_A1_INSTALL", "STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL"];
         let mut ran = 0;
         for var in vars {
             let Some(root) = std::env::var_os(var) else { continue };
@@ -2222,7 +2223,7 @@ mod tests {
             assert_eq!(held.len(), all.len() - 1, "{var}: the omitted item is gone, nothing else");
         }
         if ran == 0 {
-            eprintln!("SKIP: set STA64_TEST_A1_INSTALL, STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_INSTALL");
+            eprintln!("SKIP: set STA64_TEST_A1_INSTALL, STA64_TEST_A2_STOCK_INSTALL, or STA64_TEST_ROOTS_INSTALL");
         }
     }
 

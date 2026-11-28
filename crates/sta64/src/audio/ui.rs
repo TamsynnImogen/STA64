@@ -313,8 +313,9 @@ mod tests {
     /// and all four button sounds are present everywhere (`cornron` / `cornrclk` are in every install).
     #[test]
     fn real_install_if_available() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let m = found.active_mod.clone();
         let vfs = Vfs::mount_install(Path::new(&root), m.as_deref()).unwrap();
         let asked = match sta_content::layered::cfg_h(&vfs, "RTS_CFG.h") {
             Some(c) => UiSounds::from_cfg(&c),

@@ -649,11 +649,9 @@ mod tests {
     /// ship keeps untinted faces beside its team ones.
     #[test]
     fn install_start_units_team_share() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-            eprintln!("SKIP: STA64_TEST_INSTALL not set");
-            return;
-        };
-        let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let m = found.mod_string();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
@@ -689,11 +687,9 @@ mod tests {
     /// grey (saturation low); saturated player colours tint it as in game.
     #[test]
     fn install_fconst_team_tint_stays_grey_for_pale_colours() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-            eprintln!("SKIP: STA64_TEST_INSTALL not set");
-            return;
-        };
-        let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let m = found.mod_string();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();

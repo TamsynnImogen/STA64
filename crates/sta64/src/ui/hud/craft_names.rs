@@ -280,11 +280,9 @@ mod tests {
 
     #[test]
     fn installed_name_pools_are_read_without_splitting_craft_names() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-            eprintln!("skip installed name pools: STA64_TEST_INSTALL is unset");
-            return;
-        };
-        let active_mod = std::env::var("STA64_TEST_MOD").ok();
+        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let active_mod = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active_mod.as_deref())
             .unwrap();
         let (index, _) = sta_content::OdfIndex::build(&vfs);

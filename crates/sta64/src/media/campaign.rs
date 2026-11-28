@@ -383,8 +383,9 @@ mod tests {
     /// and whether the install has them.
     #[test]
     fn install_mission_movies_resolve() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let m = found.active_mod.clone();
         let vfs = Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).expect("mount");
         let book = CampaignBook::load_vfs(&vfs);
         let cat = MissionMovies::from_book(&book, &vfs);

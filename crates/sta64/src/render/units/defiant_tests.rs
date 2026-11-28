@@ -11,10 +11,8 @@ fn installed_defiant_unit_attaches_visible_hull() {
         eprintln!("SKIP: set STA64_DEFIANT_TESTS=1 for the Classic Defiant fixture");
         return;
     }
-    let (Ok(install), Ok(mod_name)) = (std::env::var("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
-        eprintln!("SKIP: set STA64_TEST_INSTALL and STA64_TEST_MOD (empty for base install)");
-        return;
-    };
+    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+    let (install, mod_name) = (found.root_string(), found.mod_string());
     let vfs = sta_vfs::Vfs::mount_install(
         std::path::Path::new(&install),
         Some(mod_name.as_str()).filter(|name| !name.is_empty()),
@@ -150,13 +148,11 @@ fn installed_defiant_unit_attaches_visible_hull() {
 /// holds. Regression of a playtest report: a dilithium moon on STA2 Classic could not be selected.
 #[test]
 fn install_visible_resource_nodes_are_pickable_and_minable() {
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-        eprintln!("SKIP: set STA64_TEST_INSTALL (and STA64_TEST_MOD)");
-        return;
-    };
-    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "4alliance".into());
+    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = sta_content::Races::load(&vfs, &index);
@@ -250,12 +246,10 @@ fn install_visible_resource_nodes_are_pickable_and_minable() {
 /// hides its model once zoomed out). Playtest report: the A1 `fed1` planet was drawn only when zoomed in.
 #[test]
 fn install_unseen_background_planet_stays_drawn_without_an_icon() {
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-        eprintln!("SKIP: set STA64_TEST_INSTALL (an Armada I install)");
-        return;
-    };
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "fed1".into());
+    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::FirstGame) else { return };
+    let root = found.root_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
     let db = Arc::new(db);

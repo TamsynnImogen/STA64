@@ -1902,8 +1902,9 @@ mod tests {
     /// content, every ship of the map drawn by a ship the install has.
     #[test]
     fn install_content_has_the_menus_ships() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let m = found.mod_string();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
         let content = load_install_content(&vfs).unwrap();
         let menu = MenuMap::from_vfs(&vfs, &content);

@@ -128,16 +128,14 @@ fn stats(w: u32, h: u32, rgba: &[u8]) -> ([f32; 3], f32) {
 #[test]
 fn colony_lights_frames_on_a_stock_map() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
-        eprintln!("SKIP: set STA64_GPU_TESTS=1 and STA64_TEST_INSTALL to draw a colony's lights");
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 and an install variable (docs/GATED_TESTS.md) to draw a colony's lights");
         return;
     }
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-        eprintln!("SKIP: STA64_TEST_INSTALL names no install");
-        return;
-    };
-    let mod_name = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let mod_name = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mod_name.as_deref()).expect("mount");
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "a2_fed01".into());
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
 
     // `STA64_TEST_NEAREST=1`: the alloc picture is filtered nearest instead of linear, for comparing the two.
     let nearest = std::env::var("STA64_TEST_NEAREST").as_deref() == Ok("1");

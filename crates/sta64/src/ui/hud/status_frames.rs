@@ -114,14 +114,13 @@ fn installed_status_queue_and_cargo_render_and_clear() {
         || std::env::var("STA64_STATUS_TESTS").as_deref() != Ok("1")
     {
         eprintln!(
-            "SKIP: set STA64_GPU_TESTS=1 STA64_STATUS_TESTS=1 STA64_TEST_INSTALL STA64_TEST_CFG"
+            "SKIP: set STA64_GPU_TESTS=1 STA64_STATUS_TESTS=1 an install variable (docs/GATED_TESTS.md) STA64_TEST_CFG"
         );
         return;
     }
-    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let active_mod = std::env::var("STA64_TEST_MOD")
-        .ok()
-        .filter(|name| !name.is_empty());
+    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let install = found.root_string();
+    let active_mod = found.active_mod.clone();
     let cfg = std::env::var("STA64_TEST_CFG").expect("STA64_TEST_CFG");
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
         .expect("requested status test install");

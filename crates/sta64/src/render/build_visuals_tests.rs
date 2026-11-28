@@ -459,14 +459,13 @@ fn sparks_live_only_on_published_preview_edges() {
 fn installed_ship_preview_attaches_partial_model_without_selection() {
     if std::env::var("STA64_CONSTRUCTION_TESTS").as_deref() != Ok("1") {
         eprintln!(
-            "SKIP: set STA64_CONSTRUCTION_TESTS=1 and STA64_TEST_INSTALL for installed model attachment"
+            "SKIP: set STA64_CONSTRUCTION_TESTS=1 and an install variable (docs/GATED_TESTS.md) for installed model attachment"
         );
         return;
     }
-    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let active_mod = std::env::var("STA64_TEST_MOD")
-        .ok()
-        .filter(|m| !m.is_empty());
+    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let install = found.root_string();
+    let active_mod = found.active_mod.clone();
     let vfs =
         sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
     let (index, _) = sta_content::OdfIndex::build(&vfs);
