@@ -1266,9 +1266,8 @@ impl Rules {
     /// bounding radius (`UnitDef::radius`) times the class's multiplier; `None` for a class with no
     /// field, an unset multiplier or an unread radius.
     ///
-    /// Read from Armada II's `PlanetClass::GetWarpSuppressionRadius` (0x004a9920)
-    /// and `BlackHoleClass::GetWarpSuppressionRadius` (0x0049d470). The multipliers
-    /// come from the active header. Armada I's executable rule was not checked.
+    /// Read from the Armada II executable, static, for planets and black holes. The
+    /// multipliers come from the active header. Armada I's executable rule was not checked.
     pub fn warp_suppression_radius(&self, def: &UnitDef) -> Option<Fixed> {
         let multiplier = match def.raw.class_label()?.to_ascii_lowercase().as_str() {
             "planet" => self.fields.planet_dewarp_radius_multiplier,

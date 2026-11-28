@@ -1,7 +1,7 @@
 //! Team rules that follow the seat's race, and the script's edits of the team
-//! pool (SIM-54). Rules are read from the executables, static (Armada II 1.1
-//! `Team::AddCrew` / `AddCrewCapacity` / `GetMaxOfficers`, byte-identical in
-//! the Roots and Fleet Operations 3.2.7 engines; Armada I's team calls),
+//! pool (SIM-54). Rules are read from the executables, static (Armada II 1.1's crew,
+//! crew capacity and officer limit rules, byte-identical in
+//! the Roots and Fleet Operations 3.2.7 engines; Armada I's team rules),
 //! nothing measured in game.
 
 use sta_content::SeatRaceRule;
