@@ -926,10 +926,12 @@ mod tests {
     }
 
     /// With `STA64_TEST_ROOTS_INSTALL` (an install of the mod family) and optionally `STA64_TEST_ROOTS_MOD`
-    /// (a mod of it with compiled missions): the base game is offered nothing, and the mod's run is decided under
-    /// its own key. Structure only; skips without the variables.
+    /// (a mod of it with compiled missions): the base game is offered nothing, and the mod's run goes through the
+    /// game's own start path (the hook's message, the real converter) into a temporary data folder and converts
+    /// every mission of the mod. Writes only below the temporary folder, never into the install or the player's
+    /// data folder (`data_dir` is given to the context). Structure only; skips without the variables.
     #[test]
-    fn installed_the_family_base_is_offered_nothing_and_the_mod_gets_its_own_plan() {
+    fn installed_the_family_base_is_offered_nothing_and_the_mods_missions_convert_under_its_own_key() {
         let Ok(root) = std::env::var("STA64_TEST_ROOTS_INSTALL") else {
             eprintln!("SKIP: set STA64_TEST_ROOTS_INSTALL to an install of the mod family");
             return;
@@ -938,18 +940,27 @@ mod tests {
         let t = Tmp::new("installed");
         let data = t.0.join("data");
         let base = decide_with(&root, None, Some(&data), &env());
-        assert!(base.is_err(), "the base game of a mod family install is not offered a conversion: {base:?}");
-        if let Ok(name) = std::env::var("STA64_TEST_ROOTS_MOD") {
-            match decide_with(&root, Some(&name), Some(&data), &env()) {
-                Ok(plan) => {
-                    assert_eq!(plan.install.active_mod(), Some(name.as_str()));
-                    assert!(plan.key.contains('+'), "{}", plan.key);
-                }
-                Err(Refusal::NoEngine(m)) => assert!(m.contains("stock_folder"), "{m}"),
-                Err(other) => panic!("{other:?}"),
+        assert!(matches!(base, Err(Refusal::ModFamilyBase)), "the base game of a mod family install is not offered a conversion: {base:?}");
+        let Ok(name) = std::env::var("STA64_TEST_ROOTS_MOD") else {
+            eprintln!("SKIP the mod run: set STA64_TEST_ROOTS_MOD to a mod of the install with compiled missions");
+            assert!(!data.exists(), "deciding writes nothing");
+            return;
+        };
+        let mut app = app(&data, Arc::new(real_converter));
+        app.world_mut().write_message(StartConversion { install_root: root.clone(), active_mod: Some(name.clone()), forced: false, replace_edited: false });
+        finish_run(&mut app);
+        let outcome = seen(&app).pop().expect("the run ends with a message");
+        match outcome {
+            Outcome::Completed { total, converted, failed, .. } => {
+                assert!(total > 0, "the mod has compiled missions");
+                assert_eq!((converted, failed), (total, 0), "every mission of the mod converts");
             }
+            Outcome::Refused(Refusal::NoEngine(m)) => panic!("the install has no engine pair and no stock folder is set: {m}"),
+            other => panic!("{other:?}"),
         }
-        assert!(!data.exists(), "deciding writes nothing");
+        let key = sta_core::install_key::key(&root, Some(&name));
+        assert!(data.join("converted").join(&key).join("missions").is_dir(), "written under the mod's key");
+        assert!(!data.join("converted").join(sta_core::install_key::key(&root, None)).exists(), "nothing for the base game");
     }
 
     // ---- the worker through an App
