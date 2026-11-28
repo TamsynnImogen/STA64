@@ -378,17 +378,18 @@ impl Weapons {
         self.shots.iter().filter_map(|s| s.flight.map(|f| (s.id, f))).collect()
     }
 
-    /// Puts back the flights a snapshot held; `false` (a corrupt record) when the ids do not ascend, a row
-    /// names a shot that is not in flight, or a shot whose weapon does not fly this way (its switch is off, or it
-    /// is not a torpedo with a `lifeSpan`).
-    pub(crate) fn set_flights(&mut self, db: Option<&ContentDb>, rows: Vec<(u32, super::flight::Flight)>) -> bool {
+    /// Puts back the flights a snapshot taken at `tick` held; `false` (a corrupt record) when the ids do not
+    /// ascend, a row names a shot that is not in flight, a shot whose weapon does not fly this way (its switch is
+    /// off, or it is not a torpedo with a `lifeSpan`), or a flight no live game could have made (see
+    /// `flight::plausible`).
+    pub(crate) fn set_flights(&mut self, db: Option<&ContentDb>, rows: Vec<(u32, super::flight::Flight)>, tick: u64) -> bool {
         if rows.windows(2).any(|w| w[0].0 >= w[1].0) {
             return false;
         }
         for (id, f) in rows {
             let Some(s) = self.shots.iter_mut().find(|s| s.id == id) else { return false };
-            let flies = db.and_then(|db| db.weapon(s.weapon).map(|w| super::flight::life_ticks(db.weapon_features(w), w).is_some()));
-            if flies != Some(true) || f.heading == (Fixed::ZERO, Fixed::ZERO) {
+            let life = db.and_then(|db| db.weapon(s.weapon).and_then(|w| super::flight::life_ticks(db.weapon_features(w), w)));
+            if !life.is_some_and(|life| super::flight::plausible(&f, tick, life)) {
                 return false;
             }
             s.flight = Some(f);

@@ -20,6 +20,10 @@
 //!   is gone, or phased, is lost: the shot flies straight on until its life ends and hits
 //!   nothing (read from the executable, static).
 //!
+//! INTERIM, not staged: a target hidden from a shooter that is not itself hidden is lost in the original's code
+//! (read from the executable, static); here only a target that is gone or phased is lost, as STA64 has no such
+//! state at this place (the same case as for beams, `beam_holds`).
+//!
 //! INTERIM, not established: the launch heading (the shooter's heading at the moment it fires;
 //! the measured flight times leave a gap to this reading), the aim point (the target's centre,
 //! not a hardpoint), flight in the ground plane only, and the shield's shape (a hit lands at
@@ -49,6 +53,10 @@ pub const DEFAULT_SEEK_TIME: Fixed = Fixed::ZERO;
 /// executable, static).
 pub const DEFAULT_OMEGA_TURN: Fixed = Fixed::ONE;
 
+/// How far the squared length of a loaded heading may be from one (a loaded flight is refused beyond it): a
+/// quarter-thousandth, far above what the fixed-point steps leave and far below what would change a step.
+pub const HEADING_TOLERANCE: Fixed = Fixed::from_bits(1 << 22);
+
 /// What a flown shot carries beyond a straight one: its heading and the tick its life ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Flight {
@@ -63,6 +71,13 @@ pub(super) enum Fate {
     Flying,
     Hit,
     Gone,
+}
+
+/// Whether a flight loaded at `tick` (the next tick to compute) can be one a live game made for a shot of life
+/// `life`: it ends no earlier than now and no later than a life from now, and its heading is a direction.
+pub(super) fn plausible(f: &Flight, tick: u64, life: u64) -> bool {
+    let len2 = f.heading.0 * f.heading.0 + f.heading.1 * f.heading.1;
+    f.ends >= tick && f.ends <= tick.saturating_add(life) && (len2 - Fixed::ONE).abs() <= HEADING_TOLERANCE
 }
 
 /// The shot's life in ticks under the switch: `None` when `w` does not fly this way (the switch
@@ -106,7 +121,7 @@ pub(super) fn fly(db: &ContentDb, tick: u64, s: &mut Shot, target: Option<&Entit
     if target.is_some() && d <= s.step {
         return Fate::Hit;
     }
-    let age = tick.saturating_sub(f.ends - life);
+    let age = tick.saturating_sub(f.ends.saturating_sub(life));
     let seek_ticks = ticks(w.base.seek_time.unwrap_or(DEFAULT_SEEK_TIME));
     let in_reach = d <= w.range * Fixed::from_int(SEEK_RANGE_FACTOR);
     if target.is_some() && in_reach {
@@ -136,7 +151,7 @@ fn turn(heading: (Fixed, Fixed), dir: (Fixed, Fixed), max: Fixed) -> (Fixed, Fix
 }
 
 /// The target of a shot as the flight sees it: alive (a unit in its dying phase still counts)
-/// and not phased.
+/// and not phased. INTERIM: a target hidden from the shooter is not lost here (see the module docs).
 pub(super) fn valid<'a>(units: &'a Entities, specials: &crate::specials::Specials, db: &ContentDb, id: EntityId) -> Option<&'a Entity> {
     units.get(id).filter(|u| u.hull[1] > Fixed::ZERO && !specials.phased(db, u))
 }

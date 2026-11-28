@@ -857,7 +857,7 @@ impl Sim {
             if let Some(db) = content.as_deref() {
                 weapons.adopt_flights(db, &units, b.tick);
             }
-        } else if !weapons.set_flights(content.as_deref(), flight_rows) {
+        } else if !weapons.set_flights(content.as_deref(), flight_rows, b.tick) {
             return Err(corrupt("torpedo flights"));
         }
         let dying = crate::combat::dying::Dying::from_rows(dying_rows, b.tick, &units)

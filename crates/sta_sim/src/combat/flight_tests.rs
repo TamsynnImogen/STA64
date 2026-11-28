@@ -401,6 +401,27 @@ fn a_malformed_flights_record_is_refused() {
     let mut still = good.1;
     still.heading = (Fixed::ZERO, Fixed::ZERO);
     assert!(with(vec![(good.0, still)]).is_err(), "a heading is a direction");
+    let mut long = good.1;
+    long.heading = (Fixed::from_int(3), Fixed::ZERO);
+    assert!(with(vec![(good.0, long)]).is_err(), "a long heading would multiply the step");
+    let mut near = good.1;
+    near.heading = (Fixed::from_f64(0.9995), Fixed::ZERO);
+    assert!(with(vec![(good.0, near)]).is_ok(), "within the tolerance a direction");
+    let tick = g.sim.tick;
+    let mut late = good.1;
+    late.ends = tick + LIFE + 1;
+    assert!(with(vec![(good.0, late)]).is_err(), "beyond a life from now: a torpedo that would never die");
+    late.ends = u64::MAX;
+    assert!(with(vec![(good.0, late)]).is_err());
+    let mut early = good.1;
+    early.ends = tick - 1;
+    assert!(with(vec![(good.0, early)]).is_err(), "its life has run out already");
+    // the latest and the earliest that a live game can have made load, and stepping on does not underflow
+    for ends in [tick, tick + LIFE] {
+        let mut edge = good.1;
+        edge.ends = ends;
+        assert!(with(vec![(good.0, edge)]).is_ok(), "{ends}");
+    }
     assert!(with(Vec::new()).is_ok(), "a shot may have none: it homes as without the switch");
     // a row for a shot whose weapon does not fly this way (the switch is off for it)
     let mut off = game_at(db(false, keys), "fx_frigate", v(2300, 2000));
