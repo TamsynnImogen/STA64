@@ -53,7 +53,7 @@ use crate::render::units::SelectRadius;
 use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink, SimMsg};
 
 /// Seconds within which a second click counts as a double click.
-const DOUBLE: f64 = 0.4;
+pub(crate) const DOUBLE: f64 = 0.4;
 /// Seconds within which a second group tap centres the camera (stock: 750 ms).
 const GROUP_TAP: f64 = 0.75;
 /// Pixels of drag before a click becomes a box.

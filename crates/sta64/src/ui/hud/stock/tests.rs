@@ -2054,6 +2054,59 @@ fn a_layout_that_declares_the_window_off_or_not_at_all_gets_no_window() {
     }
 }
 
+fn picture_visibility(app: &mut App) -> Vec<Visibility> {
+    app.world_mut().query_filtered::<&Visibility, With<crate::render::action_camera::ActionPicture>>().iter(app.world()).copied().collect()
+}
+
+/// The "Cinematic window" setting (read from the executable, static): on shows the live picture, off shows only the
+/// still under it, and the cameras (which run only while the picture is visible) stop.
+#[test]
+fn the_cinematic_window_setting_shows_the_live_picture_or_only_the_still() {
+    use crate::frontend::screens::Settings;
+    let mut app = window_app(WINDOW_CFG, 16.0 / 9.0, super::layout::HudFit::Centred, true);
+    app.update();
+    assert_eq!(picture_visibility(&mut app), vec![Visibility::Inherited], "no setting resource: shown");
+    app.insert_resource(Settings { cinematic_window: false, ..default() });
+    app.update();
+    assert_eq!(picture_visibility(&mut app), vec![Visibility::Hidden], "off: the live picture is hidden");
+    assert_eq!(art_named(&mut app, "cine_still").len(), 1, "and the still under it stays");
+    assert_eq!(art_named(&mut app, "cine_frame").len(), 3, "and the frame");
+    app.insert_resource(Settings { cinematic_window: true, ..default() });
+    app.update();
+    assert_eq!(picture_visibility(&mut app), vec![Visibility::Inherited], "on again");
+}
+
+/// A double click on the Armada II window's picture swaps the views (read from the executable, static), a single
+/// click does not; the interval is the selection's (INTERIM). Time is stepped by hand.
+#[test]
+fn a_double_click_on_the_picture_swaps_the_views_and_a_single_click_does_not() {
+    use bevy::time::TimeUpdateStrategy;
+    let mut app = window_app(WINDOW_CFG, 16.0 / 9.0, super::layout::HudFit::Centred, true);
+    app.insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+        .init_resource::<crate::input::camera_tactical::TacticalView>();
+    app.update();
+    let picture = app.world_mut().query_filtered::<Entity, With<crate::render::action_camera::ActionPicture>>().single(app.world()).unwrap();
+    let swapped = |app: &mut App| app.world_mut().resource_mut::<crate::input::camera_tactical::TacticalView>().take_toggle_request();
+    click(app.world_mut(), picture);
+    app.update();
+    assert!(!swapped(&mut app), "one click: no swap");
+    // The second click 0.1 s later: a double click.
+    click(app.world_mut(), picture);
+    app.update();
+    assert!(swapped(&mut app), "two clicks inside the interval: the views swap");
+    // A double click is spent: the next click starts over.
+    click(app.world_mut(), picture);
+    app.update();
+    assert!(!swapped(&mut app));
+    // Clicks further apart than the interval are two single clicks.
+    for _ in 0..6 {
+        app.update();
+    }
+    click(app.world_mut(), picture);
+    app.update();
+    assert!(!swapped(&mut app), "a slow second click is a single click");
+}
+
 #[test]
 fn the_movie_panel_and_the_window_read_the_same_keys_and_the_window_goes_quiet_while_a_clip_plays() {
     use super::layout::HudFit;
