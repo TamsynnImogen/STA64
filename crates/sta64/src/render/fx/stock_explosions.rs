@@ -20,7 +20,10 @@
 //!   static); without the key it lives as long as its sprites do (INTERIM, no default is documented). It
 //!   turns a fixed angle per rendered frame about a random axis, so the turn depends on the frame rate
 //!   (read from the executable, static; measured as movement). Node colour animations are not played
-//!   (INTERIM). No light, no camera shake (read from the executable, static).
+//!   (INTERIM). No light, no camera shake (read from the executable, static). The cluster is built in the
+//!   unit's frame, so its nodes' offsets turn with the unit (read from the executable, static): here from the
+//!   last seen heading (INTERIM: the view has no pitch or roll). A sprite without a flipbook stays for the
+//!   fireball's whole life (INTERIM: STA64's choice, not in the evidence).
 //! - **Shockwave.** Made once when the fireball's age passes `shockwaveDelay` and the unit's radius is above
 //!   `shockwaveMinimum`, if the definition names a shockwave (read from the executable, static; measured for
 //!   the delay). Absent delay or minimum: zero (INTERIM, no default is documented). Its ring lies in the
@@ -29,9 +32,13 @@
 //!   (read from the executable, static; measured). The inner edge grows by `rate` per second and the outer
 //!   edge by twice that (read from the executable, static; measured). It ends where the outer edge passes
 //!   the unit's radius times `radiusFactor`, fading linearly to nothing from `fadeFactor` of that distance
-//!   (read from the executable, static). It is the texture `texture` names times `color`, added; the gain on
-//!   the colour is not established (INTERIM: one). The radius used is the unit's `SelectRadius` (INTERIM: the
-//!   original's radius is its bounding sphere, and the measurements differ from the model's own).
+//!   (read from the executable, static). INTERIM at its end: a measurement found the ring still clearly lit
+//!   when it is removed, so either the fade or the radius used differs from this reading (not resolved). It is
+//!   the texture `texture` names times `color`, added; the gain on the colour was measured above one, its
+//!   factor not separated (INTERIM: one). Whether scene light touches the ring is not measured (INTERIM: it
+//!   does not). The ring is not drawn before it has reached a small minimum age (read from the executable,
+//!   static; INTERIM: not applied). The radius used is the unit's `SelectRadius` (INTERIM: the original's
+//!   radius is its bounding sphere, and the measurements differ from the model's own).
 //! - **Not drawn.** Hull chunks (cut from the unit's own meshes), death sparks and the hull drawn through the
 //!   dying phase (they wait for #1100), the hull-hit node particle, the explosion's sound and its
 //!   cinematic shot. A weapon impact's hull spark stays Refit's in both looks (INTERIM, `impacts.rs`): the
@@ -53,11 +60,11 @@ use crate::clock::AnimClock;
 use crate::render::profile::{Effect, ProfileEffects, RenderProfile};
 use crate::render::sprites::{Billboard, SpriteTables};
 
-/// The fireball's turn per rendered frame, radians (read from the executable, static).
+/// STA64's turn of the fireball per rendered frame, radians (read from the executable, static).
 pub const SPIN_PER_FRAME: f32 = 0.01;
 /// The ring's height above and below its plane for the two crossed bands (read from the executable, static).
 pub const CROSSED_HEIGHT: f32 = 2.0;
-/// The gain on the ring's colour (INTERIM: not established).
+/// The gain on the ring's colour: measured above one, the factor not separated (INTERIM: one).
 pub const RING_GAIN: f32 = 1.0;
 
 /// Whether the Stock explosion is the one drawn: under the Stock look with a stock implementation registered.
@@ -78,17 +85,21 @@ pub(super) fn stock_explosions(profile: Option<&RenderProfile>, effects: Option<
 pub struct ExplosionRequest {
     pub unit: EntityId,
     pub at: Vec3,
+    /// The unit's last seen heading, render space.
+    pub heading: Vec3,
     pub radius: f32,
     pub born: f64,
     pub explosion: ExplosionDef,
     pub wave: Option<ShockwaveDef>,
 }
 
-/// The request for a unit of definition `def` destroyed at `at`, or none when its `fireball` does not resolve.
-pub fn request(db: &ContentDb, def: ContentKey, unit: EntityId, at: Vec3, radius: f32, born: f64) -> Option<ExplosionRequest> {
+/// The request for a unit of definition `def` destroyed at `at` facing `heading`, or none when its `fireball`
+/// does not resolve.
+#[allow(clippy::too_many_arguments)]
+pub fn request(db: &ContentDb, def: ContentKey, unit: EntityId, at: Vec3, heading: Vec3, radius: f32, born: f64) -> Option<ExplosionRequest> {
     let explosion = db.explosion_of(db.unit(def)?)?.clone();
     let wave = explosion.shockwave.as_deref().filter(|w| !w.trim().is_empty() && !w.trim().eq_ignore_ascii_case("null")).and_then(|w| db.explosions().shockwave(w)).cloned();
-    Some(ExplosionRequest { unit, at, radius, born, explosion, wave })
+    Some(ExplosionRequest { unit, at, heading, radius, born, explosion, wave })
 }
 
 /// How long the fireball lives, seconds: `length`; without the key as long as its sprites do (`sprites_end`, the
@@ -117,7 +128,8 @@ pub fn ring_state(wave: &ShockwaveDef, radius: f32, t: f32) -> Option<(f32, f32)
 }
 
 /// A sprite's texture rectangle `age` seconds into a flipbook that plays once, and the age it ends at; none after
-/// it ended. A sprite with no flipbook shows its rectangle for as long as the explosion lives.
+/// it ended. A sprite with no flipbook shows its rectangle for as long as the explosion lives (INTERIM: STA64's
+/// choice, not in the evidence).
 pub fn once_uv(table: &SpriteTable, sprite: &sta_assets::a2fmt::spr::Sprite, age: f32) -> Option<[f32; 4]> {
     let end = flipbook_end(table, sprite);
     if end.is_some_and(|e| age >= e) {
@@ -251,30 +263,34 @@ fn spawn_explosions(mut cmds: Commands, mut queue: ResMut<ExplosionQueue>) {
     for r in queue.0.drain(..) {
         let a = |salt| super::impacts::rand(r.unit, r.born as u64, 0, salt) * 2.0 - 1.0;
         let axis = Vec3::new(a(60), a(61), a(62)).try_normalize().unwrap_or(Vec3::Y);
+        // Built in the unit's frame: the last seen heading (INTERIM: no pitch or roll in the view).
+        let frame = Transform::IDENTITY.looking_to(r.heading, Vec3::Y).rotation;
         cmds.spawn((
             StockExplosion { unit: r.unit, born: r.born, radius: r.radius, explosion: r.explosion, wave: r.wave, sprites_end: 0.0, ring_made: false, axis, visuals: false },
-            Transform::from_translation(r.at),
+            Transform::from_translation(r.at).with_rotation(frame),
             Visibility::default(),
         ));
     }
 }
 
-/// Turn each fireball, make its ring when due and end it at its life.
+/// Make each fireball's ring when due, turn it and end it at its life. The shockwave is checked before the end of
+/// life in the same update (read from the executable, static), so a long frame does not skip a ring whose delay is
+/// close to the length.
 fn update_explosions(mut cmds: Commands, clock: Res<AnimClock>, mut q: Query<(Entity, &mut StockExplosion, &mut Transform)>) {
     for (e, mut x, mut tf) in &mut q {
         let age = secs_since(&clock, x.born);
-        // Without `length` its sprites' end is the life, known once they are attached.
-        if (x.explosion.length.is_some() || x.visuals) && age >= fireball_life(&x.explosion, x.sprites_end) {
-            cmds.entity(e).try_despawn();
-            continue;
-        }
-        tf.rotation = Quat::from_axis_angle(x.axis, SPIN_PER_FRAME) * tf.rotation;
         if !x.ring_made && shockwave_due(&x.explosion, x.wave.is_some(), age, x.radius) {
             x.ring_made = true;
             if let Some(wave) = x.wave.clone() {
                 cmds.spawn((StockRing { unit: x.unit, born: clock.now() * TICK_HZ as f64, radius: x.radius, wave, visuals: false }, Transform::from_translation(tf.translation), Visibility::default()));
             }
         }
+        // Without `length` its sprites' end is the life, known once they are attached.
+        if (x.explosion.length.is_some() || x.visuals) && age >= fireball_life(&x.explosion, x.sprites_end) {
+            cmds.entity(e).try_despawn();
+            continue;
+        }
+        tf.rotation = Quat::from_axis_angle(x.axis, SPIN_PER_FRAME) * tf.rotation;
     }
 }
 
@@ -287,11 +303,12 @@ fn update_rings(mut cmds: Commands, clock: Res<AnimClock>, mut rings: Query<(Ent
             continue;
         };
         tf.scale = Vec3::new(scale.max(1e-4), 1.0, scale.max(1e-4));
-        if let (Some(m), Some(c), Some(mats)) = (material, ring.wave.color, mats.as_mut())
+        // A material is written only when its value changes (a write marks it changed and prepares it again).
+        if let (Some(m), Some(tint), Some(mats)) = (material, ring_tint(&ring.wave, k), mats.as_mut())
+            && mats.get(&m.0).is_some_and(|mat| mat.params.tint != tint)
             && let Some(mut mat) = mats.get_mut(&m.0)
         {
-            let tint = Vec3::new(c[0].to_f32(), c[1].to_f32(), c[2].to_f32()) * (RING_GAIN * k);
-            mat.params.tint = tint.extend(1.0);
+            mat.params.tint = tint;
         }
     }
 }
@@ -330,6 +347,44 @@ fn cluster(model: &sta_assets::model::Model, table: &SpriteTable, assets: &mut E
     out
 }
 
+/// A sprite node's quad scale: a billboard is sized by half extents, a flat sprite by full size (the repo's
+/// reading of the sprite-node table, as `model_scene.rs` spawns them).
+fn node_scale(n: &ClusterNode) -> Vec3 {
+    if n.billboard { Vec3::new(n.size.x * 2.0, n.size.y * 2.0, 1.0) } else { Vec3::new(n.size.x, n.size.y, 1.0) }
+}
+
+/// Spawn the cluster's sprite quads under `parent`; the seconds its longest flipbook lasts.
+fn spawn_cluster(cmds: &mut Commands, parent: Entity, nodes: &[ClusterNode], quad: &Handle<Mesh>, table: &SpriteTable, mats: &mut Assets<StockShotMaterial>) -> f32 {
+    let mut end = 0.0f32;
+    for n in nodes {
+        let Some(texture) = n.texture.clone() else { continue };
+        if let Some(sprite) = table.sprite(&n.sprite) {
+            end = end.max(flipbook_end(table, sprite).unwrap_or(0.0));
+        }
+        let params = ShotParams { rect: Vec4::ZERO, flags: Vec4::ZERO, tint: n.colour.extend(1.0) };
+        let mut c = cmds.spawn((
+            ExplosionSprite { sprite: n.sprite.clone() },
+            Mesh3d(quad.clone()),
+            MeshMaterial3d(mats.add(StockShotMaterial { params, texture })),
+            Transform::from_translation(n.offset).with_scale(node_scale(n)),
+            // Explicit: `animate_sprites` shows and hides the quad through it.
+            Visibility::default(),
+            bevy::camera::visibility::NoFrustumCulling,
+            ChildOf(parent),
+        ));
+        if n.billboard {
+            c.insert(Billboard);
+        }
+    }
+    end
+}
+
+/// The ring's colour factor: `color` times the gain times the fade (none without `color`).
+fn ring_tint(wave: &ShockwaveDef, fade: f32) -> Option<Vec4> {
+    let c = wave.color?;
+    Some((Vec3::new(c[0].to_f32(), c[1].to_f32(), c[2].to_f32()) * (RING_GAIN * fade)).extend(1.0))
+}
+
 /// Give each new fireball its sprite nodes (loading the model of its `dbName` once) and each new ring its mesh and texture.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn attach_visuals(
@@ -362,27 +417,7 @@ fn attach_visuals(
         }
         let Some(nodes) = assets.clusters[&key].clone() else { continue };
         let quad = assets.quad.get_or_insert_with(|| meshes.add(crate::render::sprites::unit_quad())).clone();
-        let mut end = 0.0f32;
-        for n in nodes.iter() {
-            let Some(texture) = n.texture.clone() else { continue };
-            if let Some(sprite) = tables.0.sprite(&n.sprite) {
-                end = end.max(flipbook_end(&tables.0, sprite).unwrap_or(0.0));
-            }
-            let params = ShotParams { rect: Vec4::ZERO, flags: Vec4::ZERO, tint: n.colour.extend(1.0) };
-            let scale = if n.billboard { Vec3::new(n.size.x * 2.0, n.size.y * 2.0, 1.0) } else { Vec3::new(n.size.x, n.size.y, 1.0) };
-            let mut c = cmds.spawn((
-                ExplosionSprite { sprite: n.sprite.clone() },
-                Mesh3d(quad.clone()),
-                MeshMaterial3d(mats.add(StockShotMaterial { params, texture })),
-                Transform::from_translation(n.offset).with_scale(scale),
-                bevy::camera::visibility::NoFrustumCulling,
-                ChildOf(e),
-            ));
-            if n.billboard {
-                c.insert(Billboard);
-            }
-        }
-        x.sprites_end = end;
+        x.sprites_end = spawn_cluster(&mut cmds, e, &nodes, &quad, &tables.0, &mut mats);
     }
     for (e, mut ring) in &mut rings {
         if ring.visuals {
@@ -420,11 +455,12 @@ fn animate_sprites(
         if *vis != want {
             *vis = want;
         }
-        if let Some(uv) = uv
-            && let Some(mut mat) = mats.get_mut(&m.0)
-        {
+        // Written only when the cell changed (a write marks the material changed and prepares it again).
+        if let Some(uv) = uv {
             let rect = Vec4::from(uv);
-            if mat.params.rect != rect {
+            if mats.get(&m.0).is_some_and(|mat| mat.params.rect != rect)
+                && let Some(mut mat) = mats.get_mut(&m.0)
+            {
                 mat.params.rect = rect;
             }
         }

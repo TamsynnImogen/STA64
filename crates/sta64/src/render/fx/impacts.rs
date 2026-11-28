@@ -366,7 +366,7 @@ pub(super) fn spawn_impacts(
                 let p = s.pos;
                 if stock
                     && let (Some(queue), Some(content), Some(def)) = (explosions.as_mut(), content.as_ref(), s.def)
-                    && let Some(req) = super::stock_explosions::request(&content.0, def, *id, p, s.radius, clock.now() * TICK_HZ as f64)
+                    && let Some(req) = super::stock_explosions::request(&content.0, def, *id, p, s.heading, s.radius, clock.now() * TICK_HZ as f64)
                 {
                     queue.0.push(req);
                     continue;

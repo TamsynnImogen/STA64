@@ -1,15 +1,17 @@
 //! Explosion definitions (#1153, plan step R2): what the explosion ODFs a unit names through
 //! `fireball` and `selfDestruct` say, and the chunk settings of `ART_CFG.h`, as typed data on
-//! the content database. Nothing draws them yet.
+//! the content database. The Stock look's explosion (`sta64`, `render/fx/stock_explosions.rs`) reads
+//! the explosion and shockwave definitions; the chunks are not drawn yet.
 //!
 //! Presentation only: not part of the content digest, because nothing in the sim reads this
 //! table (ADR 0004 D10; the self-destruct blast damage keys are in the digest already, through
 //! [`crate::SelfDestructBlast`]). Any explosion key the sim later reads enters the digest then
 //! (ADR 0004 D10), with goldens regenerated and the `full-ci` label.
 //!
-//! A key that is absent stays `None`. Resolving the defaults for absent keys, and the default
-//! explosion for a unit that names none, is not implemented yet (they are known at grade "read
-//! from the executable, static"; a follow-up applies them with their grade).
+//! A key that is absent stays `None`. The default explosion for a unit that names none and the
+//! defaults for absent chunk keys are known at grade "read from the executable, static" and are
+//! not implemented yet; for the other explosion and shockwave keys no default is documented, and
+//! the client marks the value it uses for an absent key as interim.
 //!
 //! Evidence grades in the doc comments: "data" is a key the ODF class defines, "static" is read
 //! from the executable, static; "inferred" and "not measured" are as stated. Profile rules
@@ -40,7 +42,7 @@ pub struct ExplosionDef {
     pub sound: Option<String>,
     /// `dbName`: the model of the sprite cluster the fireball plays (data; its use: static).
     pub model: Option<String>,
-    /// `length`: seconds (data). Its effect on what is drawn is not established (not measured).
+    /// `length`: seconds (data). The fireball lives this long (static).
     pub length: Option<Fixed>,
     /// `shockwave`: the shockwave ODF started after the delay (data; static). `null` is kept
     /// as written; [`ExplosionTable::shockwave`] resolves a real name.
@@ -61,14 +63,15 @@ pub struct ShockwaveDef {
     /// `rays`: the number of rays of the ring (data; static).
     pub rays: Option<u32>,
     /// `color`: three components (data). Which slot of the ring it fills and whether scene
-    /// light touches it is not measured; the gain applied to it is not established.
+    /// light touches it is not measured; the gain applied to it was measured above one, its
+    /// factor not separated.
     pub color: Option<[Fixed; 3]>,
     /// `texture`: the ring's texture name (data; static).
     pub texture: Option<String>,
     /// `radiusFactor`: the ring's end size as a multiple of the craft's radius (static).
     pub radius_factor: Option<Fixed>,
     /// `fadeFactor`: the share of the end size from which the ring fades (static). The fade
-    /// shape at the end is unresolved (not measured).
+    /// shape at the end is unresolved (the reading and a measurement disagree; not resolved).
     pub fade_factor: Option<Fixed>,
     /// `rate`: growth in units per second (static; the outer edge measured once).
     pub rate: Option<Fixed>,

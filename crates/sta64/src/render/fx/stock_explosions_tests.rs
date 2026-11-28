@@ -54,11 +54,11 @@ fn the_fireball_lives_its_length_and_without_the_key_as_long_as_its_sprites() {
 
 #[test]
 fn the_shockwave_is_due_after_its_delay_above_its_minimum_and_only_when_one_is_named() {
-    let d = explosion("a", Some(3.0), Some("ring"), Some(0.6), Some(40.0));
-    assert!(!shockwave_due(&d, true, 0.5, 60.0), "before the delay");
-    assert!(shockwave_due(&d, true, 0.7, 60.0));
-    assert!(!shockwave_due(&d, true, 0.7, 40.0), "the radius must be above the minimum");
-    assert!(!shockwave_due(&d, false, 0.7, 60.0), "no shockwave named");
+    let d = explosion("a", Some(3.0), Some("ring"), Some(0.45), Some(35.0));
+    assert!(!shockwave_due(&d, true, 0.4, 60.0), "before the delay");
+    assert!(shockwave_due(&d, true, 0.5, 60.0));
+    assert!(!shockwave_due(&d, true, 0.5, 35.0), "the radius must be above the minimum");
+    assert!(!shockwave_due(&d, false, 0.5, 60.0), "no shockwave named");
     // Absent keys: zero (INTERIM).
     let bare = explosion("b", None, Some("ring"), None, None);
     assert!(shockwave_due(&bare, true, 0.01, 1.0));
@@ -113,7 +113,7 @@ fn a_flipbook_plays_once_and_its_sprite_is_hidden_afterwards() {
     assert_eq!(cell(5.0), None, "and does not come back");
     let fixed = table.sprite("fixed").unwrap();
     assert_eq!(flipbook_end(&table, fixed), None);
-    assert!(once_uv(&table, fixed, 99.0).is_some(), "a sprite with no flipbook stays for the explosion's life");
+    assert!(once_uv(&table, fixed, 99.0).is_some(), "a sprite with no flipbook stays for the explosion's life (INTERIM)");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -129,7 +129,7 @@ fn content() -> sta_content::ContentDb {
     let mut lost = UnitDef::new("t_lost", "cruiser");
     lost.fx.explosion = Some("nowhere".into());
     let table = ExplosionTable::from_parts(
-        [explosion("boom_ship", Some(1.0), Some("ring"), Some(0.2), Some(10.0)), explosion("boom_base", Some(3.0), Some("ring"), Some(0.2), Some(40.0))],
+        [explosion("boom_ship", Some(1.0), Some("ring"), Some(0.2), Some(10.0)), explosion("boom_base", Some(3.0), Some("ring"), Some(0.2), Some(35.0))],
         [wave("ring")],
         ChunkCfg::default(),
     );
@@ -201,7 +201,7 @@ use crate::render::profile::RenderProfile;
 use sta_assets::a2fmt::spr::SpriteTable;
 
 #[test]
-fn under_stock_a_unit_a_building_and_a_hull_hit_ask_for_the_stock_effect() {
+fn under_stock_a_unit_and_a_building_ask_for_the_stock_effect_and_a_hull_hit_keeps_refits_sparks() {
     let d = run(RenderProfile::Stock);
     let units: BTreeSet<u32> = d.fireballs.iter().map(|f| f.0).collect();
     assert_eq!(units, BTreeSet::from([1, 2]), "the ship and the building each request the stock explosion: {d:?}");
@@ -233,4 +233,143 @@ fn the_ring_follows_the_delay_the_minimum_and_the_length() {
     let (ship, base) = (d.fireball_frames[&1], d.fireball_frames[&2]);
     assert!(base.1 - base.0 > ship.1 - ship.0, "length 3 outlives length 1: {ship:?} {base:?}");
     assert!(ship.1 - ship.0 > 10, "and the ship's lives some frames: {ship:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The order of the checks, the unit's frame, and the drawing path
+// ---------------------------------------------------------------------------------------------
+
+use crate::clock::AnimClock;
+use bevy::ecs::system::RunSystemOnce;
+
+/// Advance the clock by one sim tick, as a frame at the sim's rate does.
+fn step(app: &mut App) {
+    let mut c = app.world_mut().resource_mut::<AnimClock>();
+    for _ in 0..c.begin_frame(1.0 / TICK_HZ as f64) {
+        c.ticked();
+    }
+    c.end_frame();
+    app.update();
+}
+
+fn request_for(unit: u32, born_age: f32, heading: Vec3, explosion: ExplosionDef, wave: Option<ShockwaveDef>) -> ExplosionRequest {
+    ExplosionRequest { unit: EntityId(unit), at: Vec3::new(5.0, 6.0, 7.0), heading, radius: 30.0, born: -(born_age as f64) * TICK_HZ as f64, explosion, wave }
+}
+
+#[test]
+fn the_shockwave_is_checked_before_the_end_of_life_and_the_cluster_stands_in_the_units_frame() {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins).insert_resource(AnimClock::default()).init_resource::<ExplosionQueue>();
+    app.add_systems(Update, (spawn_explosions, update_explosions).chain());
+    // A long frame: the first update finds the fireball already past its length (1.0) and its ring's delay (0.9).
+    let heading = Vec3::X;
+    app.world_mut().resource_mut::<ExplosionQueue>().0.push(request_for(1, 1.1, heading, explosion("a", Some(1.0), Some("ring"), Some(0.9), Some(10.0)), Some(wave("ring"))));
+    app.update();
+    app.update();
+    let rings = app.world_mut().query::<&StockRing>().iter(app.world()).count();
+    let fireballs = app.world_mut().query::<&StockExplosion>().iter(app.world()).count();
+    assert_eq!((rings, fireballs), (1, 0), "the ring is made, then the fireball ends");
+    // A fireball still alive stands in the unit's frame: its forward axis is the heading (less one frame's turn).
+    app.world_mut().resource_mut::<ExplosionQueue>().0.push(request_for(2, 0.0, heading, explosion("b", Some(5.0), None, None, None), None));
+    app.update();
+    let tf = app.world_mut().query::<(&StockExplosion, &Transform)>().iter(app.world()).next().map(|(_, t)| *t).unwrap();
+    assert!(tf.forward().as_vec3().dot(heading) > 0.999, "forward {:?} for heading {heading:?}", tf.forward());
+    assert_eq!(tf.translation, Vec3::new(5.0, 6.0, 7.0));
+}
+
+fn drawing_app() -> App {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+        .init_asset::<StockShotMaterial>()
+        .init_asset::<Mesh>()
+        .init_asset::<Image>()
+        .insert_resource(AnimClock::default())
+        .insert_resource(SpriteTables(Arc::new(SpriteTable::parse(
+            b"sprite_table\n@referenceWidth=64\n@referenceHeight=64\n@tmaterial=additive\natlas tex_atlas 0 0 32 32 @anim=flip4\n@animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n",
+        ))));
+    app.add_systems(Update, (update_explosions, animate_sprites, update_rings).chain());
+    app
+}
+
+/// The drawing path as far as it runs without the mounted files: the cluster's quads (offset, size, billboard), the
+/// flipbook cell written to each, the hiding after the flipbook, and the ring's scale, tint and end. What does not run
+/// here is `attach_visuals`' loading of the model and textures from the mounted install (it needs the player's
+/// files, the texture cache and a render device); its spawn part is `spawn_cluster`, run below with authored nodes.
+#[test]
+fn the_cluster_is_spawned_animated_and_hidden_and_the_ring_is_tinted_and_ended() {
+    let mut app = drawing_app();
+    let image = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
+    let quad = app.world_mut().resource_mut::<Assets<Mesh>>().add(crate::render::sprites::unit_quad());
+    let nodes = vec![
+        ClusterNode { sprite: "atlas".into(), offset: Vec3::new(1.0, 2.0, 3.0), size: Vec2::new(4.0, 6.0), colour: Vec3::new(1.0, 0.5, 0.25), billboard: true, texture: Some(image.clone()) },
+        ClusterNode { sprite: "atlas".into(), offset: Vec3::new(-1.0, 0.0, 0.0), size: Vec2::new(4.0, 6.0), colour: Vec3::ONE, billboard: false, texture: Some(image.clone()) },
+        ClusterNode { sprite: "atlas".into(), offset: Vec3::ZERO, size: Vec2::ONE, colour: Vec3::ONE, billboard: true, texture: None },
+    ];
+    let root = app
+        .world_mut()
+        .spawn((
+            StockExplosion {
+                unit: EntityId(1),
+                born: 0.0,
+                radius: 30.0,
+                explosion: explosion("a", Some(2.0), Some("ring"), Some(0.2), Some(10.0)),
+                wave: Some(wave("ring")),
+                sprites_end: 0.0,
+                ring_made: false,
+                axis: Vec3::Y,
+                visuals: true,
+            },
+            Transform::IDENTITY,
+        ))
+        .id();
+    let table = app.world().resource::<SpriteTables>().0.clone();
+    let end = app.world_mut().run_system_once(move |mut cmds: Commands, mut mats: ResMut<Assets<StockShotMaterial>>| spawn_cluster(&mut cmds, root, &nodes, &quad, &table, &mut mats)).unwrap();
+    app.update();
+    assert_eq!(end, 1.0, "the flipbook's length");
+    let mut q = app.world_mut().query::<(&ExplosionSprite, &Transform, Has<Billboard>)>();
+    let mut quads: Vec<(Vec3, Vec3, bool)> = q.iter(app.world()).map(|(_, t, b)| (t.translation, t.scale, b)).collect();
+    quads.sort_by(|a, b| a.0.x.total_cmp(&b.0.x));
+    assert_eq!(quads, vec![(Vec3::new(-1.0, 0.0, 0.0), Vec3::new(4.0, 6.0, 1.0), false), (Vec3::new(1.0, 2.0, 3.0), Vec3::new(8.0, 12.0, 1.0), true)], "a node without a texture is skipped; a billboard is sized by half extents");
+
+    // The cell written to the first sprite's material follows the age; at the end of the flipbook the sprite is hidden.
+    let rect_of = |app: &mut App| {
+        let mut q = app.world_mut().query::<(&Transform, &MeshMaterial3d<StockShotMaterial>, &Visibility)>();
+        let all: Vec<_> = q.iter(app.world()).map(|(t, _, v)| (t.translation, *v)).collect();
+        let now = app.world().resource::<AnimClock>().now();
+        let (m, v) = q.iter(app.world()).find(|(t, _, _)| t.translation.x > 0.5).map(|(_, m, v)| (m.clone(), *v)).unwrap_or_else(|| panic!("no sprite at clock {now}: {all:?}"));
+        (app.world().resource::<Assets<StockShotMaterial>>().get(&m.0).unwrap().params, v)
+    };
+    step(&mut app);
+    let (first, vis) = rect_of(&mut app);
+    assert_eq!(vis, Visibility::Inherited);
+    assert_eq!(first.tint, Vec4::new(1.0, 0.5, 0.25, 1.0), "the node's colour");
+    for _ in 0..9 {
+        step(&mut app);
+    }
+    let (later, _) = rect_of(&mut app);
+    assert_ne!(first.rect, later.rect, "the flipbook advanced");
+    for _ in 0..25 {
+        step(&mut app);
+    }
+    assert_eq!(rect_of(&mut app).1, Visibility::Hidden, "hidden once the flipbook has played");
+
+    // The ring: tint and scale follow `ring_state`; it ends where the rules end it.
+    let w = wave("ring");
+    let ring_image = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
+    let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params: ShotParams { rect: Vec4::ZERO, flags: Vec4::ZERO, tint: Vec4::ZERO }, texture: ring_image });
+    let now = app.world().resource::<AnimClock>().now() * TICK_HZ as f64;
+    let ring = app.world_mut().spawn((StockRing { unit: EntityId(1), born: now, radius: 30.0, wave: w.clone(), visuals: true }, Transform::IDENTITY, MeshMaterial3d(material.clone()))).id();
+    for _ in 0..90 {
+        step(&mut app);
+        let t = (app.world().resource::<AnimClock>().now() * TICK_HZ as f64 - now) as f32 / TICK_HZ as f32;
+        let Some((scale, k)) = ring_state(&w, 30.0, t.max(0.0)) else { continue };
+        let tint = app.world().resource::<Assets<StockShotMaterial>>().get(&material).unwrap().params.tint;
+        assert!((tint - ring_tint(&w, k).unwrap()).abs().max_element() < 1e-3, "at {t} s: {tint}");
+        assert!((app.world().get::<Transform>(ring).unwrap().scale.x - scale.max(1e-4)).abs() < 1e-3);
+    }
+    assert!(app.world().get::<Transform>(ring).unwrap().scale.x > 1.0);
+    for _ in 0..200 {
+        step(&mut app);
+    }
+    assert!(app.world().get_entity(ring).is_err(), "the ring ended");
 }
