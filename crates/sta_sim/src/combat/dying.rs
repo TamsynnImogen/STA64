@@ -21,7 +21,9 @@
 //!   attack ordered on it ends (measured once: no new shot at it); shots and beams already on
 //!   their way still land (measured, repeated).
 //! - It drifts on its heading without thrust or turning, its speed decaying by
-//!   [`DYING_DRIFT_DECAY`] (measured, repeated).
+//!   [`crate::kinematics::DRIFT_DECAY`] (measured, repeated: a fit to a roughly exponential
+//!   decay), from no more than its impulse speed: the one drift, `kinematics::coast`, that a
+//!   craft coasting with its engines off follows too.
 //! - Other craft do not collide with it (measured, repeated); see `avoid::separate_units`.
 //! - It is not selectable in the view (a selected craft is deselected at hull zero: measured,
 //!   once).
@@ -66,9 +68,6 @@ pub const DYING_HIT_STEP_TICKS: Tick = TICK_HZ as Tick / 2;
 /// A unit faster than this, in units per second, takes the long phase (read from the
 /// executable, static; both sides of it measured).
 pub const DYING_MOVING_SPEED: Fixed = Fixed::ONE;
-/// The dying drift's speed decay, a share of the speed per second (measured, repeated: a fit
-/// to a roughly exponential decay).
-pub const DYING_DRIFT_DECAY: Fixed = Fixed::from_bits(19 * (1i64 << 32) / 100);
 
 /// One unit in its dying phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,7 +304,6 @@ impl Sim {
         if self.dying.is_empty() {
             return;
         }
-        let hz = Fixed::from_int(TICK_HZ as i32);
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
         let ids: Vec<EntityId> = self.dying.rows.iter().map(|(id, _)| id).collect();
         for id in ids {
@@ -314,9 +312,8 @@ impl Sim {
             let Some(u) = self.units.get_mut(id).filter(|u| u.kind == EntityKind::Craft || u.mobile_station) else { continue };
             let previous = u.pos;
             u.omega = Fixed::ZERO;
-            u.pos.x = u.pos.x + u.heading.0 * u.speed / hz;
-            u.pos.z = u.pos.z + u.heading.1 * u.speed / hz;
-            u.speed = u.speed - u.speed * DYING_DRIFT_DECAY / hz;
+            // the same motion as a craft coasting with its engines off: one function, one rate
+            crate::kinematics::coast(u);
             if self.confinement.is_active() && u.pos != previous {
                 crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, dock);
             }

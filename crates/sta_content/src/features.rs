@@ -175,11 +175,17 @@ pub struct Features {
     /// Armada II; off elsewhere (Armada I and Fleet Operations are not checked): such a unit
     /// is removed on the tick its hull reaches zero.
     pub dying_phase: bool,
+    /// A craft whose engines go offline coasts on its heading with decaying speed instead of
+    /// stopping at once, neither turns nor moves under its own power, keeps its order and
+    /// carries it out when the engines return (`sta_sim::kinematics`, issue #1031; measured
+    /// on stock Armada II with engines switched off by a script). On for stock Armada II;
+    /// off elsewhere until checked: the craft stops where it is and loses its order.
+    pub engines_off_drift: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 45] {
+    pub(crate) fn bits(&self) -> [bool; 46] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -226,6 +232,7 @@ impl Features {
             self.beam_damage_at_end,
             self.warp_gates,
             self.dying_phase,
+            self.engines_off_drift,
         ]
     }
 }
