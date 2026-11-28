@@ -313,7 +313,7 @@ fn reset_wanted(mut wanted: ResMut<WantedCursor>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn place(
     mut commands: Commands,
     wanted: Res<WantedCursor>,
