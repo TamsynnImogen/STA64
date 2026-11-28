@@ -181,11 +181,19 @@ pub struct Features {
     /// on stock Armada II with engines switched off by a script). On for stock Armada II;
     /// off elsewhere until checked: the craft stops where it is and loses its order.
     pub engines_off_drift: bool,
+    /// The shape of a craft's way into and out of warp (`sta_sim::kinematics`, issue #1102
+    /// part 2): no speed ramp. Entering, the craft holds the speed it had, is carried forward
+    /// by an extra shift over the later half of a short ramp and then flies at warp speed;
+    /// leaving is the mirror image. At warp it keeps steering with its normal controller and
+    /// follows a new warp order without dropping out. Measured on stock Armada II. On for
+    /// stock Armada II; off elsewhere until compared: speed ramps both ways, and a craft at
+    /// warp flies straight and brakes to turn.
+    pub warp_shape: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 46] {
+    pub(crate) fn bits(&self) -> [bool; 47] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -233,6 +241,7 @@ impl Features {
             self.warp_gates,
             self.dying_phase,
             self.engines_off_drift,
+            self.warp_shape,
         ]
     }
 }

@@ -309,8 +309,11 @@ impl Sim {
             // Not queued (the queued one was appended above): the course is replaced.
             Order::MoveWarp { to, .. } => {
                 for &id in &ids {
+                    // Not under `warp_shape`: a craft at warp follows the new order at warp
+                    // (measured), so nothing ends here.
                     if self.approach_warp.contains(id)
                         && let Some(unit) = self.units.get(id)
+                        && !self.warp_shape_on(unit)
                     {
                         let (dx, dz) = (to.x - unit.pos.x, to.z - unit.pos.z);
                         let (hx, hz) = unit.heading;
@@ -554,17 +557,14 @@ impl Sim {
             let Some(u) = self.units.get(id) else { continue };
             let Some(goal) = u.target.filter(|_| u.kind == EntityKind::Craft && u.mobile()) else {
                 // A temporary navigation hold must still complete warp-out.
-                if u.mobile() && u.speed > u.stats.max_speed {
-                    self.approach_warp.end(id);
-                } else {
-                    self.approach_warp.remove(id);
-                }
+                self.approach_warp.stop(id, u.mobile() && u.speed > u.stats.max_speed);
                 continue;
             };
             let (vi, vw) = (u.stats.max_speed, u.stats.warp_speed);
             let (to_goal, aligned) = approach::warp_leg(u, goal);
             let phase = self.approach_warp.phase(id);
-            let was = phase == Some(approach::IN_WARP);
+            let was = self.approach_warp.contains(id);
+            let shape = self.warp_shape_on(u);
             // Armada I's physics ODFs set the distance and the heading band
             // (SIM-64); a unit without `tooCloseForWarp` takes Armada II's.
             let keyed = u.stats.too_close_for_warp > Fixed::ZERO;
@@ -573,12 +573,14 @@ impl Sim {
             // tight gate stays for keyed units too (the band is read, not used).
             let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp(self) };
             let radius = db_radius(self, u);
-            let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && aligned
+            // `warp_shape`: the heading is tested to enter warp, not to stay at it.
+            let on_line = aligned || (shape && was);
+            let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && on_line
                 && to_goal >= approach::warp_lead(vw, vi, radius) && !gravity.suppresses(u.pos, radius) && self.warp_gates_pass(u, caps);
             // Armada II gates the start on 0.9 of impulse speed; Armada I's
             // throttle factor applies at once.
             let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;
-            let still_braking = phase == Some(approach::WARP_OUT) && u.speed > vi;
+            let still_braking = phase == Some(approach::WARP_OUT) && (u.speed > vi || self.approach_warp.ramp(id).is_some());
             let warp = if was { can } else { can && to_goal > too_close && up_to_speed && !still_braking };
             let mut plan = Plan { warp, ..Plan::default() };
             // LUA-31: a warp speed below impulse still sets the speed of the aligned
@@ -586,7 +588,9 @@ impl Sim {
             if keyed && aligned && to_goal > too_close {
                 plan.cap = crate::warp_override::slow_leg(vw, vi);
             }
-            if warp {
+            if shape {
+                self.approach_warp.decide(id, warp);
+            } else if warp {
                 self.approach_warp.set_phase(id, approach::IN_WARP);
             } else if phase.is_some() && u.speed > vi {
                 plan.warp_out = true;

@@ -82,8 +82,11 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// with no beam in flight.
 /// Format 54 appends the dying phases of `dying_phase` (#1100); 50 to 53 still load, with
 /// nobody dying.
+/// Format 56 appends the warp ramps of `warp_shape` (#1102); 50 to 54 still load, with no
+/// ramp: a craft at warp is at warp, one leaving it has no shift left. (55 is neither written
+/// nor read: the number is reserved.)
 /// Earlier formats are refused.
-pub const FORMAT_VERSION: u16 = 54;
+pub const FORMAT_VERSION: u16 = 56;
 /// The last format without the Director's Cut flag (still loads). Fixed history, not renumbered.
 #[doc(hidden)]
 pub const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
@@ -96,6 +99,9 @@ pub const PRE_BEAMS_FORMAT: u16 = 52;
 /// The last format without the dying record (still loads).
 #[doc(hidden)]
 pub const PRE_DYING_FORMAT: u16 = 53;
+/// The last format without the warp ramp record (still loads).
+#[doc(hidden)]
+pub const PRE_WARP_RAMP_FORMAT: u16 = 54;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -145,7 +151,7 @@ fn check_header(bytes: &[u8]) -> Result<(u16, u64), SnapshotError> {
         return Err(SnapshotError::BadMagic);
     }
     let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | PRE_DYING_FORMAT | FORMAT_VERSION) {
+    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | PRE_DYING_FORMAT | PRE_WARP_RAMP_FORMAT | FORMAT_VERSION) {
         return Err(SnapshotError::FormatVersion { found });
     }
     let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -293,6 +299,13 @@ struct MoveModeRec {
 struct BeamsRec {
     version: u8,
     rows: Vec<crate::combat::weapons::Beam>,
+}
+
+/// Format 56 (#1102): the warp ramps of `warp_shape`, by craft id.
+#[derive(Serialize, Deserialize)]
+struct WarpRampRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::movement::approach::Ramp)>,
 }
 
 /// Format 54 (#1100): the units in their dying phase under `dying_phase`, by unit id.
@@ -578,6 +591,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&MoveModeRec { version: 1, rows: self.move_mode_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&BeamsRec { version: 1, rows: self.weapons.beams_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&DyingRec { version: 1, rows: self.dying.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&WarpRampRec { version: 1, rows: self.approach_warp.ramps_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -695,6 +709,14 @@ impl Sim {
         } else {
             let (record, rest): (DyingRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
             if record.version != 1 { return Err(SnapshotError::Corrupt("unknown dying record version".into())); }
+            (record.rows, rest)
+        };
+        // Formats 50 to 54 carry no warp ramps (#1102): a warp there has only its phase.
+        let (warp_ramps, rest): (Vec<(EntityId, crate::movement::approach::Ramp)>, _) = if format <= PRE_WARP_RAMP_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (WarpRampRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown warp ramp record version".into())); }
             (record.rows, rest)
         };
         if directors_cut && !content.as_ref().is_some_and(|db| db.profile() == sta_content::Profile::Sta1Classic) {
@@ -822,7 +844,10 @@ impl Sim {
         if switches.to_rows().iter().any(|(id, _)| units.get(*id).is_none()) {
             return Err(SnapshotError::Corrupt("switches of an unknown entity".into()));
         }
-        let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
+        if !crate::movement::approach::Warp::ramps_fit(&warp_rows, &warp_ramps) {
+            return Err(SnapshotError::Corrupt("warp ramp rows out of order, without a length or of a craft with no warp phase".into()));
+        }
+        let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows, warp_ramps).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
         }
@@ -977,6 +1002,9 @@ mod perception_tests;
 #[cfg(test)]
 #[path = "snapshot/warp_tests.rs"]
 mod warp_tests;
+#[cfg(test)]
+#[path = "snapshot/warp_ramp_tests.rs"]
+mod warp_ramp_tests;
 
 #[cfg(test)]
 #[path = "snapshot/alert_tests.rs"]

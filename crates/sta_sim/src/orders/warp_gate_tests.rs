@@ -49,6 +49,9 @@ fn db_with(too_close: Option<i32>, gates: bool) -> Arc<ContentDb> {
     assert!(base.features().warp_gates, "on for stock Armada II");
     let mut features = base.features().clone();
     features.warp_gates = gates;
+    // "as it was before the rule" is the movement of before as well: without the gates a craft
+    // under a cap keeps its warp phase, which the warp shape (#1102 part 2) would end.
+    features.warp_shape = gates;
     let mut b = ContentDb::builder().profile(base.profile()).features(features);
     for w in base.weapons() {
         b = b.weapon(w.clone());

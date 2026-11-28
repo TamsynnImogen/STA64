@@ -27,6 +27,15 @@ fn game(profile: Profile) -> (Sim, Arc<sta_content::ContentDb>) {
     (sim, db)
 }
 
+/// [`game`] for stock Armada II content with the feature switch `warp_shape` off: the warp of
+/// the profiles that do not have the measured shape (a craft at warp flies straight and brakes
+/// to turn).
+fn game_ramped() -> (Sim, Arc<sta_content::ContentDb>) {
+    let sim = approach_tests::sim(approach_tests::db_ramped(Profile::Sta2Classic, Some(1100)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    (sim, db)
+}
+
 /// [`game`] on a map of this half-size (the map's bounds, as a real game has them).
 fn game_on(half: i32) -> (Sim, Arc<sta_content::ContentDb>) {
     use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -244,7 +253,7 @@ fn a_warp_move_warps_on_a_long_leg_a_plain_move_does_not() {
 fn a_warp_move_drops_out_before_turning_and_reenters_once_when_aligned() {
     use crate::movement::approach::{IN_WARP, WARP_OUT, warp_leg};
 
-    let (mut sim, db) = game(Profile::Sta2Classic);
+    let (mut sim, db) = game_ramped();
     let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let move_warp = |seq, to| order(1, seq, Order::MoveWarp { units: vec![ship], to, queue: false });
     run(&mut sim, vec![move_warp(0, v(0, 5000))], 4 * HZ);
@@ -298,7 +307,7 @@ fn a_warp_move_brakes_when_avoidance_plans_a_turn() {
     use crate::movement::approach::{IN_WARP, WARP_OUT};
     use sta_content::{Region, RegionKind, RegionShape};
 
-    let (mut sim, db) = game(Profile::Sta2Classic);
+    let (mut sim, db) = game_ramped();
     let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let goal = v(0, 6000);
     let start = order(1, 0, Order::MoveWarp { units: vec![ship], to: goal, queue: false });

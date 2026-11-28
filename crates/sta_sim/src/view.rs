@@ -75,27 +75,34 @@ pub struct BeamRow {
 /// Where a craft is in its warp (SIM-36).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WarpPhase {
-    /// Speeding up from impulse speed toward warp speed.
+    /// On its way from impulse speed to warp speed.
     Entering,
     /// At warp speed.
     AtWarp,
-    /// Dropping out of warp, slowing toward its limit.
+    /// Dropping out of warp.
     Leaving,
 }
 
 /// One craft's warp for the renderer (#1102 part 1).
 ///
-/// The ramp is the smooth speed change between impulse speed and warp speed
-/// that the kinematics run today, so `ramp_len` is that change's length in
-/// ticks. The sim does not store when a ramp began: `ramp_start` is worked out
-/// from the craft's speed, so it is exact for a ramp that runs unbroken from
-/// impulse speed (or from warp speed, leaving) and is clamped to the current
-/// tick otherwise. At warp the ramp is over and `ramp_start` is the tick it
-/// would have begun to end now (`tick - ramp_len`), not the entry tick.
-/// Interim: part 2 of #1102 stores the real start.
+/// `ramp_start` and `ramp_len` say how far the craft is into the short ramp of
+/// its entry or exit: `tick - ramp_start` of `ramp_len` ticks.
 ///
-/// `phase` is the contract; the ramp fields are presentation hints and may
-/// become zero-length (no `Entering` row) when the measured no-ramp rule lands.
+/// Under `warp_shape` (#1102 part 2) they are the stored ramp: the tick it
+/// began and its length, fixed when it began. The speed does not change over
+/// that ramp (the craft holds its speed and is shifted forward, then is at warp
+/// speed; leaving is the mirror image), so the ramp is the time of the stretch
+/// to draw. At warp the row keeps the entry's ramp, which is then over
+/// (`tick - ramp_start >= ramp_len`). A craft loaded from a snapshot older than
+/// the stored ramp has a row of length zero.
+///
+/// Without the switch the ramp is the smooth speed change between impulse and
+/// warp speed: `ramp_len` is that change's length in ticks, and `ramp_start` is
+/// worked out from the craft's speed, so it is exact for a ramp that runs
+/// unbroken and is clamped to the current tick otherwise. At warp it is the
+/// tick the ramp would have begun to end now (`tick - ramp_len`).
+///
+/// `phase` is the contract; the ramp fields are presentation hints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarpRow {
     pub id: EntityId,

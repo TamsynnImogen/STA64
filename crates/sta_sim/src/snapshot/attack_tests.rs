@@ -20,7 +20,8 @@ fn malformed_attack_records_are_rejected_for_the_right_reason() {
     let with = |rec: Vec<u8>| chain::with(&bytes, chain::ATTACK, rec);
     let load = |rec: Vec<u8>| chain::corrupt(&with(rec), Some(db.clone()));
     assert!(Sim::from_snapshot(&with(record(vec![(id, 1)], (vec![(id, (0, id))], vec![(id, 0)]))), Some(db.clone())).is_ok());
-    assert_eq!(load(record(vec![(id, 3)], Default::default())), "attack warp rows out of order or of an unknown phase");
+    assert!(Sim::from_snapshot(&with(record(vec![(id, 3)], Default::default())), Some(db.clone())).is_ok(), "entering (#1102) is a phase");
+    assert_eq!(load(record(vec![(id, 4)], Default::default())), "attack warp rows out of order or of an unknown phase");
     assert_eq!(load(record(vec![(EntityId(999), 1)], Default::default())), "attack warp entity is not a craft");
     assert_eq!(load(record(Vec::new(), (vec![(id, (0, id)), (id, (0, id))], Vec::new()))), "engagement rows out of order, from the future or of an unknown entity");
     assert_eq!(load(record(Vec::new(), (vec![(id, (u64::MAX, id))], Vec::new()))), "engagement rows out of order, from the future or of an unknown entity");
