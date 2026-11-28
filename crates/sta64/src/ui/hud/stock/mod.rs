@@ -5,6 +5,7 @@ pub(in crate::ui::hud) mod commands;
 mod info;
 mod selection_readouts;
 pub(super) use selection_readouts::update as update_selection_readouts;
+pub(super) use window::apply_switch as apply_cinematic_switch;
 pub(super) use info::update_backdrop_fallback;
 mod weapon_icons;
 pub(super) use weapon_icons::update_visibility as update_weapon_icon_visibility;

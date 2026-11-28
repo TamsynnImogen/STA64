@@ -700,6 +700,8 @@ pub enum SettingKey {
     Shadows,
     Bloom,
     GraphicsDetail,
+    /// The Armada II stock HUD's cinematic window (the second picture of the action camera): on shows it live.
+    CinematicWindow,
 }
 
 /// Window size to request while windowed. Automatic leaves the current size alone.
@@ -786,11 +788,14 @@ pub struct Settings {
     /// The mouse cursor's size factor (UI-45; 0.5 to 3, default 1): the install's cursor art
     /// is drawn this many times its texture size.
     pub cursor_scale: f32,
+    /// The Armada II stock HUD's cinematic window shows its live picture (default on). Off: the window area shows its
+    /// still picture and the second render stops (read from the executable, static; the original's performance option).
+    pub cinematic_window: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, window_size: WindowSize::Automatic, fullscreen: false, vsync: true, show_fps: false, msaa: None, graphics_detail: None, shadows: None, bloom: None, lcars_ui: false, hud_fit: crate::ui::hud::stock::layout::HudFit::Centred, player_name: String::new(), relay: String::new(), cursor_scale: 1.0 }
+        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, window_size: WindowSize::Automatic, fullscreen: false, vsync: true, show_fps: false, msaa: None, graphics_detail: None, shadows: None, bloom: None, lcars_ui: false, hud_fit: crate::ui::hud::stock::layout::HudFit::Centred, player_name: String::new(), relay: String::new(), cursor_scale: 1.0, cinematic_window: true }
     }
 }
 
@@ -813,6 +818,7 @@ impl Settings {
             SettingKey::Vsync => self.vsync,
             SettingKey::ShowFps => self.show_fps,
             SettingKey::LcarsUi => self.lcars_ui,
+            SettingKey::CinematicWindow => self.cinematic_window,
             SettingKey::Shadows => return self.shadows,
             SettingKey::Bloom => return self.bloom,
             _ => return None,
@@ -842,6 +848,7 @@ impl Settings {
             SettingKey::Vsync => self.vsync = on,
             SettingKey::ShowFps => self.show_fps = on,
             SettingKey::LcarsUi => self.lcars_ui = on,
+            SettingKey::CinematicWindow => self.cinematic_window = on,
             SettingKey::Shadows => self.shadows = Some(on),
             SettingKey::Bloom => self.bloom = Some(on),
             _ => {}
