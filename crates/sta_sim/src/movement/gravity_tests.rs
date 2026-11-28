@@ -54,7 +54,13 @@ fn authored_fixture(well_class: &str) -> (Sim, EntityId) {
     let db = Arc::new(
         ContentDb::builder()
             .profile(Profile::Sta2Classic)
-            .features(Profile::Sta2Classic.features())
+            // These tests are about the gate: what a craft does that reaches a field. With
+            // `warp_routing` (#1148) the planner would lead it round the field instead.
+            .features({
+                let mut features = Profile::Sta2Classic.features();
+                features.warp_routing = false;
+                features
+            })
             .unit(craft)
             .unit(well)
             .build()
