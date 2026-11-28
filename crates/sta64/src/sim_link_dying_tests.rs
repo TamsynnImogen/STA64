@@ -62,18 +62,59 @@ fn changes(app: &mut App) -> usize {
 }
 
 #[test]
-fn a_dying_unit_leaves_the_selection_and_the_groups_and_the_change_is_announced() {
+fn a_dying_unit_leaves_the_selection_and_the_groups_without_a_select_voice_trigger() {
     let mut app = app_with(&[1, 2], [&[2, 3], &[1]]);
     app.world_mut().run_system_once(drop_dying_from_selection).unwrap();
     assert_eq!(app.world().resource::<Selection>().0, ids(&[1]));
     let groups = app.world().resource::<ControlGroups>();
     assert_eq!((groups.groups[0].clone(), groups.groups[1].clone()), (ids(&[3]), ids(&[1])));
-    assert_eq!(changes(&mut app), 1);
-    // Picked again in a later frame, it goes again.
+    // The select voice plays on `SelectionChanged`: a death must not send it, whoever stays selected.
+    assert_eq!(changes(&mut app), 0);
+    // Picked again in a later frame (INTERIM guard), it goes again, still without the message.
     app.world_mut().resource_mut::<Selection>().0 = ids(&[2]);
     app.world_mut().run_system_once(drop_dying_from_selection).unwrap();
     assert!(app.world().resource::<Selection>().0.is_empty());
-    assert_eq!(changes(&mut app), 1);
+    assert_eq!(changes(&mut app), 0);
+}
+
+#[derive(Resource, Default)]
+struct Saw(Vec<(&'static str, Vec<EntityId>)>);
+
+fn saw_in_input(s: Res<Selection>, mut saw: ResMut<Saw>) {
+    saw.0.push(("input", s.0.clone()));
+}
+fn saw_in_render(s: Res<Selection>, mut saw: ResMut<Saw>) {
+    saw.0.push(("render", s.0.clone()));
+}
+fn saw_in_ui(s: Res<Selection>, mut saw: ResMut<Saw>) {
+    saw.0.push(("ui", s.0.clone()));
+}
+fn saw_in_audio(s: Res<Selection>, mut saw: ResMut<Saw>) {
+    saw.0.push(("audio", s.0.clone()));
+}
+
+#[test]
+fn the_prune_runs_after_the_input_and_before_the_interface() {
+    // Through the real set order and the real plugin: what the input systems hold when the frame starts is the
+    // old selection (they may have picked a dying unit), and every reader of render, interface and audio sees it
+    // already pruned.
+    let mut app = app_with(&[1, 2], [&[], &[]]);
+    crate::app::configure_sets(&mut app);
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(SimLinkPlugin)
+        .init_resource::<Saw>()
+        .add_systems(Update, saw_in_input.in_set(crate::app::GameSet::Input))
+        .add_systems(Update, saw_in_render.in_set(crate::app::GameSet::Render))
+        .add_systems(Update, saw_in_ui.in_set(crate::app::GameSet::Ui))
+        .add_systems(Update, saw_in_audio.in_set(crate::app::GameSet::Audio));
+    app.update();
+    let saw = &app.world().resource::<Saw>().0;
+    assert_eq!(
+        saw.as_slice(),
+        [("input", ids(&[1, 2])), ("render", ids(&[1])), ("ui", ids(&[1])), ("audio", ids(&[1]))],
+        "the readers' view of the selection, in the order they ran"
+    );
+    assert_eq!(changes(&mut app), 0, "and no select voice is asked for");
 }
 
 #[test]

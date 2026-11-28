@@ -635,26 +635,27 @@ fn step_sim(
 }
 
 /// A unit in its dying phase (the sim's `dying_phase` switch, stock Armada II profile only) leaves the local
-/// selection and the control groups on the tick its hull reaches zero, and cannot be put back while the phase
-/// lasts. Grade: measured once (the selected craft is deselected on the tick its hull reaches zero) and read
-/// from the executable, static (the local selection drops it at the first death call). A group keeps no dying
-/// member: INTERIM, the original's group handling of a dying unit is not read. With the switch off no unit is
-/// ever flagged dying, so nothing here runs on any other profile.
+/// selection and the control groups.
 ///
-/// It runs after the sim step and before the interface reads the selection, so a pick made earlier in the same
-/// frame is gone before anything is drawn from it (declared gap: the pick paths in `input/` do not test the
-/// flag themselves, and the orders they issue in that frame name a dying unit, which the sim refuses).
-fn drop_dying_from_selection(
-    link: Res<SimLink>,
-    mut selection: ResMut<Selection>,
-    groups: Option<ResMut<crate::input::select::ControlGroups>>,
-    mut changed: MessageWriter<SelectionChanged>,
-) {
+/// Grades: a selected unit leaves the local selection when it starts to die (read from the executable, static;
+/// measured once: the selected craft is deselected on the tick its hull reaches zero). INTERIM, STA64's own
+/// guard and not measured: a unit that is picked again while the phase lasts goes again, and a control group
+/// keeps no dying member (the original's handling of both is not read). With the switch off no unit is ever
+/// flagged dying, so nothing here runs on any other profile.
+///
+/// No `SelectionChanged` is sent: its reader plays the first selected unit's select voice, which a death must
+/// not trigger. The interface follows the `Selection` resource itself.
+///
+/// Contract: it runs in [`GameSet::Interpolate`], after the sim step and before every reader in `Render`, `Ui`
+/// and `Audio`, so a pick made earlier in the same frame is gone before anything is drawn or heard from it
+/// (declared gap: the pick paths in `input/` do not test the flag themselves, and the orders they issue in that
+/// frame name a dying unit, which the sim refuses). The test `the_prune_runs_after_the_input_and_before_the_interface`
+/// pins the placement.
+fn drop_dying_from_selection(link: Res<SimLink>, mut selection: ResMut<Selection>, groups: Option<ResMut<crate::input::select::ControlGroups>>) {
     let view = link.curr();
     // Touch a resource mutably only when something goes: change detection of the selection must stay quiet.
     if selection.0.iter().any(|id| is_dying(view, *id)) {
         prune_dying(view, &mut selection.0);
-        changed.write(SelectionChanged);
     }
     if let Some(mut groups) = groups
         && groups.groups.iter().flatten().any(|id| is_dying(view, *id))
