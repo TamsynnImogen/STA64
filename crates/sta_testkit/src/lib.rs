@@ -152,10 +152,15 @@ pub fn game(title: &str) -> Option<PathBuf> {
     find(kind_of_title(title)?).map(|f| f.root)
 }
 
-/// [`game`], or, when the kind's variable is not set, a path that does not exist and names the variable, so that
-/// the older tests, which skip an absent install on their own, keep doing so. No default location is ever guessed.
+/// [`game`], or, when the kind's variable is not set, the one-line skip message and a path that does not exist and
+/// names the variable, so that the older tests, which skip an absent install on their own, keep doing so (and the
+/// runner counts them as skipped). No default location is ever guessed.
 pub fn game_root(title: &str) -> PathBuf {
-    game(title).unwrap_or_else(|| PathBuf::from(format!("not-configured/{}", kind_of_title(title).map_or("unknown-game", Kind::variable))))
+    game(title).unwrap_or_else(|| {
+        let kind = kind_of_title(title);
+        skip(&format!("set {} (needs {})", kind.map_or("a known game's install variable", Kind::variable), kind.map_or("a known game", Kind::needs)));
+        PathBuf::from(format!("not-configured/{}", kind.map_or("unknown-game", Kind::variable)))
+    })
 }
 
 /// The one-line skip message of a test, on the standard error stream.
@@ -186,7 +191,7 @@ pub fn a_map(vfs: &Vfs) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::*;
 
@@ -206,7 +211,9 @@ mod tests {
                 }
             } else if let Ok(text) = std::fs::read_to_string(&path) {
                 for (n, line) in text.lines().enumerate() {
-                    let home = line.contains("/home/") && !line.contains("assertNotIn(") && !line.contains("/home/example") && !line.contains("/home/user");
+                    // The placeholder users are removed before looking, so a line with a real path next to one is flagged.
+                    let rest = line.replace("/home/example", "").replace("/home/user", "");
+                    let home = rest.contains("/home/") && !line.contains("assertNotIn(");
                     if forbidden().iter().any(|f| line.contains(f)) || home {
                         found.push(format!("{}:{}", path.display(), n + 1));
                     }
@@ -227,6 +234,44 @@ mod tests {
         }
         found.retain(|f| !f.contains("gated.local"));
         assert!(found.is_empty(), "a path of someone's machine is in the repository: {found:?}");
+    }
+
+    fn manifests(dir: &Path, found: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                if e.file_name() != "target" {
+                    manifests(&path, found);
+                }
+            } else if e.file_name() == "Cargo.toml" {
+                found.push(path);
+            }
+        }
+    }
+
+    /// The kit is for tests only: no manifest lists it outside `[dev-dependencies]` (and the workspace's own table of
+    /// path dependencies), so it can never get into the build of the sim or the client.
+    #[test]
+    fn the_kit_is_a_dev_dependency_only() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = Vec::new();
+        manifests(&root.join("crates"), &mut found);
+        found.push(root.join("Cargo.toml"));
+        let mut bad = Vec::new();
+        for path in found {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            let mut section = String::new();
+            for (n, line) in text.lines().enumerate() {
+                let t = line.trim();
+                if t.starts_with('[') {
+                    section = t.to_owned();
+                } else if t.starts_with("sta_testkit") && section != "[dev-dependencies]" && section != "[workspace.dependencies]" {
+                    bad.push(format!("{}:{} under {section}", path.display(), n + 1));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "sta_testkit must only be a dev-dependency: {bad:?}");
     }
 
     #[test]

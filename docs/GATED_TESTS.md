@@ -49,7 +49,14 @@ so before it starts. It never launches a game either way.
 `tools/run-gated` runs `tools/agent-cargo test --workspace` once per group, with only that group's variables set
 (cargo's `--config env.NAME=...` form), filtered to the tests whose name contains `install`, and prints per group
 how many tests passed, failed and were skipped. The tests write only to temporary folders and never launch a game;
-the installs are read only. `tools/gated.local` holds paths of your machine and is never committed.
+the installs are read only. `tools/gated.local` holds paths of your machine and is never committed. Before each group
+the runner unsets every exported `STA64_TEST_*` and `STA64_GPU_*` variable and gives the group's own in cargo's
+forced `env` form, so only that group's variables are in effect (`--dry-run` shows it). A value in the local file
+must not contain a double quote or a backslash; the runner says which line if it does.
+
+The filter finds the tests with `install` in their name; a few gated tests lack it and are not run by the runner
+until they are renamed (a follow-up), and an `#[ignore]`d gated test is never run by it. A skipped test prints its
+`SKIP:` line, and the runner's skipped count is the number of distinct such lines.
 
 A test that needs an install writes `SKIP: ...` and returns when it cannot run, never `unwrap`s a missing mod or
 file, and has `install` in its name so the runner finds it.

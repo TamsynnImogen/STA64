@@ -19,8 +19,11 @@
 # test), so the tests of the other groups skip with their one-line message. One build at a time: agent-cargo holds its
 # locks. The tests write only to temporary folders and never launch a game.
 #
-# Per group it prints: passed, failed, skipped. A skipped test prints `SKIP: ...` once and then counts as passed for
-# libtest, so skipped is the number of SKIP lines and passed is the libtest ok count minus them.
+# Per group it prints: passed, failed, skipped. A skipped test prints `SKIP: ...` and then counts as passed for
+# libtest, so skipped is the number of distinct SKIP lines (a test that skips for several kinds prints several) and
+# passed is the libtest ok count minus them. Before each group every exported STA64_TEST_* and STA64_GPU_* variable is
+# unset and the group's own are given in cargo's forced `env` form, so only that group's variables are in effect.
+# The name filter misses a gated test without "install" in its name, and an #[ignore]d test is not run.
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -64,12 +67,17 @@ done
 # NAME=value lines of the local file, as text.
 declare -A val
 if [ -f "$local_file" ]; then
+  lineno=0
   while IFS= read -r line || [ -n "$line" ]; do
+    lineno=$((lineno + 1))
+    line="${line%$'\r'}"
     case "$line" in ''|'#'*) continue ;; esac
     name="${line%%=*}"
     [ "$name" = "$line" ] && continue
     v="${line#*=}"
-    v="${v#\"}"; v="${v%\"}"
+    case "$v" in
+      *'"'*|*'\'*) echo "run-gated: $local_file line $lineno: a value must not contain a double quote or a backslash" >&2; exit 2 ;;
+    esac
     val[$name]="$v"
   done < "$local_file"
 fi
@@ -121,21 +129,26 @@ for g in "${selected[@]}"; do
     printf '%-14s folder missing (%s): skipped\n' "$g" "$var"
     continue
   fi
-  config=(--config "env.$var=\"$path\"")
+  # Cargo's `env` config does not override a variable the caller exported unless it is forced, and the other groups'
+  # (and the old general) variables must not leak in: every exported STA64_TEST_* and STA64_GPU_* variable is unset
+  # for the run, and this group's are set in the forced form.
+  config=(--config "env.$var.value=\"$path\"" --config "env.$var.force=true")
   modvar="$(mod_of "$g")"
   if [ -n "$modvar" ] && [ -n "${val[$modvar]:-}" ]; then
-    config+=(--config "env.$modvar=\"${val[$modvar]}\"")
+    config+=(--config "env.$modvar.value=\"${val[$modvar]}\"" --config "env.$modvar.force=true")
   fi
   if [ $gpu -eq 1 ]; then
-    config+=(--config 'env.STA64_GPU_TESTS="1"')
+    config+=(--config 'env.STA64_GPU_TESTS.value="1"' --config 'env.STA64_GPU_TESTS.force=true')
   fi
+  clean=(env)
+  for n in $(compgen -e | grep -E '^STA64_(TEST|GPU)'); do clean+=(-u "$n"); done
   scope=(--workspace)
   if [ $light -eq 1 ]; then
     scope+=(--exclude sta64)
   elif [ $dry -eq 0 ]; then
     echo "$g: building the client's tests (heavy: needs a machine with plenty of free memory and no other client build running)"
   fi
-  cmd=("$here/agent-cargo" test --locked "${scope[@]}" --no-fail-fast "${config[@]}" -- install --nocapture)
+  cmd=("${clean[@]}" "$here/agent-cargo" test --locked "${scope[@]}" --no-fail-fast "${config[@]}" -- install --nocapture)
   if [ $dry -eq 1 ]; then
     printf '%-14s ' "$g"; printf '%q ' "${cmd[@]}" | sed "s|$path|<path>|g"; echo
     continue
@@ -145,7 +158,7 @@ for g in "${selected[@]}"; do
   status=$?
   oks=$(grep -c '^test .* \.\.\. ok$' "$out")
   fails=$(grep -c '^test .* \.\.\. FAILED$' "$out")
-  skips=$(grep -c '^SKIP' "$out")
+  skips=$(grep '^SKIP' "$out" | sort -u | wc -l)
   passed=$((oks - skips)); [ $passed -lt 0 ] && passed=0
   printf '%-14s passed %-4d failed %-4d skipped %-4d\n' "$g" "$passed" "$fails" "$skips"
   if [ $fails -gt 0 ] || { [ $status -ne 0 ] && [ $oks -eq 0 ]; }; then
