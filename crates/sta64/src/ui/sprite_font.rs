@@ -1637,9 +1637,6 @@ impl Plugin for SpriteFontPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
-
-    const HEROIC: &str = "/home/cedric/Games/Heroic";
 
     const SAMPLE: &str = "sprite_table\n@referenceWidth=256\n@referenceHeight=128\n\n@animation f_a_uv\noffset 3 0.0 step\n@keyframes\n0\t0\t# \n10\t0\t#!\n20\t0\t#\"\n\n@animation f_a_w\nwidth 3 0.0 step\n@keyframes\n5\n8.5\n6\n\n@animation f_b_uv\noffset 2 0.0 step\n@keyframes\n0\t30\n12\t30\n\n@animation f_b_w\nwidth 2 0.0 step\n@keyframes\n7\n9\n\npagea\ttex_a\t\t0\t0\t0\t12\t@anim=f_a_uv\t@anim=f_a_w\npageb\ttex_b\t\t0\t0\t0\t12\t@anim=f_b_uv\t@anim=f_b_w\n";
 
@@ -2072,7 +2069,7 @@ mod tests {
 
     /// `(label, install root, active mod)` for every install this machine may have.
     fn installs() -> Vec<(String, std::path::PathBuf, Option<String>)> {
-        let roots = Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots");
+        let roots = sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
         let mut v = vec![
             (
                 "FO4".to_owned(),
@@ -2087,28 +2084,22 @@ mod tests {
             ("Roots".to_owned(), roots, None),
             (
                 "FO".to_owned(),
-                Path::new(HEROIC).join("Star Trek Armada II Fleet Operations"),
+                sta_testkit::game_root("Star Trek Armada II Fleet Operations"),
                 None,
             ),
             (
                 "DW".to_owned(),
-                Path::new(HEROIC).join("Star Trek Armada II Dominion War"),
+                sta_testkit::game_root("Star Trek Armada II Dominion War"),
                 None,
             ),
             (
                 "A2".to_owned(),
-                Path::new(HEROIC).join("Star Trek Armada II (Stock)"),
+                sta_testkit::game_root("Star Trek Armada II (Stock)"),
                 None,
             ),
         ];
-        if let Ok(root) = std::env::var("STA64_TEST_INSTALL") {
-            v.push((
-                "env".into(),
-                root.into(),
-                std::env::var("STA64_TEST_MOD")
-                    .ok()
-                    .filter(|m| !m.is_empty()),
-            ));
+        if let Some(found) = crate::testsupport::find(sta_testkit::Kind::Any) {
+            v.push(("env".into(), found.root, found.active_mod));
         }
         v
     }
@@ -2187,7 +2178,7 @@ mod tests {
     /// (texture and reference sizes are equal, so source texels are texture pixels).
     #[test]
     fn fo4_fontsmall_lays_out_known_strings() {
-        let roots = Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots");
+        let roots = sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
         let Ok(vfs) = Vfs::mount_install(&roots, Some("Fleet Ops 4.0")) else {
             eprintln!("FO4 not installed: skipped");
             return;
@@ -2242,7 +2233,7 @@ mod tests {
     /// FontMedium/FontLarge/FontVeryLarge (strips cut for other sizes) do not.
     #[test]
     fn fo4_fonts_fit_or_are_rejected() {
-        let roots = Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots");
+        let roots = sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
         let Ok(vfs) = Vfs::mount_install(&roots, Some("Fleet Ops 4.0")) else {
             eprintln!("FO4 not installed: skipped");
             return;
@@ -2976,7 +2967,7 @@ mod tests {
     /// ASCII glyph has a non-empty rectangle inside its texture (letters and digits have ink). Asserts general rules only; nothing of the files is kept.
     #[test]
     fn armada_i_installed_fonts_load() {
-        let root = Path::new(HEROIC).join("Star Trek Armada");
+        let root = sta_testkit::game_root("Star Trek Armada");
         let Ok(vfs) = Vfs::mount_install(&root, None) else {
             eprintln!("Armada I not installed: skipped");
             return;

@@ -1,0 +1,12 @@
+[package]
+name = "sta_testkit"
+description = "Test support for the install-gated tests: which install a test runs on, and a clean skip when there is none"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Dev-only: crates list it under `[dev-dependencies]`. It reads environment variables and lists an
+# install read-only; it writes nothing and launches nothing. No `sta_content`: that crate dev-depends on it.
+[dependencies]
+sta_vfs.workspace = true

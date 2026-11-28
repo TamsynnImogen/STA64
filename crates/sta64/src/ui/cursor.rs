@@ -698,8 +698,9 @@ mod tests {
     /// are whatever the install says.
     #[test]
     fn real_install_if_available() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let m = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();
         let table = load_table(&vfs);
         let mut animated = 0;

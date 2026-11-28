@@ -234,7 +234,6 @@ impl Plugin for RadarFogPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     /// A 4 x 4 cell grid over (0,0)..(4*CELL, 4*CELL): the lower left quadrant visible,
     /// the lower right explored, the rest never seen.
@@ -409,8 +408,8 @@ mod tests {
     /// Install-gated: the mounted mods' own textures give the colours.
     #[test]
     fn installs_give_their_own_colours() {
-        let roots = Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
-        let colours = |m: Option<&str>| Vfs::mount_install(roots, m).ok().map(|v| FogColours::read(&v));
+        let roots = sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
+        let colours = |m: Option<&str>| Vfs::mount_install(&roots, m).ok().map(|v| FogColours::read(&v));
         if let Some(c) = colours(Some("Fleet Ops 4.0")) {
             assert_eq!((c.fog, c.shroud), ([8, 8, 8], [30, 36, 50]));
         }

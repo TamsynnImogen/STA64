@@ -695,8 +695,9 @@ mod team_colour_tests {
     /// entries the install's palette has. No values are asserted.
     #[test]
     fn every_installed_armada_one_map_table_resolves_to_palette_entries() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), std::env::var("STA64_TEST_MOD").ok().as_deref()) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::FirstGame) else { return };
+        let root = found.root_string();
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), found.active_mod.as_deref()) else { return };
         let palette = TeamColours::load(&vfs);
         let mut checked = 0;
         for name in vfs.list("bzn").into_iter().filter(|n| n.to_ascii_lowercase().ends_with(".bzn")) {

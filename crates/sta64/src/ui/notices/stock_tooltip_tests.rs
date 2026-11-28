@@ -573,11 +573,12 @@ fn a_click_or_a_key_press_neither_dismisses_the_tooltip_nor_restarts_its_clock()
 #[test]
 fn installed_delays_and_world_tooltip_strings_resolve() {
     if std::env::var("STA64_TOOLTIP_TESTS").as_deref() != Ok("1") {
-        eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 STA64_TEST_INSTALL and optional STA64_TEST_MOD");
+        eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 an install variable (docs/GATED_TESTS.md)");
         return;
     }
-    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|s| !s.is_empty());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let install = found.root_string();
+    let active_mod = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
     let component = read_component(&vfs).expect("the mounted component definition");
     let d = delays_from(Some(&component));
@@ -618,11 +619,12 @@ fn installed_delays_and_world_tooltip_strings_resolve() {
 fn installed_command_and_build_item_pieces_resolve() {
     use crate::ui::hud::stock::tooltip_text::*;
     if std::env::var("STA64_TOOLTIP_TESTS").as_deref() != Ok("1") {
-        eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 STA64_TEST_INSTALL and optional STA64_TEST_MOD");
+        eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 an install variable (docs/GATED_TESTS.md)");
         return;
     }
-    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|s| !s.is_empty());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let install = found.root_string();
+    let active_mod = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
     let strings = crate::ui::i18n::Strings::load(&vfs, "english");
     let look = |k: &str| strings.tooltip_text(k).to_owned();

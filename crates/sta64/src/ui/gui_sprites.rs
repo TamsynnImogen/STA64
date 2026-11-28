@@ -866,10 +866,9 @@ mod tests {
     /// Explicit local-asset audit. No proprietary fixture or GPU is required in CI.
     #[test]
     fn installed_button_atlases() {
-        let Some(root) = std::env::var_os("STA64_TEST_INSTALL") else {
-            return;
-        };
-        let active = std::env::var("STA64_TEST_MOD").ok();
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root.clone();
+        let active = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active.as_deref()).unwrap();
         let tables =
             std::env::var("STA64_TEST_GUI_TABLES").unwrap_or_else(|_| "gui_federation.spr,gui_borg.spr".into());

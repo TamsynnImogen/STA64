@@ -2,17 +2,14 @@
 //! reads for a team's race (`maxOfficerMultiplier`, the derived or authored
 //! latinum factor) and `MAX_CREW`. Absent installs are skipped. Read from data.
 
-use std::path::Path;
-
 use sta_content::{ContentDb, OdfIndex};
 use sta_core::Fixed;
 use sta_vfs::Vfs;
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
 const ROOTS: &str = "Star Trek Armada II Fleet Operations Roots";
 
 fn load(dir: &str, modname: Option<&str>) -> Option<ContentDb> {
-    let root = Path::new(HEROIC).join(dir);
+    let root = sta_testkit::game_root(dir);
     if !root.is_dir() {
         eprintln!("{dir}: skipped, not installed");
         return None;

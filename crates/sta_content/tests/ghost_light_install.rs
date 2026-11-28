@@ -2,12 +2,11 @@
 //! and the Armada II family gives the three colours and the team factor. Structure only: no value is asserted.
 //! Absent installs are skipped. Key names: read from data.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sta_content::{GhostLighting, OdfIndex};
 use sta_vfs::Vfs;
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
 
 fn keys(root: &Path, modname: Option<&str>, required: bool) -> Option<(Option<GhostLighting>, Vec<String>)> {
     if !root.is_dir() {
@@ -27,15 +26,11 @@ fn keys(root: &Path, modname: Option<&str>, required: bool) -> Option<(Option<Gh
 
 #[test]
 fn installs_read_the_ghost_lighting_keys_without_warnings() {
-    let mut cases = vec![
-        ("A2", Path::new(HEROIC).join("Star Trek Armada II (Stock)"), true),
-        ("Evolution", Path::new(HEROIC).join("Star Trek Armada II Evolution"), true),
-        ("A1", Path::new(HEROIC).join("Star Trek Armada"), false),
+    let cases = vec![
+        ("A2", sta_testkit::game_root("Star Trek Armada II (Stock)"), true),
+        ("Evolution", sta_testkit::game_root("Star Trek Armada II Evolution"), true),
+        ("A1", sta_testkit::game_root("Star Trek Armada"), false),
     ];
-    let local = std::env::var_os("STA64_TEST_INSTALL").map(PathBuf::from);
-    if let Some(root) = local {
-        cases.push(("local install", root, false));
-    }
     let mut read = 0;
     for (label, root, a2) in cases {
         let Some((keys, warnings)) = keys(&root, None, label == "local install") else { continue };

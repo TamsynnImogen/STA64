@@ -609,9 +609,6 @@ fn real_archive() -> Option<(String, Vec<u8>)> {
     if let Ok(p) = std::env::var("A2_FO_ODF_FPQ") {
         paths.push(p);
     }
-    if let Ok(h) = std::env::var("HOME") {
-        paths.push(format!("{h}/Games/Heroic/Star Trek Armada II Fleet Operations Roots/Data/ODF.fpq"));
-    }
     paths.into_iter().find_map(|p| std::fs::read(&p).ok().map(|d| (p, d)))
 }
 

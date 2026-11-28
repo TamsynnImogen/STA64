@@ -353,26 +353,23 @@ mod tests {
     #[test]
     fn installed_packs_parse() {
         let mut roots: Vec<(PathBuf, Option<String>)> = Vec::new();
-        if let Ok(r) = std::env::var("STA64_TEST_INSTALL") {
-            roots.push((r.into(), std::env::var("STA64_TEST_MOD").ok()));
-        }
-        if let Some(home) = std::env::var_os("HOME") {
-            let heroic = PathBuf::from(home).join("Games/Heroic");
-            for n in [
-                "Star Trek Armada",
-                "Star Trek Armada II",
-                "Star Trek Armada II (Stock)",
-                "Star Trek Armada II Dominion War",
-                "Star Trek Armada II Fleet Operations",
-                "Star Trek Armada II Fleet Operations Roots",
-            ] {
-                roots.push((heroic.join(n), None));
+        // Only the variables of the install kinds (docs/GATED_TESTS.md): no location is guessed.
+        for var in [
+            "STA64_TEST_A1_INSTALL",
+            "STA64_TEST_A2_STOCK_INSTALL",
+            "STA64_TEST_FO327_INSTALL",
+            "STA64_TEST_DW_INSTALL",
+            "STA64_TEST_EVOLUTION_INSTALL",
+        ] {
+            if let Some(r) = std::env::var_os(var).filter(|r| !r.is_empty()) {
+                roots.push((r.into(), None));
             }
+        }
+        if let Some(r) = std::env::var_os("STA64_TEST_ROOTS_INSTALL").filter(|r| !r.is_empty()) {
+            let r = PathBuf::from(r);
+            roots.push((r.clone(), None));
             for m in ["Fleet Ops 4.0", "STA2 Classic Mod"] {
-                roots.push((
-                    heroic.join("Star Trek Armada II Fleet Operations Roots"),
-                    Some(m.into()),
-                ));
+                roots.push((r.clone(), Some(m.into())));
             }
         }
         let mut seen = 0;

@@ -1570,8 +1570,12 @@ mod tests {
     /// Uses installed CFG rectangles and parsed sprite font sheets when opted in.
     #[test]
     fn installed_group_names_fit_one_line_above_hulls() {
-        let Some(root) = std::env::var_os("STA64_TEST_INSTALL") else { return };
-        let Ok(mode) = std::env::var("STA64_TEST_MOD") else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+        let root = found.root.clone();
+        let Some(mode) = found.active_mod.clone() else {
+            sta_testkit::skip("set STA64_TEST_ROOTS_MOD (this test needs the mod's race sheets)");
+            return;
+        };
         let cfg_name = match mode.as_str() {
             "STA2 Classic" | "STA2 Classic Mod" => "gui_fed.cfg",
             "FO4" | "Fleet Ops 4.0" => "gui_federation16x9.cfg",
@@ -1649,19 +1653,18 @@ mod tests {
     /// cannot be mounted or read fails; an unset one skips with a message.
     #[test]
     fn installed_resource_text_rectangles_lie_inside_their_panels() {
-        let a1 = std::env::var_os("STA64_TEST_A1_INSTALL");
-        let a2 = std::env::var_os("STA64_TEST_INSTALL");
-        if a1.is_none() && a2.is_none() {
-            eprintln!("SKIP: set STA64_TEST_A1_INSTALL (Armada I root) or STA64_TEST_INSTALL (+ STA64_TEST_MOD)");
+        let a1 = crate::testsupport::find(sta_testkit::Kind::FirstGame).map(|f| f.root.into_os_string());
+        let second = crate::testsupport::find(sta_testkit::Kind::ModFamily).or_else(|| crate::testsupport::find(sta_testkit::Kind::StockSecond));
+        if a1.is_none() && second.is_none() {
+            sta_testkit::skip("set STA64_TEST_A1_INSTALL (needs an Armada I install) or STA64_TEST_ROOTS_INSTALL / STA64_TEST_A2_STOCK_INSTALL");
             return;
         }
         let mut mounts = Vec::new();
         if let Some(root) = a1 {
             mounts.push((root, None, vec!["gui_fed.cfg", "gui_kli.cfg", "gui_rom.cfg", "gui_bor.cfg"]));
         }
-        if let Some(root) = a2 {
-            let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
-            mounts.push((root, m, vec!["gui_fed.cfg"]));
+        if let Some(found) = second {
+            mounts.push((found.root.into_os_string(), found.active_mod, vec!["gui_fed.cfg"]));
         }
         for (root, mode, cfgs) in mounts {
             let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mode.as_deref())

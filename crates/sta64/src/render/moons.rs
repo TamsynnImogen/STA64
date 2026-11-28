@@ -127,7 +127,6 @@ mod tests {
     #[test]
     fn every_moon_on_every_install_map_has_a_model() {
         use std::collections::BTreeMap;
-        const HEROIC: &str = "/home/cedric/Games/Heroic";
         let installs = [
             (
                 "FO4",
@@ -141,7 +140,7 @@ mod tests {
         let mut checked = 0;
         let mut bad = Vec::new();
         for (label, dir, active) in installs {
-            let root = std::path::Path::new(HEROIC).join(dir);
+            let root = sta_testkit::game_root(dir);
             // GOG's plain A2 folder has no `Data`: its loose files are the layer.
             let mounted = Vfs::mount_install(&root, active).ok().or_else(|| {
                 let mut v = Vfs::default();
@@ -250,8 +249,8 @@ mod tests {
     /// [`MoonVariants::moon_for`] (the renderer's own path), each get a moon.
     #[test]
     fn boobytrap_markers_resolve_through_the_renderer_path() {
-        let root = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
-        let Ok(vfs) = Vfs::mount_install(root, Some("Fleet Ops 4.0")) else {
+        let root = sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = Vfs::mount_install(&root, Some("Fleet Ops 4.0")) else {
             eprintln!("skipped: FO4 not installed");
             return;
         };

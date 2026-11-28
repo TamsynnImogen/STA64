@@ -3,18 +3,15 @@
 //! and every track of it, in both modes, exists in the install's `sounds/music`.
 //! Read from data; an absent or unmountable install is skipped.
 
-use std::path::Path;
-
 use sta_content::{OdfIndex, Races};
 use sta_vfs::Vfs;
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
 
 #[test]
 fn playable_races_have_a_gameplay_playlist() {
     let mut checked = 0;
     for (label, dir) in [("A1", "Star Trek Armada"), ("A2", "Star Trek Armada II (Stock)")] {
-        let root = Path::new(HEROIC).join(dir);
+        let root = sta_testkit::game_root(dir);
         let Ok(vfs) = Vfs::mount_install(&root, None) else {
             eprintln!("{label}: skipped");
             continue;
