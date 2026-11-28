@@ -114,11 +114,14 @@ fn ordnance_of(class: &str) -> Ordnance {
     }
 }
 
+/// A shot's priority, duration and size.
+type ShotKind = (f32, f32, ShotSize);
+
 /// Make shots from this frame's events.
 pub fn shots(mut msgs: MessageReader<SimMsg>, clock: Option<Res<AnimClock>>, content: Option<Res<ContentRes>>, mut state: ResMut<A2State>) {
     let now = clock.as_ref().map_or(0.0, |c| c.now() as f32);
     for SimMsg(ev) in msgs.read() {
-        let made: Option<((f32, f32, ShotSize), Vec<EntityId>, Vec3)> = match ev {
+        let made: Option<(ShotKind, Vec<EntityId>, Vec3)> = match ev {
             SimEvent::Fired { shooter, weapon, target, .. } => state.seen.get(shooter).map(|s| {
                 let def = content.as_ref().and_then(|c| c.0.weapon(*weapon));
                 // A target entity in sight is aimed at; any other target is free ordnance.
