@@ -837,33 +837,32 @@ fn order_at_aim(
 /// original answers with the attack cursor (measured), shows the refusal here because STA64 gives no
 /// order there; Patrol, Guard and special weapons are not armed modes of STA64 yet.
 pub(crate) fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
-    match (mode, valid) {
-        (TargetMode::Move, true) => "c_move",
-        (TargetMode::Move, false) => "c_nomove",
-        (TargetMode::Attack, true) => "c_attack",
-        (TargetMode::Attack, false) => "c_noattack",
-        (TargetMode::Mine, true) => "c_mining",
-        (TargetMode::Mine, false) => "c_nomining",
-        (TargetMode::Colonize, true) => "c_colonize",
-        (TargetMode::Colonize, false) => "c_nocolonize",
-        (TargetMode::Transport, true) => "c_transport",
-        (TargetMode::Transport, false) => "c_notransport",
-        (TargetMode::TransportAttack, true) => "c_capture",
-        (TargetMode::TransportAttack, false) => "c_nocapture",
-        (TargetMode::Repair, true) => "c_repair",
-        (TargetMode::Repair, false) => "c_norepair",
-        // The installs have c_decommission and no refusal art of its own.
-        (TargetMode::Decommission, true) => "c_decommission",
-        (TargetMode::Decommission, false) => "c_nomove",
-        (TargetMode::TradeSource, true) => "c_strade",
-        (TargetMode::TradeSource, false) => "c_nostrade",
-        (TargetMode::TradeDestination, true) => "c_etrade",
-        (TargetMode::TradeDestination, false) => "c_noetrade",
-        // Installed tables have c_rally but no c_norally; use the move refusal art.
-        (TargetMode::Rally, true) => "c_rally",
-        (TargetMode::Rally, false) => "c_nomove",
-        (TargetMode::Special(_), true) => "c_attack",
-        (TargetMode::Special(_), false) => "c_noattack",
+    use crate::ui::cursor::{CursorAction as A, action_cursor};
+    // The action table's rows (Armada II: read from the executable, static); the invalid column when refused.
+    let row = match mode {
+        TargetMode::Move => Some(A::Go),
+        TargetMode::Attack => Some(A::Attack),
+        TargetMode::Mine => Some(A::Mine),
+        TargetMode::Colonize => Some(A::Colonize),
+        TargetMode::Transport => Some(A::Transport),
+        TargetMode::TransportAttack => Some(A::TransportAttack),
+        TargetMode::Repair => Some(A::RepairOther),
+        TargetMode::TradeSource => Some(A::StartTrade),
+        TargetMode::TradeDestination => Some(A::EndTrade),
+        TargetMode::Rally => Some(A::SetRallyPoint),
+        TargetMode::Decommission => Some(A::Decommission),
+        TargetMode::Special(_) => None,
+    };
+    match (mode, row, valid) {
+        // INTERIM: the table has no invalid name for these two rows (the first row's cursor is drawn for them
+        // with Armada II content); the move refusal stays as before for every content until the callers
+        // (`input::context`) know the content's profile.
+        (TargetMode::Rally | TargetMode::Decommission, _, false) => "c_nomove",
+        (_, Some(row), valid) => action_cursor(row, !valid),
+        // INTERIM: a special weapon's armed cursor is the attack cursor and its refusal (the original's table has its
+        // own special-weapon pair; the Armada I and other games' special abilities are not read).
+        (_, None, true) => "c_attack",
+        (_, None, false) => "c_noattack",
     }
 }
 
@@ -1484,6 +1483,28 @@ mod target_tests {
         }
         let stale = feed(&[99]);
         assert_eq!(armed_cursor_name(TargetMode::Attack, target_order(&stale, TargetMode::Attack, Some(EntityId(4)), p).is_some()), "c_noattack");
+    }
+
+    /// The armed picks' cursors are the action table's rows, valid or refused; the exceptions are the named INTERIM ones.
+    #[test]
+    fn armed_cursors_are_the_action_tables_rows_except_the_named_interim_ones() {
+        use crate::ui::cursor::{CursorAction as A, FIRST_ROW, action_cursor};
+        for (mode, row) in [
+            (TargetMode::Move, A::Go), (TargetMode::Attack, A::Attack), (TargetMode::Mine, A::Mine), (TargetMode::Colonize, A::Colonize),
+            (TargetMode::Transport, A::Transport), (TargetMode::TransportAttack, A::TransportAttack), (TargetMode::Repair, A::RepairOther),
+            (TargetMode::TradeSource, A::StartTrade), (TargetMode::TradeDestination, A::EndTrade),
+        ] {
+            assert_eq!((armed_cursor_name(mode, true), armed_cursor_name(mode, false)), (action_cursor(row, false), action_cursor(row, true)), "{mode:?}");
+        }
+        // The valid cursors of rally and decommission are the table's; their refusal is not (INTERIM, named in the code).
+        assert_eq!(armed_cursor_name(TargetMode::Rally, true), action_cursor(A::SetRallyPoint, false));
+        assert_eq!(armed_cursor_name(TargetMode::Decommission, true), action_cursor(A::Decommission, false));
+        for mode in [TargetMode::Rally, TargetMode::Decommission] {
+            assert_ne!(armed_cursor_name(mode, false), FIRST_ROW, "{mode:?}: today's refusal, not yet the table's first row");
+        }
+        // A special weapon keeps the attack pair (INTERIM).
+        assert_eq!(armed_cursor_name(TargetMode::Special(0), true), action_cursor(A::Attack, false));
+        assert_eq!(armed_cursor_name(TargetMode::Special(0), false), action_cursor(A::Attack, true));
     }
 
     fn click_app(feed: HudFeed, state: HudState, x: f32) -> App {
