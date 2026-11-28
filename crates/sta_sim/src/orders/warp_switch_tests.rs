@@ -30,6 +30,10 @@ fn v(x: i32, z: i32) -> Vec3 {
 fn db(profile: Profile, warp: Option<bool>) -> Arc<ContentDb> {
     let base = approach_tests::db(profile, Some(1100));
     let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    if profile == Profile::Sta1Classic {
+        // the physics the Armada I movement model needs, so that model flies the craft
+        b = b.a1_play_physics(Some(crate::kinematics::a1_tests::play()));
+    }
     for w in base.weapons() {
         b = b.weapon(w.clone());
     }
@@ -151,14 +155,21 @@ fn a_script_cannot_turn_warp_back_on() {
     assert!(!run(&without, false));
 }
 
-/// Armada I's own cruise model is another mechanism: the switch does not slow it.
+/// Armada I's own cruise model is another mechanism: the switch does not slow it. The craft is
+/// flown by that model here (asserted), and cruises above its impulse speed with warp switched
+/// off exactly as with it on.
 #[test]
 fn armada_one_cruise_is_not_touched_by_the_switch() {
+    use crate::kinematics::{Model, a1};
     let far = |warp: Option<bool>| {
         let db = db(Profile::Sta1Classic, warp);
+        assert_eq!(Model::for_content(&db), Model::A1, "the Armada I movement model is the content's");
+        assert!(a1::params(&db, db.key("st_seer").unwrap()).is_some(), "and it has parameters for the test craft");
         let mut sim = game(&db);
         let s = spawn(&mut sim, &db, "st_seer", 1, v(0, 0));
+        let impulse = sim.unit(s).unwrap().stats.max_speed;
         let f = fly(&mut sim, vec![by(PlayerId(1), Order::Move { units: vec![s], to: v(0, 7000), queue: false, mode: None })], s, 8 * HZ);
+        assert!(f.top > impulse, "switch {warp:?}: the cruise is above impulse ({:?})", f.top);
         (f.z, f.top)
     };
     assert_eq!(far(Some(false)), far(None), "the same flight with and without the switch");

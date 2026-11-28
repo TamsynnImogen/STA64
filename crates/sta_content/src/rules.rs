@@ -343,8 +343,8 @@ pub const WARP_KEY: &str = "GAME_OPTIONS_WARP";
 
 /// Whether content has warp when its header does not set [`WARP_KEY`]: yes, for every profile.
 /// The one source of that default. The data decides: content without warp says so with the key.
-/// Grades: stock Armada II has warp (read from the executable, and measured); the other
-/// profiles keep what STA64 did before the key was read (Fleet Operations 3 and the native
+/// Grades: the stock Armada II profile has warp (read from the executable, and measured); the
+/// other profiles keep what STA64 did before it read the key (Fleet Operations 3 and the native
 /// profile: not checked).
 pub const WARP_DEFAULT: bool = true;
 
@@ -1189,9 +1189,8 @@ impl Rules {
     /// header. Off, no craft enters or stays at warp by any path that asks the sim's warp
     /// permission; Armada I's own cruise model is another mechanism and does not ask it.
     ///
-    /// This reading of the key is STA64's own rule. The key is read from data (the values found
-    /// are 0 and 1); the stock executables do not read it, and what the mod family's own code
-    /// does with it is not established.
+    /// This reading of the key is STA64's own rule; what the original games do with the key is
+    /// not established. Grade for the key's name and form: read from data.
     pub fn warp_enabled(&self) -> bool {
         self.warp.unwrap_or(WARP_DEFAULT)
     }
@@ -1324,13 +1323,13 @@ impl Rules {
         for (key, value) in AutonomyRules::KEYS.iter().zip([a.movement, a.special_weapon]) {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value.to_string()));
         }
-        // Only when it differs from the engine default, so an absent key and
-        // the default digest alike and content without it keeps its hash.
-        // Only when it differs from the default, so an absent key and one that restates the
-        // default digest alike and content without it keeps its hash.
+        // The warp switch: only when it differs from the default, so an absent key and one that
+        // restates the default digest alike and content without it keeps its hash.
         if self.warp_enabled() != WARP_DEFAULT {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{WARP_KEY}"), u8::from(self.warp_enabled()).to_string()));
         }
+        // The two warp distances: each only when it differs from its default, so an absent key
+        // and the default digest alike and content without it keeps its hash.
         let (approach, approach_default) = (self.approach(), ApproachRules::default());
         if approach.min_move_warp_distance != approach_default.min_move_warp_distance {
             out.push(DigestEntry::new(
