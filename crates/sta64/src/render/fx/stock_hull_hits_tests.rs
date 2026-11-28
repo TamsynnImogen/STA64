@@ -290,3 +290,15 @@ fn the_dying_set_and_the_emitters_are_forgotten_at_a_matchs_end() {
     app.world_mut().run_system_once(forget).unwrap();
     assert!(app.world().resource::<DyingUnits>().0.is_empty() && app.world().resource::<Emitters>().0.is_empty());
 }
+
+#[test]
+fn a_beam_lost_with_its_target_raises_no_hull_hit_spark_since_it_does_no_damage() {
+    // Fired at unit 5 at tick 60, the unit is gone at tick 70, mid-life: the sim delivers no hit, so there is none to draw.
+    let fired = "{ at: 60, event: { Fired: { shooter: 1, weapon: BEAM, hardpoint: 0, target: { Entity: 5 } } } },";
+    let mut seen = 0;
+    let mut app = run_scene(Some(RenderProfile::Stock), true, fired, 90, |app, _| {
+        seen += app.world_mut().query::<&stock_shots::StockShot>().iter(app.world()).count();
+    });
+    assert!(seen > 0, "the beam was drawn");
+    assert!(flares(&mut app, FlareKind::HullHit).is_empty() && app.world().resource::<HullHitPoints>().0.is_empty());
+}

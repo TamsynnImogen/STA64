@@ -202,7 +202,8 @@ const BEAMS_TAG: u64 = 0x6265_616d_735f_3031;
 /// times the weapon's range (`beam_damage_at_end`; a constant of the rule, not a data key).
 /// Measured, repeated, with controls, on stock Armada II; also read from the executable,
 /// static.
-pub(crate) const BEAM_BREAK_RANGE_FACTOR: i32 = 2;
+/// Public so the client's drawing breaks a beam at the same distance (one source).
+pub const BEAM_BREAK_RANGE_FACTOR: i32 = 2;
 
 /// The ordnance class of the regular beam, the one class the evidence for
 /// `beam_damage_at_end` covers (a data key value, as in `sta_content::weapon::BEAM_CLASSES`).
