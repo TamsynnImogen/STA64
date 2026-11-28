@@ -135,13 +135,14 @@ impl StockLayout {
         Self { cfg: cfg.clone(), screen, canvas, fit, scale, scale_x, hud, a2_info: false }
     }
 
-    /// `(scale, scale_x)` of the layout [`for_aspect_fit`](Self::for_aspect_fit) would build, without
-    /// building it: the HUD's screen units per canvas unit, vertical and horizontal.
-    pub fn scales_for_aspect(cfg: &GuiLayout, aspect: f32, fit: HudFit) -> (f32, f32) {
+    /// `(screen, hud height)` of the layout [`for_aspect_fit`](Self::for_aspect_fit) would build,
+    /// without building it, in the HUD's 1080-line theme units: the window and the height of the
+    /// HUD's area (the whole window when stretched, the centred area otherwise).
+    pub fn extent_for_aspect(cfg: &GuiLayout, aspect: f32, fit: HudFit) -> (Vec2, f32) {
         let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 16.0 / 9.0 };
         let screen = Vec2::new(super::super::layout::SCREEN_H * aspect, super::super::layout::SCREEN_H);
-        let (scale, scale_x, _) = fit_scales(canvas_of(cfg), screen, fit);
-        (scale, scale_x)
+        let (_, _, hud) = fit_scales(canvas_of(cfg), screen, fit);
+        (screen, hud.h)
     }
 
     /// The layout for a window of this aspect, in the HUD's 1080-line theme units.
