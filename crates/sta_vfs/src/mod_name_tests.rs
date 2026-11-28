@@ -53,12 +53,50 @@ fn bad_name(r: Result<Vfs, VfsError>) -> (String, String) {
 
 #[test]
 fn a_folder_name_is_one_plain_name_on_every_platform() {
-    for good in ["Fleet Ops 4.0", "Mod", "a.b", "..x", "x..", " lead", "Name (v2)", "ÄÖ", "ab:c", "xy:"] {
+    for good in ["Fleet Ops 4.0", "Mod", "a.b", "..x", ".hidden", "a b", "a..b", " lead", "Name (v2)", "ÄÖ", "ab:c", "xy:"] {
         assert!(single_folder_name(good), "{good:?}");
     }
     for bad in ["", ".", "..", "a/b", "a\\b", "../x", "..\\x", "/etc", "\\x", "C:", "c:x", "C:\\x", "\\\\server\\share", "a\0b", "x/"] {
         assert!(!single_folder_name(bad), "{bad:?}");
     }
+    // A dot or a space at the end: only dots (the mods folder itself where the system drops them), a name
+    // with a dot or a space after it (another folder's name there), only spaces, and mixtures.
+    for bad in ["...", "....", "x.", "x..", "Mod.", "Mod ", "Mod  ", "Mod. ", "Mod .", " ", "  ", ". ", ".. ", " ."] {
+        assert!(!single_folder_name(bad), "{bad:?}");
+    }
+}
+
+#[test]
+fn a_name_or_a_parent_entry_ending_in_a_dot_or_a_space_is_refused_and_names_who_asked() {
+    let t = Tmp::new("trailing");
+    t.write("Data/odf/base.odf", "base");
+    t.write("Data/Mods/Real/info.ini", "[mod]\n");
+    t.write("Data/Mods/Real/odf/r.odf", "real");
+    t.write("Data/Mods/Other/info.ini", "[mod]\n");
+    // the name given
+    for name in ["...", "....", "Real.", "Real..", "Real ", "Real. ", " "] {
+        let (got, asked_by) = bad_name(Vfs::mount_install(&t.0, Some(name)));
+        assert_eq!(got, name);
+        assert!(asked_by.contains("command line"), "{asked_by}");
+        assert!(matches!(mod_chain(&t.data(), name), Err(VfsError::BadModName { .. })), "{name:?}");
+        assert!(matches!(mod_chain_info(&t.data(), name), Err(VfsError::BadModName { .. })), "{name:?}");
+    }
+    // a parent entry: the ini reader trims spaces around a value, so the forms that reach the check end in a dot
+    for (i, parent) in ["...", "....", "Real.", "Real..", "Real .", ". ."].iter().enumerate() {
+        let child = format!("Child{i}");
+        t.write(&format!("Data/Mods/{child}/info.ini"), &format!("[mod]\nParentMod={parent}\n"));
+        let (got, asked_by) = bad_name(Vfs::mount_install(&t.0, Some(&child)));
+        assert_eq!(&got, parent);
+        assert!(asked_by.contains(&child) && asked_by.contains("ParentMod"), "{asked_by}");
+        assert!(matches!(mod_chain(&t.data(), &child), Err(VfsError::BadModName { .. })), "{child}");
+    }
+    // a parent entry with spaces around it is the plain name, as before
+    t.write("Data/Mods/Spaced/info.ini", "[mod]\nParentMod =  Real  \n");
+    let v = Vfs::mount_install(&t.0, Some("Spaced")).unwrap();
+    assert_eq!(layers(&v), ["Spaced", "Real", "Data"]);
+    // the message says what is wrong
+    let e = Vfs::mount_install(&t.0, Some("...")).err().unwrap().to_string();
+    assert!(e.contains("\"...\"") && e.contains("dot or space at the end"), "{e}");
 }
 
 #[test]
@@ -137,6 +175,28 @@ fn the_mod_listing_never_joins_a_name_onto_a_path() {
 mod links {
     use super::*;
     use std::os::unix::fs::symlink;
+
+    /// The list offers what the mount takes: a mod folder that is a link to a folder is listed (the player can
+    /// pick the mod they linked in), a link that leads nowhere or to a file is not.
+    #[test]
+    fn the_mod_list_has_a_linked_mod_folder_and_skips_a_link_that_is_no_folder() {
+        let t = Tmp::new("list_links");
+        t.write("Data/Mods/Real/info.ini", "[mod]\nName=Real\n");
+        t.write("elsewhere/Kept/info.ini", "[mod]\nName=Kept elsewhere\nParentMod=Real\n");
+        t.write("elsewhere/a_file", "not a folder");
+        symlink(t.0.join("elsewhere/Kept"), t.0.join("Data/Mods/Linked")).unwrap();
+        symlink(t.0.join("elsewhere/gone"), t.0.join("Data/Mods/Dangling")).unwrap();
+        symlink(t.0.join("elsewhere/a_file"), t.0.join("Data/Mods/ToFile")).unwrap();
+        let (mods, notes) = crate::mods::list_mods(&t.data()).unwrap();
+        let folders: Vec<&str> = mods.iter().map(|m| m.folder.as_str()).collect();
+        assert_eq!(folders, ["Linked", "Real"], "notes: {notes:?}");
+        let linked = crate::mods::find_mod(&mods, "linked").expect("listed under the link's name");
+        assert_eq!(linked.name, "Kept elsewhere", "its own info.ini was read through the link");
+        assert!(notes.iter().all(|n| !n.contains("Dangling") && !n.contains("ToFile")), "skipped as no folder, without a note: {notes:?}");
+        // and the list's own chain and the mount agree on it
+        assert!(crate::mods::chain(&mods, "Linked").is_ok());
+        assert_eq!(layers(&Vfs::mount_install(&t.0, Some("Linked")).unwrap()), ["Linked", "Real", "Data"]);
+    }
 
     #[test]
     fn a_link_to_a_sibling_mod_is_followed_as_a_parent_and_one_that_leaves_the_mods_folder_is_refused_as_a_parent() {
