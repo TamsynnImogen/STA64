@@ -54,6 +54,8 @@
 mod guard;
 #[cfg(test)]
 mod guard_tests;
+#[cfg(test)]
+mod warp_gate_tests;
 
 use serde::{Deserialize, Serialize};
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
@@ -65,9 +67,13 @@ use crate::movement::approach;
 use crate::world::{Entity, EntityKind, Fnv, Table};
 use crate::Sim;
 
-/// Where a warp move asks for warp: farther than this from the goal.
-fn too_close_to_warp() -> Fixed {
-    Fixed::from_int(800)
+/// Where a warp move asks for warp: strictly farther than this from the point it flies to,
+/// centre to point. The rules file's `cfgTOO_CLOSE_TO_WARP` (`Rules::approach`, #1102; read
+/// from the executable, static), or its INTERIM default without content or without the key.
+/// INTERIM too: the original tests it once, when the order is handled; STA64 tests it at
+/// every attempt to enter warp.
+fn too_close_to_warp(sim: &Sim) -> Fixed {
+    sim.content.as_deref().map_or(sta_content::ApproachRules::DEFAULT_TOO_CLOSE_TO_WARP, |db| db.rules().approach().too_close_to_warp)
 }
 
 /// Scout cells and radius step.
@@ -535,7 +541,8 @@ impl Sim {
     }
 
     /// Plans for the warp moves of this tick (ascending id).
-    pub(crate) fn steer_warp_moves(&mut self, gravity: &crate::movement::gravity::GravityWells) -> Vec<(EntityId, Plan)> {
+    /// `caps`: the nebula speed caps of this tick (ascending id).
+    pub(crate) fn steer_warp_moves(&mut self, gravity: &crate::movement::gravity::GravityWells, caps: &[(EntityId, (Fixed, Fixed))]) -> Vec<(EntityId, Plan)> {
         let mut plans = Vec::new();
         if self.scripted.is_empty() {
             return plans;
@@ -562,10 +569,10 @@ impl Sim {
             // The engine steers while it warps and so may start inside the
             // `headingCloseEnoughForWarp` band; STA64's warp flies straight, so the
             // tight gate stays for keyed units too (the band is read, not used).
-            let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
+            let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp(self) };
             let radius = db_radius(self, u);
             let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && aligned
-                && to_goal >= approach::warp_lead(vw, vi, radius) && !gravity.suppresses(u.pos, radius);
+                && to_goal >= approach::warp_lead(vw, vi, radius) && !gravity.suppresses(u.pos, radius) && self.warp_gates_pass(u, caps);
             // Armada II gates the start on 0.9 of impulse speed; Armada I's
             // throttle factor applies at once.
             let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;
