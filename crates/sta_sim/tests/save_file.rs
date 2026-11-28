@@ -694,7 +694,8 @@ fn not_a_save_file() {
 #[test]
 fn another_container_version_is_refused_not_migrated() {
     let (_, mut bytes) = a_save();
-    for found in [0u16, 2, 77] {
+    // version 1 is the one before the warp option (#1102): refused like any other
+    for found in [0u16, 1, 77] {
         bytes[4..6].copy_from_slice(&found.to_le_bytes());
         let e = load(&bytes, content(), map_source()).err().expect("refused");
         assert_eq!(e, SaveError::ContainerVersion { found, expected: save::CONTAINER_VERSION });

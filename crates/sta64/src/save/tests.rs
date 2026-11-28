@@ -664,7 +664,9 @@ fn a_file_of_another_version_or_a_damaged_one_is_refused_with_found_and_expected
     let listed = container::store::list(&dir, None).unwrap();
     assert_eq!(listed.len(), 4, "refused files are listed, not hidden");
     let reason = |name: &str| listed.iter().find(|l| l.file_name == name).unwrap().outcome.as_ref().err().map(ToString::to_string);
-    assert_eq!(reason("other.stasave").as_deref().map(|r| r.contains("version 9") && r.contains("reads version 1")), Some(true), "{:?}", reason("other.stasave"));
+    // the number this build reads is the container's own constant, not a number written here
+    let reads = format!("reads version {}", sta_sim::save::CONTAINER_VERSION);
+    assert_eq!(reason("other.stasave").as_deref().map(|r| r.contains("version 9") && r.contains(&reads)), Some(true), "{:?}", reason("other.stasave"));
     assert!(reason("empty.stasave").is_some());
     assert!(listed.iter().any(|l| l.path == *path && l.outcome.is_ok()));
 
@@ -672,7 +674,7 @@ fn a_file_of_another_version_or_a_damaged_one_is_refused_with_found_and_expected
     a.world_mut().write_message(LoadMatch { path: dir.join("other.stasave") });
     a.update();
     let out = drain::<LoadOutcome>(&mut a);
-    assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("version 9") && reason.contains("reads version 1")), "{out:?}");
+    assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("version 9") && reason.contains(&reads)), "{out:?}");
     assert_eq!(state(&a), AppState::InGame);
     // Damage past the header is found too before the match is left: the whole file is checked first.
     a.world_mut().write_message(LoadMatch { path: dir.join("damaged.stasave") });
