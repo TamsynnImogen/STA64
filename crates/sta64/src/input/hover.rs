@@ -3,9 +3,9 @@
 use bevy::prelude::*;
 use sta_sim::{EntityId, PlayerId};
 
-use super::hover_pick::{Candidate, Sticky, pick};
+use super::hover_pick::{CanvasUnit, Candidate, Sticky, pick};
 use super::orders::Aim;
-use super::select::{AimState, target_seen};
+use super::select::{AimState, Targetable, target_seen, unit_under_where};
 use crate::frontend::scene::MenuScene;
 use crate::render::overlays::{ModelBounds, project_bounds};
 use crate::render::strategic::Strategic;
@@ -74,7 +74,7 @@ pub fn tick_readout(time: Option<Res<Time<Real>>>, hovered: Option<Res<HoveredUn
     readout.tick(dt, unit.map(|(id, _)| id), team);
 }
 
-/// What the hover pick reads of an object: its sim id, size, place and (when the model is replaced by a
+/// What the hover rule reads of an object: its sim id, size, place and (when the model is replaced by a
 /// symbol) its icon.
 pub type HoverUnits<'w, 's> = Query<
     'w,
@@ -88,9 +88,19 @@ pub type HoverUnits<'w, 's> = Query<
     ),
 >;
 
-/// Track the current map hover without changing selection or issuing orders. The pick is the
-/// original's rule ([`super::hover_pick`]): nearest projected centre, accepted within a radius or
-/// inside the speed-scaled box, held for a moment on a fast mover over empty space.
+/// Whether the content follows the original's hover rule ([`super::hover_pick`]): the stock Armada II profile,
+/// for which it was read from the executable (static), and the profiles that run on the same engine line (the
+/// Fleet Operations family), INTERIM: not read for those, they follow the stock reading. Armada I, STA64's own
+/// content and a mount with no content keep the pick by ray that was there before.
+pub fn follows_original_pick(content: Option<&sta_content::ContentDb>) -> bool {
+    use sta_content::Profile;
+    content.is_some_and(|c| matches!(c.profile(), Profile::Sta2Classic | Profile::Fo3 | Profile::Fo4))
+}
+
+/// Track the current map hover without changing selection or issuing orders. Where the content follows the
+/// original's rule the pick is that rule (nearest projected centre, accepted within a radius or inside the
+/// speed-scaled box, held for a moment on a fast mover over empty space); elsewhere it is the pick by ray as
+/// before.
 #[allow(clippy::too_many_arguments)]
 pub fn track(
     aim: Option<Res<Aim>>,
@@ -99,22 +109,31 @@ pub fn track(
     menu_scene: Option<Res<MenuScene>>,
     feed: Option<Res<HudFeed>>,
     time: Option<Res<Time<Real>>>,
-    units: HoverUnits,
-    mut sticky: ResMut<Sticky>,
+    canvas: Option<Res<CanvasUnit>>,
+    units: Targetable,
+    rule_units: HoverUnits,
+    mut sticky: Local<Sticky>,
     mut hovered: ResMut<HoveredUnit>,
 ) {
     let aim = aim.and_then(|a| a.0);
-    let tracking = can_track(aim, pointer.is_some_and(|p| p.0), menu_scene.is_some(), link.as_deref(), feed.as_deref());
-    let next = match (tracking, aim, link.as_deref(), feed.as_deref()) {
-        (true, Some(aim), Some(link), Some(feed)) => {
-            let picked = pick(&candidates(&aim, link, feed, &units), aim.cursor);
-            let dt = time.map_or(0.0, |t| t.delta_secs());
-            sticky.resolve(dt, picked, |id| eligible(link, feed, id).then(|| link.curr().unit(id).map_or(0.0, |u| u.speed.to_f32())))
+    let over_hud = pointer.is_some_and(|p| p.0);
+    let rule = feed.as_deref().is_some_and(|f| follows_original_pick(f.content.as_deref()));
+    let next = if rule {
+        match (can_track(aim, over_hud, menu_scene.is_some(), link.as_deref(), feed.as_deref()), aim, link.as_deref(), feed.as_deref()) {
+            (true, Some(aim), Some(link), Some(feed)) => {
+                let unit_px = canvas.map_or(1.0, |c| c.0);
+                let picked = pick(&candidates(&aim, link, feed, &rule_units), aim.cursor, unit_px);
+                let dt = time.map_or(0.0, |t| t.delta_secs());
+                sticky.resolve(dt, picked, |id| eligible(link, feed, id).then(|| link.curr().unit(id).map_or(0.0, |u| u.speed.to_f32())))
+            }
+            _ => {
+                *sticky = Sticky::default();
+                None
+            }
         }
-        _ => {
-            *sticky = Sticky::default();
-            None
-        }
+    } else {
+        *sticky = Sticky::default();
+        resolve(aim, over_hud, menu_scene.is_some(), link.as_deref(), feed.as_deref(), &units)
     };
     if hovered.0 != next {
         hovered.0 = next;
@@ -160,6 +179,28 @@ fn candidates(aim: &AimState, link: &SimLink, feed: &HudFeed, units: &HoverUnits
     out
 }
 
+fn resolve(
+    aim: Option<AimState>,
+    over_hud: bool,
+    menu_open: bool,
+    link: Option<&SimLink>,
+    feed: Option<&HudFeed>,
+    units: &Targetable<'_, '_>,
+) -> Option<EntityId> {
+    if !can_track(aim, over_hud, menu_open, link, feed) {
+        return None;
+    }
+    let AimState { cursor, ray, .. } = aim?;
+    let link = link?;
+    let feed = feed?;
+    unit_under_where(cursor, ray, units, |id| {
+        link.curr().unit(id).is_some_and(|live| {
+            live.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
+                && !live.flags.contains(sta_sim::view::UnitFlags::DYING)
+        }) && feed.view.unit(id).is_some() && target_seen(&feed.view, Some(link.player()), id)
+    })
+}
+
 fn can_track(
     aim: Option<AimState>,
     over_hud: bool,
@@ -169,6 +210,10 @@ fn can_track(
 ) -> bool {
     aim.is_some() && !over_hud && !menu_open && link.is_some() && feed.is_some()
 }
+
+#[cfg(test)]
+#[path = "hover_rule_tests.rs"]
+mod rule_tests;
 
 #[cfg(test)]
 mod tests {
@@ -219,7 +264,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<HoveredUnit>()
-            .init_resource::<Sticky>()
             .init_resource::<Aim>()
             .init_resource::<HudPointer>()
             .insert_resource(Selection(vec![EntityId(99)]))
@@ -238,30 +282,11 @@ mod tests {
         app
     }
 
-    /// The screen centre of the 800 x 600 test view.
-    const CENTRE: Vec2 = Vec2::new(400.0, 300.0);
-
-    /// A right-handed perspective (depth 0..1) for the 800 x 600 view, vertical field of view 1 radian,
-    /// written out so the tests do not depend on a library constructor.
-    fn test_projection() -> Mat4 {
-        let (near, far) = (0.1f32, 1000.0f32);
-        let f = 1.0 / (0.5f32).tan();
-        let aspect = 800.0 / 600.0;
-        Mat4::from_cols(
-            Vec4::new(f / aspect, 0.0, 0.0, 0.0),
-            Vec4::new(0.0, f, 0.0, 0.0),
-            Vec4::new(0.0, 0.0, far / (near - far), -1.0),
-            Vec4::new(0.0, 0.0, near * far / (near - far), 0.0),
-        )
-    }
-
-    /// A camera at the origin looking down -Z through a perspective view: a unit at (0, 0, -d) is under
-    /// the screen centre, and the clip matrix projects every other point consistently with `cursor`.
     fn aim(cursor: Vec2, origin: Vec3, direction: Dir3) -> Aim {
         Aim(Some(AimState {
             cursor,
             ray: Ray3d::new(origin, direction),
-            clip_from_world: test_projection(),
+            clip_from_world: Mat4::IDENTITY,
             size: Vec2::new(800.0, 600.0),
         }))
     }
@@ -287,7 +312,7 @@ mod tests {
         let mut app = fixture_app(visible_world(UnitFlags::SELECTABLE));
         root(&mut app, 1, Vec3::new(0.0, 0.0, -100.0));
         app.world_mut()
-            .insert_resource(aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z));
+            .insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
         app.update();
         assert_eq!(app.world().resource::<HoveredUnit>().0, Some(EntityId(1)));
         assert_eq!(app.world().resource::<Selection>().0, [EntityId(99)]);
@@ -320,7 +345,7 @@ mod tests {
         root(&mut app, 1, Vec3::new(0.0, 0.0, -100.0));
         app.world_mut().resource_mut::<HoveredUnit>().0 = Some(EntityId(1));
         app.world_mut()
-            .insert_resource(aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z));
+            .insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
         app.world_mut().resource_mut::<HudPointer>().0 = true;
         app.update();
         assert_eq!(app.world().resource::<HoveredUnit>().0, None);
@@ -348,7 +373,7 @@ mod tests {
             let mut app = fixture_app(view);
             root(&mut app, 1, Vec3::new(0.0, 0.0, -50.0));
             root(&mut app, 2, Vec3::new(0.0, 0.0, -100.0));
-            app.insert_resource(aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z));
+            app.insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
             app.update();
             assert_eq!(app.world().resource::<HoveredUnit>().0, Some(EntityId(2)));
         }
@@ -364,7 +389,7 @@ mod tests {
 
         app.world_mut().resource_mut::<HoveredUnit>().0 = Some(EntityId(1));
         app.world_mut()
-            .insert_resource(aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z));
+            .insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
         app.world_mut().remove_resource::<SimLink>();
         app.update();
         assert_eq!(app.world().resource::<HoveredUnit>().0, None);
@@ -374,7 +399,7 @@ mod tests {
         stale.world_mut().resource_mut::<HoveredUnit>().0 = Some(EntityId(1));
         stale
             .world_mut()
-            .insert_resource(aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z));
+            .insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
         stale.update();
         assert_eq!(stale.world().resource::<HoveredUnit>().0, None);
 
@@ -383,7 +408,7 @@ mod tests {
         invalid.world_mut().resource_mut::<HoveredUnit>().0 = Some(EntityId(1));
         invalid
             .world_mut()
-            .insert_resource(aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z));
+            .insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
         invalid.update();
         assert_eq!(invalid.world().resource::<HoveredUnit>().0, None);
 
@@ -392,7 +417,7 @@ mod tests {
         not_selectable.world_mut().resource_mut::<HoveredUnit>().0 = Some(EntityId(1));
         not_selectable
             .world_mut()
-            .insert_resource(aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z));
+            .insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
         not_selectable.update();
         assert_eq!(not_selectable.world().resource::<HoveredUnit>().0, None);
     }
@@ -401,84 +426,17 @@ mod tests {
     fn menu_and_missing_link_clear_hover() {
         let mut app = fixture_app(visible_world(UnitFlags::SELECTABLE));
         root(&mut app, 1, Vec3::new(0.0, 0.0, -100.0));
-        let ray = aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z).0;
+        let ray = aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z).0;
         let link = app.world().resource::<SimLink>();
         let feed = app.world().resource::<HudFeed>();
         assert!(!can_track(ray, false, true, Some(link), Some(feed)));
         app.world_mut().resource_mut::<HoveredUnit>().0 = Some(EntityId(1));
         app.world_mut().remove_resource::<SimLink>();
         app.world_mut()
-            .insert_resource(aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z));
+            .insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
         app.update();
         assert_eq!(app.world().resource::<HoveredUnit>().0, None);
     }
-    /// Where a unit at `(x, 0, -depth)` is on the test screen: `aim` projects it, so the tests place the
-    /// pointer from the same matrix.
-    fn on_screen(position: Vec3) -> Vec2 {
-        let AimState { clip_from_world, size, .. } = aim(CENTRE, Vec3::ZERO, Dir3::NEG_Z).0.unwrap();
-        AimState { cursor: CENTRE, ray: Ray3d::new(Vec3::ZERO, Dir3::NEG_Z), clip_from_world, size }.project(position).unwrap()
-    }
-
-    fn world_with_speed(speed: f32) -> WorldView {
-        let mut u = unit(1, UnitFlags::SELECTABLE);
-        u.speed = Fixed::from_f64(f64::from(speed));
-        WorldView { units: vec![u], visibility: vec![(PlayerId(0), vec![EntityId(1)])], ..Default::default() }
-    }
-
-    /// The pick follows the screen-space rule: a still ship is hovered near its centre and not far beside
-    /// it, and a faster one is hovered farther out (the tolerance grows with its speed).
-    #[test]
-    fn the_pick_uses_the_radius_and_the_speed_scaled_box() {
-        let centre_world = Vec3::new(0.0, 0.0, -100.0);
-        let at = on_screen(centre_world);
-        // 12 world units at depth 100 is about 40 pixels: a big box, so only the sphere/box test decides.
-        let beside = |px: f32| at + Vec2::new(px, 0.0);
-        let hovered = |speed: f32, pointer: Vec2| {
-            let mut app = fixture_app(world_with_speed(speed));
-            root(&mut app, 1, centre_world);
-            app.insert_resource(aim(pointer, Vec3::ZERO, Dir3::NEG_Z));
-            app.update();
-            app.world().resource::<HoveredUnit>().0
-        };
-        // Within the fixed radius: hovered.
-        assert_eq!(hovered(0.0, beside(super::super::hover_pick::MIN_RADIUS_PX - 1.0)), Some(EntityId(1)));
-        // Far outside the sphere and the box: not hovered, however it moves.
-        assert_eq!(hovered(0.0, beside(400.0)), None);
-        // Just outside the still tolerance but inside the one a fast mover has.
-        let probe = (0..200).map(|i| i as f32).find(|px| hovered(0.0, beside(*px)).is_none()).unwrap();
-        assert_eq!(hovered(0.0, beside(probe)), None);
-        assert_eq!(hovered(500.0, beside(probe)), Some(EntityId(1)), "a fast mover is picked from farther away");
-    }
-
-    /// A fast mover stays hovered when the pointer leaves it over empty space, for a moment; a still ship
-    /// does not.
-    #[test]
-    fn a_fast_mover_stays_hovered_over_empty_space_and_a_still_ship_does_not() {
-        use bevy::time::TimeUpdateStrategy;
-        use std::time::Duration;
-        let centre_world = Vec3::new(0.0, 0.0, -100.0);
-        let on = on_screen(centre_world);
-        let empty = on + Vec2::new(300.0, 0.0);
-        for (speed, stays) in [(200.0, true), (0.0, false)] {
-            let mut app = fixture_app(world_with_speed(speed));
-            app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)));
-            root(&mut app, 1, centre_world);
-            app.insert_resource(aim(on, Vec3::ZERO, Dir3::NEG_Z));
-            app.update();
-            assert_eq!(app.world().resource::<HoveredUnit>().0, Some(EntityId(1)));
-            app.insert_resource(aim(empty, Vec3::ZERO, Dir3::NEG_Z));
-            app.update();
-            app.update();
-            assert_eq!(app.world().resource::<HoveredUnit>().0.is_some(), stays, "speed {speed}");
-            if stays {
-                for _ in 0..20 {
-                    app.update();
-                }
-                assert_eq!(app.world().resource::<HoveredUnit>().0, None, "held for a limited time only");
-            }
-        }
-    }
-
     #[test]
     fn readout_timing_team_and_pause_rules() {
         let (a, b, c) = ((EntityId(1), PlayerId(1)), (EntityId(2), PlayerId(1)), (EntityId(3), PlayerId(2)));

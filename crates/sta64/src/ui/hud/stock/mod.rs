@@ -554,6 +554,8 @@ pub(super) fn refresh(
             window: l.screen,
             fit: l.fit,
         })));
+        // The hover rule's fixed radius is in the HUD's canvas units: window pixels per canvas unit.
+        commands.insert_resource(crate::input::hover_pick::CanvasUnit(state.layout.as_ref().map_or(1.0, |l| l.scale)));
         commands.insert_resource(crate::render::overlays::GaugeStyle::from_cfg(
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeHeight")),
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeGap")),
