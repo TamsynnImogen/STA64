@@ -89,6 +89,11 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // RND-07 cull distances and marks, RND-22 render profile, RND-28 developer shader shadowing
         app.add_plugins((crate::render::cull::CullPlugin, crate::render::profile::ProfilePlugin, crate::render::shader_shadow::ShaderShadowPlugin));
 
+        // `--wireframe`: models as lines (debug and promo renders); nothing is added without it.
+        if let Some(view) = crate::render::wireframe::WireframeView::from_cfg(cfg) {
+            app.add_plugins(crate::render::wireframe::WireframeViewPlugin(view));
+        }
+
         // ui —
         app.add_plugins(crate::ui::theme::ThemePlugin);
         if map_view {
