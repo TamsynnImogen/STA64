@@ -54,6 +54,8 @@
 mod guard;
 #[cfg(test)]
 mod guard_tests;
+#[cfg(test)]
+mod warp_gate_tests;
 
 use serde::{Deserialize, Serialize};
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
@@ -65,9 +67,13 @@ use crate::movement::approach;
 use crate::world::{Entity, EntityKind, Fnv, Table};
 use crate::Sim;
 
-/// Where a warp move asks for warp: farther than this from the goal.
-fn too_close_to_warp() -> Fixed {
-    Fixed::from_int(800)
+/// Where a warp move asks for warp: strictly farther than this from the point it flies to,
+/// centre to point. The rules file's `cfgTOO_CLOSE_TO_WARP` (`Rules::approach`, #1102; read
+/// from the executable, static), or its INTERIM default without content or without the key.
+/// INTERIM too: the original tests it once, when the order is handled; STA64 tests it at
+/// every attempt to enter warp.
+fn too_close_to_warp(sim: &Sim) -> Fixed {
+    sim.content.as_deref().map_or(sta_content::ApproachRules::DEFAULT_TOO_CLOSE_TO_WARP, |db| db.rules().approach().too_close_to_warp)
 }
 
 /// Scout cells and radius step.
@@ -237,6 +243,10 @@ impl Sim {
         if ids.is_empty() || matches!(order, Order::Patrol { points, .. } if points.is_empty()) {
             return false;
         }
+        if let Order::MoveWarp { to, queue: true, .. } = order {
+            self.append_warp_move(player, &ids, *to);
+            return true;
+        }
         // Like every order that replaces what a craft is doing.
         self.weapons.stop_attack(&self.units, player, &ids);
         self.economy.cancel(&self.units, player, &ids);
@@ -294,7 +304,8 @@ impl Sim {
                     self.scripted.rows.insert(id, Job::AttackPoint { at: *at });
                 }
             }
-            Order::MoveWarp { to, queue, .. } => {
+            // Not queued (the queued one was appended above): the course is replaced.
+            Order::MoveWarp { to, .. } => {
                 for &id in &ids {
                     if self.approach_warp.contains(id)
                         && let Some(unit) = self.units.get(id)
@@ -308,7 +319,6 @@ impl Sim {
                         }
                     }
                     self.set_target(id, Some(*to));
-                    let _ = queue; // a queued warp move replaces the course, as the plain one does
                     self.scripted.rows.insert(id, Job::Warp);
                 }
             }
@@ -321,6 +331,40 @@ impl Sim {
             _ => return false,
         }
         true
+    }
+
+    /// A queued warp move appends: STA64's own rule (#1173). In the original a new move
+    /// order replaces the course for warp and plain moves alike (read from the executable,
+    /// static; not measured; one profile only).
+    ///
+    /// It is appended as a queued plain move is (`move_group`): a craft that is flying or
+    /// attacking keeps what it is doing and its earlier legs and gets `to` as its last leg;
+    /// an idle craft starts for `to` at once. Nothing is cancelled, but a patrol, which
+    /// never ends, is replaced, as a queued plain move does.
+    ///
+    /// Warp is a property of the craft's whole course ([`Job::Warp`] ends when no leg is
+    /// left), not of one leg: from this order on the craft warps on every leg that is far
+    /// and aligned enough, the ones queued before it included. A craft that has another
+    /// scripted order keeps it and flies the appended leg as a plain one.
+    fn append_warp_move(&mut self, player: PlayerId, ids: &[EntityId], to: Vec3) {
+        let patrols: Vec<EntityId> =
+            ids.iter().copied().filter(|id| matches!(self.scripted.job(*id), Some(Job::Patrol { .. }))).collect();
+        self.clear_scripted(player, &patrols);
+        for &id in ids {
+            // As every re-issued order: the stuck-order watch starts afresh, so what it
+            // counted on the legs before cannot end the order and drop the new leg.
+            self.watchdog.remove(id);
+            let idle = self.unit(id).is_some_and(|u| u.target.is_none()) && self.weapons.attack_of(id).is_none();
+            if idle {
+                self.set_target(id, Some(to));
+                self.movement.clear_waypoints(id);
+            } else {
+                self.movement.push_waypoint(id, to);
+            }
+            if self.scripted.job(id).is_none() {
+                self.scripted.rows.insert(id, Job::Warp);
+            }
+        }
     }
 
     /// A plain move of a craft whose physics ODF has `tooCloseForWarp`
@@ -497,7 +541,8 @@ impl Sim {
     }
 
     /// Plans for the warp moves of this tick (ascending id).
-    pub(crate) fn steer_warp_moves(&mut self, gravity: &crate::movement::gravity::GravityWells) -> Vec<(EntityId, Plan)> {
+    /// `caps`: the nebula speed caps of this tick (ascending id).
+    pub(crate) fn steer_warp_moves(&mut self, gravity: &crate::movement::gravity::GravityWells, caps: &[(EntityId, (Fixed, Fixed))]) -> Vec<(EntityId, Plan)> {
         let mut plans = Vec::new();
         if self.scripted.is_empty() {
             return plans;
@@ -524,10 +569,10 @@ impl Sim {
             // The engine steers while it warps and so may start inside the
             // `headingCloseEnoughForWarp` band; STA64's warp flies straight, so the
             // tight gate stays for keyed units too (the band is read, not used).
-            let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
+            let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp(self) };
             let radius = db_radius(self, u);
             let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && aligned
-                && to_goal >= approach::warp_lead(vw, vi, radius) && !gravity.suppresses(u.pos, radius);
+                && to_goal >= approach::warp_lead(vw, vi, radius) && !gravity.suppresses(u.pos, radius) && self.warp_gates_pass(u, caps);
             // Armada II gates the start on 0.9 of impulse speed; Armada I's
             // throttle factor applies at once.
             let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;

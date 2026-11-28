@@ -589,6 +589,9 @@ pub(super) fn wireframe_layers_of(
 /// `GUI_RD_OFFICERS_VTOOLTIP` string says so); the number format itself is assumed.
 const SEPARATE_RESOURCES: [(&str, usize, &str); 3] = super::SEPARATE_RESOURCES;
 
+/// Text colour of the separate resource readouts (also what the GPU test samples).
+pub(super) const SEPARATE_READOUT_TEXT: Color = Color::srgb(0.5, 0.5, 0.5);
+
 fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
     for (prefix, id, flag) in SEPARATE_RESOURCES {
         let Some(area) = layout.panel(prefix) else {
@@ -611,9 +614,9 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
             continue;
         };
         let value = resource_text(feed, id).unwrap_or_default();
-        // Armada.exe's DilithiumDisplay, CrewDisplay and OfficerDisplay all
-        // pass the same 0.5 RGB grey to the font draw (read from the binary).
-        readout_tip(commands, root, r, value, Color::srgb(0.5, 0.5, 0.5), theme.small_size, Some(StockText::Resource(id)), resource_tip(feed, id));
+        // The three readouts all draw in one colour of their own, not the theme's text
+        // colour (read from the executable, static).
+        readout_tip(commands, root, r, value, SEPARATE_READOUT_TEXT, theme.small_size, Some(StockText::Resource(id)), resource_tip(feed, id));
     }
 }
 

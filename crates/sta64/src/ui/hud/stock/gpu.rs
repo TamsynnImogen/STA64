@@ -1415,9 +1415,10 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
         }
         let shot = frames.lock().unwrap().first().cloned().unwrap_or_else(|| panic!("{label}: no GPU capture"));
         let rgba = shot.try_into_dynamic().expect("GPU image conversion").to_rgba8();
-        // The numerals are drawn in the text colour inside each text rectangle (panel art
-        // there is dark or not that colour), so lost text fails.
-        let text_colour = UiProfile::Armada2.theme().text.to_srgba();
+        // The numerals are drawn in the separate readouts' own colour (not the theme's text
+        // colour) inside each text rectangle (panel art there is dark or not that colour),
+        // so lost text fails.
+        let text_colour = super::info::SEPARATE_READOUT_TEXT.to_srgba();
         let want = [text_colour.red, text_colour.green, text_colour.blue].map(|v| (v * 255.0).round() as i16);
         for prefix in ["officer", "crew", "dilithium"] {
             let area = stock.panel(prefix).expect("panel");

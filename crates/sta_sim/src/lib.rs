@@ -559,10 +559,11 @@ impl Sim {
         self.assist_idle();
         self.step_scripted();
         let gravity_wells = self.gravity_wells();
-        let mut plans = self.steer_attackers(&gravity_wells);
-        // SIM-75: who is in which nebula, from the positions at the tick's start.
+        // SIM-75: who is in which nebula, from the positions at the tick's start. Before the
+        // warp decisions: a cap that leaves no room above impulse blocks warp (#1102).
         let nebulae = self.nebula_contents();
         let speed_caps = if nebulae.is_empty() { Vec::new() } else { self.nebula_speed_caps(&nebulae) };
+        let mut plans = self.steer_attackers(&gravity_wells, &speed_caps);
         // Before routing and avoidance replace targets with detours.
         let gate_goers = self.wormhole_goers();
         let routed = self.route_orders();
@@ -570,7 +571,7 @@ impl Sim {
         self.brake_for_attack_detours(&mut plans);
         // Warp eligibility follows the aim this tick will actually use, including
         // temporary navigation and avoidance targets.
-        let warps = self.steer_warp_moves(&gravity_wells);
+        let warps = self.steer_warp_moves(&gravity_wells, &speed_caps);
         if !warps.is_empty() {
             plans.extend(warps);
             plans.sort_by_key(|p| p.0);
@@ -787,7 +788,7 @@ impl Sim {
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
         let active_point_defence = self.content.as_deref().map_or_else(Vec::new, |db| self.weapons.active_point_defence(db, &self.units));
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, move_modes: self.move_mode_rows(), ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.effect_view(self.tick, &self.units, self.content.as_deref()) }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, move_modes: self.move_mode_rows(), ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.effect_view(self.tick, &self.units, self.content.as_deref()), warp_rows: self.warp_rows() }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -1029,12 +1030,6 @@ impl WorldSource for Sim {
 
     fn system_view(&self) -> Vec<combat::damage::SystemView> {
         Sim::system_view(self)
-    }
-
-    fn warp_phases(&self) -> Vec<(EntityId, bool)> {
-        self.approach_warp.to_rec().into_iter()
-            .map(|(id, phase)| (id, phase == movement::approach::IN_WARP))
-            .collect()
     }
 
     fn impulse_caps(&self) -> Vec<(EntityId, Fixed)> {

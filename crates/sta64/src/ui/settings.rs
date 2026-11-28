@@ -8,7 +8,7 @@
 //! - `max_selection`, Refit's `MaxSelection` with its range ([`MaxSelection`], 17..=120);
 //! - `ui_profile = lcars | stock` ([`UiPreference`]);
 //! - the options screen's volumes (`master`, `music`, `effects`, `voice`, `0..=100`),
-//!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
+//!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps`, `cinematic_window` ([`Settings`]);
 //! - optional graphics choices (`msaa`, `graphics_detail`, `shadows`, `bloom`);
 //! - `cursor_scale = 0.5 ..= 3` (UI-45), the mouse cursor's size factor; out-of-range values clamp;
 //! - `hud_layout = centred | stretched`, how the stock-look HUD sits on a window that is not its sheet's aspect
@@ -78,7 +78,7 @@ impl Default for Stored {
 }
 
 const NUMBERS: [&str; 5] = ["master", "music", "effects", "voice", "scroll_speed"];
-const FLAGS: [&str; 3] = ["fullscreen", "vsync", "show_fps"];
+const FLAGS: [&str; 4] = ["fullscreen", "vsync", "show_fps", "cinematic_window"];
 
 fn parse_bool(v: &str) -> Option<bool> {
     match v.trim().to_ascii_lowercase().as_str() {
@@ -209,7 +209,7 @@ impl Stored {
         for (name, key) in [("master", K::MasterVolume), ("music", K::MusicVolume), ("effects", K::EffectsVolume), ("voice", K::VoiceVolume), ("scroll_speed", K::ScrollSpeed)] {
             let _ = writeln!(t, "{name} = {}", st.number(key).unwrap_or(0.0));
         }
-        for (name, v) in [("fullscreen", st.fullscreen), ("vsync", st.vsync), ("show_fps", st.show_fps)] {
+        for (name, v) in [("fullscreen", st.fullscreen), ("vsync", st.vsync), ("show_fps", st.show_fps), ("cinematic_window", st.cinematic_window)] {
             let _ = writeln!(t, "{name} = {v}");
         }
         let _ = writeln!(t, "msaa = {}", st.msaa.map_or("auto".to_owned(), |v| v.to_string()));
@@ -246,6 +246,7 @@ fn flag_key(name: &str) -> crate::frontend::screens::SettingKey {
     match name {
         "fullscreen" => K::Fullscreen,
         "vsync" => K::Vsync,
+        "cinematic_window" => K::CinematicWindow,
         _ => K::ShowFps,
     }
 }
@@ -548,6 +549,23 @@ mod tests {
             .add_plugins(SettingsPlugin { path: Some(path.to_path_buf()), install_root: None, lcars_forced, intro_forced });
         app.world_mut().resource_mut::<SettingsStore>().delay = 0.0;
         app
+    }
+
+    /// The Armada II window's switch is on by default, is read and written as `cinematic_window`, and a bad value keeps
+    /// the default.
+    #[test]
+    fn the_cinematic_window_switch_is_stored_and_defaults_on() {
+        assert!(Stored::default().settings.cinematic_window);
+        let (off, warnings) = Stored::parse("cinematic_window = off\n");
+        assert!(!off.settings.cinematic_window && warnings.is_empty(), "{warnings:?}");
+        assert!(off.to_text().contains("cinematic_window = false"));
+        let (back, _) = Stored::parse(&off.to_text());
+        assert!(!back.settings.cinematic_window);
+        let (bad, warnings) = Stored::parse("cinematic_window = maybe\n");
+        assert!(bad.settings.cinematic_window && warnings.iter().any(|w| w.contains("cinematic_window")), "{warnings:?}");
+        let mut s = Settings::default();
+        s.set_flag(SettingKey::CinematicWindow, false);
+        assert_eq!(s.flag(SettingKey::CinematicWindow), Some(false));
     }
 
     #[test]

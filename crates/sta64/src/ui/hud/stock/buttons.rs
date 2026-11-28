@@ -214,7 +214,7 @@ pub(in crate::ui::hud) fn next_idle(feed: &HudFeed, last: Option<sta_sim::Entity
 }
 
 /// Presses of the panel buttons.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(in crate::ui::hud) fn press(
     mut clicks: MessageReader<ButtonClicked>,
     buttons: Query<&PanelButton>,
@@ -226,6 +226,7 @@ pub(in crate::ui::hud) fn press(
     mut last: Local<Option<sta_sim::EntityId>>,
     mut more: ResMut<ShowMore>,
     tactical: Option<ResMut<crate::input::camera_tactical::TacticalView>>,
+    (time, mut last_picture_click, a2_window): (Res<Time>, Local<Option<f64>>, Query<(), With<super::window::CinematicSwitch>>),
 ) {
     let mut objectives = objectives;
     let mut tactical = tactical;
@@ -254,6 +255,16 @@ pub(in crate::ui::hud) fn press(
                 }
             }
             Ok(PanelButton::ActionView) => {
+                // A double click swaps the views (strategic and tactical) and then points at the shown unit, as
+                // a single click does (read from the executable, static; the original's double-click interval
+                // is not established: INTERIM, the selection's 0.4 s). Armada II's window only: Armada I's is
+                // its own rule set (not read).
+                let now = time.elapsed_secs_f64();
+                let double = a2_window.contains(*entity) && last_picture_click.is_some_and(|t| now - t <= crate::input::select::DOUBLE);
+                *last_picture_click = if double { None } else { Some(now) };
+                if double && let Some(view) = tactical.as_mut() {
+                    view.request_toggle();
+                }
                 // Only a unit the renderer still has (in sight): the frame it leaves sight, the click does nothing.
                 let drawn = |id| entities.as_ref().is_some_and(|e| e.0.contains_key(&id));
                 if let Some(u) = subject.as_ref().and_then(|s| s.0).filter(|&id| drawn(id)).and_then(|id| feed.view.unit(id)) {

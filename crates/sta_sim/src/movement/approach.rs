@@ -146,6 +146,40 @@ pub(crate) fn warp_lead(vw: Fixed, vi: Fixed, r: Fixed) -> Fixed {
     (vw + vi) / Fixed::from_int(2) + Fixed::from_int(2) * (k - Fixed::ONE) * vi / (vw - vi) * r
 }
 
+/// The engines system's slot in `UnitDef::system_hit_points` and in a subsystem row.
+const ENGINES: usize = 0;
+
+/// The share of its hit points the engines system must still have for warp, as a fraction
+/// numerator and denominator (a constant of the rule, not a data key; #1102).
+pub(crate) const WARP_ENGINES_SHARE: (i128, i128) = (3, 5);
+
+/// Whether an engines system with `hit_points` and `damage` (fixed-point bits, as a
+/// subsystem row holds it) is healthy enough for warp: what is left of it, over its maximum,
+/// is at or above [`WARP_ENGINES_SHARE`]; just below fails. Read from the executable, static;
+/// the threshold is not measured.
+///
+/// STA64's own choice, the evidence not settling it: a craft whose engines system has no
+/// hit points (so it cannot be damaged) is allowed.
+pub(crate) fn engines_share_met(hit_points: Fixed, damage: i64) -> bool {
+    let max = i128::from(hit_points.to_bits());
+    if max <= 0 {
+        return true;
+    }
+    let left = (max - i128::from(damage)).max(0);
+    left * WARP_ENGINES_SHARE.1 >= max * WARP_ENGINES_SHARE.0
+}
+
+/// Whether this tick's speed ceiling leaves room for warp: the craft's impulse speed must
+/// lie strictly below it. `cap` is the craft's nebula speed cap of this tick, `(impulse,
+/// warp)`, the one thing in STA64 that lowers the ceiling; with none there is no ceiling.
+/// (A plan's own cap blocks warp where the plan is made, and a scripted speed is the
+/// craft's impulse itself, not a cap.) Read from the executable, static; not measured.
+/// How a nebula's speed limit maps to the ceiling under Armada I's coefficient rule is not
+/// settled; `warp_gates` is off for that profile, so the question does not arise there.
+pub(crate) fn ceiling_allows_warp(impulse: Fixed, cap: Option<(Fixed, Fixed)>) -> bool {
+    cap.is_none_or(|(_, ceiling)| impulse < ceiling)
+}
+
 /// Distance and alignment of the current steering aim, in the map plane.
 pub(crate) fn warp_leg(unit: &Entity, goal: Vec3) -> (Fixed, bool) {
     let (gx, gz) = (goal.x - unit.pos.x, goal.z - unit.pos.z);
@@ -156,9 +190,53 @@ pub(crate) fn warp_leg(unit: &Entity, goal: Vec3) -> (Fixed, bool) {
 }
 
 impl Sim {
+    /// The gates a craft's own state puts on warp this tick, for entering and for staying
+    /// (#1102): its engines system is on and has its share of hit points
+    /// ([`engines_share_met`]; a craft with no damage row is undamaged), and the tick's
+    /// speed ceiling leaves room ([`ceiling_allows_warp`]). A craft that fails one while at
+    /// warp leaves it the ordinary way, and warps again by itself once it passes.
+    ///
+    /// Under the feature switch `warp_gates` (the unit's, as `ContentDb::unit_features`
+    /// resolves it); off, or without content, every craft passes. INTERIM, not settled:
+    /// engines held by a special weapon or in stasis are not counted as offline here.
+    pub(crate) fn warp_gates_pass(&self, u: &Entity, caps: &[(EntityId, (Fixed, Fixed))]) -> bool {
+        let Some(db) = self.content.as_deref() else { return true };
+        let def = db.unit(u.def);
+        if !def.map_or(db.features(), |d| db.unit_features(d)).warp_gates {
+            return true;
+        }
+        if u.flags.contains(crate::view::UnitFlags::ENGINES_OFF) {
+            return false;
+        }
+        let hit_points = def.map_or(Fixed::ZERO, |d| d.system_hit_points[ENGINES]);
+        let damage = self.subsystems.get(u.id).map_or(0, |row| row.damage[ENGINES]);
+        let cap = caps.binary_search_by_key(&u.id, |c| c.0).ok().map(|i| caps[i].1);
+        engines_share_met(hit_points, damage) && ceiling_allows_warp(u.stats.max_speed, cap)
+    }
+
+    /// The view's warp rows (#1102 part 1), ascending id: derived from the
+    /// warp record and each craft's speed, never stored or hashed.
+    pub(crate) fn warp_rows(&self) -> Vec<crate::view::WarpRow> {
+        use crate::view::{WarpPhase, WarpRow};
+        self.approach_warp.to_rec().into_iter().filter_map(|(id, phase)| {
+            let u = self.units.get(id)?;
+            let leaving = phase == WARP_OUT;
+            let (len, done) = crate::kinematics::warp_ramp(&u.stats, u.speed, !leaving);
+            let (phase, started) = if leaving {
+                (WarpPhase::Leaving, done)
+            } else if u.speed < u.stats.warp_speed {
+                (WarpPhase::Entering, done)
+            } else {
+                (WarpPhase::AtWarp, len)
+            };
+            Some(WarpRow { id, phase, ramp_start: self.tick.saturating_sub(u64::from(started)), ramp_len: len })
+        }).collect()
+    }
+
     /// Set the course of every craft with an attack target and say how it
     /// steps this tick (ascending id). Runs before the movement step.
-    pub(crate) fn steer_attackers(&mut self, gravity: &GravityWells) -> Vec<(EntityId, Plan)> {
+    /// `caps`: the nebula speed caps of this tick (ascending id).
+    pub(crate) fn steer_attackers(&mut self, gravity: &GravityWells, caps: &[(EntityId, (Fixed, Fixed))]) -> Vec<(EntityId, Plan)> {
         let Some(db) = self.content.clone() else { return Vec::new() };
         let f = db.features();
         let min_warp = db.rules().approach().min_move_warp_distance;
@@ -243,7 +321,7 @@ impl Sim {
                     plan.cap = Some(combat);
                 }
                 let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && plan.cap.is_none() && aligned
-                    && to_goal >= warp_lead(vw, vi, r_own) && !gravity.suppresses(u.pos, r_own);
+                    && to_goal >= warp_lead(vw, vi, r_own) && !gravity.suppresses(u.pos, r_own) && self.warp_gates_pass(u, caps);
                 let still_braking = phase == Some(WARP_OUT) && u.speed > vi;
                 warp = if warp { can } else { can && far && u.speed > Fixed::from_f64(0.9) * vi && !still_braking };
                 // LUA-31: a keyed craft's warp speed below impulse caps the aligned far leg.
