@@ -46,12 +46,16 @@ fn live_app() -> (App, EntityId) {
 }
 
 fn live_app_with(profile: Option<RenderProfile>) -> (App, EntityId) {
+    live_app_in(profile, sta_content::Profile::Native)
+}
+
+fn live_app_in(profile: Option<RenderProfile>, content_profile: sta_content::Profile) -> (App, EntityId) {
     let mut def = UnitDef::new("warp_flash_test", "craft");
     def.hull = Fixed::from_int(100);
     def.radius = Fixed::from_int(20);
     def.movement = MoveStats::from_f32(20.0, 1.0, 1.0, 1.0, 1.0);
     def.movement.warp_speed = Fixed::from_int(100);
-    let content = Arc::new(ContentDb::builder().unit(def).build().unwrap());
+    let content = Arc::new(ContentDb::builder().profile(content_profile).unit(def).build().unwrap());
     let setup = GameSetup {
         seed: 41,
         map: Arc::new(MapDef::empty()),
@@ -376,4 +380,35 @@ fn without_the_shape_switch_the_stretch_from_the_derived_ramp_matches_the_speed_
     let worst = stock.iter().zip(&refit).map(|(a, b)| (a.1 - b.1).abs()).fold(0.0, f32::max);
     assert!(stock.iter().any(|r| r.1 > 1.5), "the craft was stretched");
     assert!(worst <= TOLERANCE, "the two stretches differ by {worst}");
+}
+
+/// `(the hull's stretch, the bubble's and the cap's)` of a craft at warp, under the look and the content profile.
+fn stretches_at_warp(look: Option<RenderProfile>, profile: sta_content::Profile) -> (f32, f32) {
+    use bevy::ecs::system::RunSystemOnce;
+    let (mut app, id) = live_app_in(look, profile);
+    app.update();
+    order(&mut app, id, true);
+    let mut at_warp = 0;
+    for _ in 0..1500 {
+        step(&mut app);
+        if app.world().resource::<SimLink>().real_curr().warp_of(id).is_some_and(|r| r.phase == WarpPhase::AtWarp) {
+            at_warp += 1;
+            if at_warp > 20 {
+                break;
+            }
+        }
+    }
+    assert!(at_warp > 20, "the craft reached warp");
+    app.world_mut().run_system_once(move |w: super::WarpStretch| (w.of(id), w.of_stock(id))).unwrap()
+}
+
+#[test]
+fn the_bubble_and_the_cap_take_the_hulls_stretch_under_the_stock_look_of_stock_armada_ii_only() {
+    use sta_content::Profile;
+    let (hull, shared) = stretches_at_warp(Some(RenderProfile::Stock), Profile::Sta2Classic);
+    assert!(hull > 1.4, "the hull is stretched at warp: {hull}");
+    assert_eq!(shared, hull, "one source: the bubble and the cap take the hull's factor");
+    assert_eq!(stretches_at_warp(Some(RenderProfile::Refit), Profile::Sta2Classic).1, 1.0, "the Remaster look: unchanged");
+    assert_eq!(stretches_at_warp(Some(RenderProfile::Stock), Profile::Native).1, 1.0, "no stock Armada II content: unchanged");
+    assert_eq!(stretches_at_warp(None, Profile::Sta2Classic).1, 1.0, "no profile resources: unchanged");
 }

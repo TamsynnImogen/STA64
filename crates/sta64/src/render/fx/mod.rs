@@ -19,7 +19,7 @@ pub mod stock_shield_hits;
 pub mod stock_shields_down;
 pub mod stock_shots;
 pub mod weapons;
-pub(super) mod warp_flash;
+pub(crate) mod warp_flash;
 
 use bevy::prelude::*;
 
