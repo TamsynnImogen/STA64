@@ -463,6 +463,8 @@ mod music_tests {
 }
 
 #[cfg(test)]
+mod convert_e2e_tests;
+#[cfg(test)]
 mod flow_tests;
 #[cfg(test)]
 mod mission_tests;
