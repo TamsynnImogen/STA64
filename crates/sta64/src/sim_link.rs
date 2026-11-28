@@ -45,7 +45,6 @@ pub struct SimLink {
     /// Resource-node amounts at the same tick as `curr` (UI-48).
     nodes: Vec<sta_sim::economy::view::NodeView>,
     systems: Vec<sta_sim::combat::damage::SystemView>,
-    warp_phases: Vec<(EntityId, bool)>,
     impulse_caps: Vec<(EntityId, sta_sim::Fixed)>,
     /// Who this client's [`CommandQueue`] speaks for.
     player: PlayerId,
@@ -95,9 +94,8 @@ impl SimLink {
         let cargo = source.cargo_view();
         let nodes = source.node_view();
         let systems = source.system_view();
-        let warp_phases = source.warp_phases();
         let impulse_caps = source.impulse_caps();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, warp_phases, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false, mcp: None, in_flight: Vec::new() }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false, mcp: None, in_flight: Vec::new() }
     }
 
     /// Commands submitted and not yet taken by a tick, in submission order (UI-55: a save keeps them).
@@ -180,7 +178,6 @@ impl SimLink {
         self.cargo = source.cargo_view();
         self.nodes = source.node_view();
         self.systems = source.system_view();
-        self.warp_phases = source.warp_phases();
         self.impulse_caps = source.impulse_caps();
         self.refresh_lifted();
     }
@@ -245,9 +242,11 @@ impl SimLink {
         &self.curr
     }
 
-    /// A live movement phase at the same tick as `real_curr`, when the source supplies one.
+    /// The craft's warp phase in the sim's own view (`real_curr`), when it has one: `true` while
+    /// entering or at warp, `false` while dropping out. A view without warp rows (a recorded or
+    /// fed view) leaves motion classification to the view's speed.
     pub(crate) fn warp_phase(&self, id: EntityId) -> Option<bool> {
-        self.warp_phases.binary_search_by_key(&id, |row| row.0).ok().map(|i| self.warp_phases[i].1)
+        self.curr.warp_of(id).map(|row| row.phase != sta_sim::view::WarpPhase::Leaving)
     }
 
     /// The source's live impulse cap, including ship upgrades and overrides.
@@ -370,7 +369,6 @@ impl SimLink {
         self.prev = std::mem::replace(&mut self.curr, view);
         self.production = production;
         self.cargo = cargo;
-        self.warp_phases.clear();
         self.impulse_caps.clear();
         self.refresh_lifted();
     }
@@ -389,7 +387,6 @@ impl SimLink {
         self.cargo = self.source.get().cargo_view();
         self.nodes = self.source.get().node_view();
         self.systems = self.source.get().system_view();
-        self.warp_phases = self.source.get().warp_phases();
         self.impulse_caps = self.source.get().impulse_caps();
         if let Some(log) = &mut self.log {
             log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
@@ -699,20 +696,25 @@ mod tests {
 
     #[test]
     fn externally_fed_view_drops_cached_live_warp_phase() {
+        use sta_sim::view::{WarpPhase, WarpRow};
         struct Phased(Arc<WorldView>);
         impl WorldSource for Phased {
             fn step(&mut self, _: &[Command]) -> sta_sim::view::TickOutput {
                 sta_sim::view::TickOutput { view: self.0.clone(), events: Vec::new() }
             }
             fn view(&self) -> Arc<WorldView> { self.0.clone() }
-            fn warp_phases(&self) -> Vec<(EntityId, bool)> { vec![(EntityId(7), true)] }
             fn impulse_caps(&self) -> Vec<(EntityId, sta_sim::Fixed)> { vec![(EntityId(7), sta_sim::Fixed::from_int(80))] }
         }
-        let view = Arc::new(WorldView::default());
-        let mut link = SimLink::new(Box::new(Phased(view.clone())), Box::new(LocalRouter::new()), PlayerId(0));
+        let row = |phase| WarpRow { id: EntityId(7), phase, ramp_start: 0, ramp_len: 10 };
+        let warping = Arc::new(WorldView { warp_rows: vec![row(WarpPhase::Entering)], ..WorldView::default() });
+        let mut link = SimLink::new(Box::new(Phased(warping.clone())), Box::new(LocalRouter::new()), PlayerId(0));
+        // The phase comes from the view itself: entering and at warp read as in warp, leaving as dropping out.
         assert_eq!(link.warp_phase(EntityId(7)), Some(true));
+        assert_eq!(link.warp_phase(EntityId(8)), None);
         assert_eq!(link.impulse_cap(EntityId(7)), Some(sta_sim::Fixed::from_int(80)));
-        link.feed(view);
+        link.feed(Arc::new(WorldView { warp_rows: vec![row(WarpPhase::Leaving)], ..WorldView::default() }));
+        assert_eq!(link.warp_phase(EntityId(7)), Some(false));
+        link.feed(Arc::new(WorldView::default()));
         assert_eq!(link.warp_phase(EntityId(7)), None);
         assert_eq!(link.impulse_cap(EntityId(7)), None);
     }
