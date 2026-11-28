@@ -675,6 +675,15 @@ fn prune_dying(view: &WorldView, ids: &mut Vec<EntityId>) {
     ids.retain(|id| !is_dying(view, *id));
 }
 
+/// Whether warp is on offer to the player: the mission switch the view carries and the content's own warp
+/// switch (`Rules::warp_enabled`) must both allow it, the same two conditions the sim ANDs into every warp
+/// decision (`Sim::warp_allowed`). STA64's own rule (#1102): with warp off the client gives no warp cursor
+/// and sends no warp move; the sim would not warp such a craft either, so this only keeps the offer honest.
+/// The match option of #1402 joins this AND when it is on `main`. A view without content has warp.
+pub fn warp_allowed(view: &WorldView, content: Option<&ContentDb>) -> bool {
+    view.attrs.mission_switches.allow_warp && content.is_none_or(|db| db.rules().warp_enabled())
+}
+
 /// Follow replacement events in their emitted order, then validate the final
 /// identity. An intermediate replacement can already be gone by this tick's view.
 fn remap_replaced_selection(selection: &mut Selection, events: &[SimEvent], view: &WorldView, player: PlayerId) -> bool {

@@ -795,7 +795,7 @@ fn armed_from_minimap(
     let plain = match (keys.as_deref(), bindings.as_deref()) {
         (Some(k), Some(b)) => crate::input::orders::minimap_plain(k, b, db),
         _ => false,
-    };
+    } || !crate::sim_link::warp_allowed(&feed.view, db);
     for at in points {
         if let Some(mode) = state.targeting {
             if !target_mode_available(&feed, mode) {

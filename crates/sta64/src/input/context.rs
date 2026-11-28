@@ -165,13 +165,13 @@ pub fn cursor(
         let at = crate::ui::radar::click_at(s, m, r.normalized?, bevy::picking::pointer::PointerButton::Secondary);
         Some(MinimapPointer {
             inside_map: at.inside_map,
-            plain: keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::minimap_plain(k, b, content.as_deref().map(|c| &*c.0))),
+            plain: keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::minimap_plain(k, b, content.as_deref().map(|c| &*c.0))) || !crate::sim_link::warp_allowed(link.curr(), content.as_deref().map(|c| &*c.0)),
             movers: !heights.is_empty(),
         })
     });
     // The armed pick (the HUD's system) writes over this when it is on.
     let over_hud = hud.is_some_and(|h| h.0);
-    let warp = keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::world_warp(k, b, content.as_deref().map(|c| &*c.0)));
+    let warp = keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::world_warp(k, b, content.as_deref().map(|c| &*c.0))) && crate::sim_link::warp_allowed(link.curr(), content.as_deref().map(|c| &*c.0));
     wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, warp, minimap });
     let want = match icon {
         Some(Order::Attack { .. }) => SystemCursorIcon::Crosshair,

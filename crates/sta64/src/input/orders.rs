@@ -99,7 +99,7 @@ pub fn order(
         me,
         own: &own,
         queue_mod: bindings.pressed(Action::AddModifier, &keys),
-        warp: world_warp(&keys, &bindings, content.as_deref().map(|c| &*c.0)),
+        warp: world_warp(&keys, &bindings, content.as_deref().map(|c| &*c.0)) && crate::sim_link::warp_allowed(view, content.as_deref().map(|c| &*c.0)),
     };
     let mut acks = Vec::new();
     ground_order(&ground, GroundAt::Ray(ray), &mut OrderOut { queue: &mut queue, targets: &mut targets, issued: &mut acks });
@@ -267,7 +267,7 @@ pub fn radar_order(
         me: link.player(),
         own: &own,
         queue_mod: bindings.pressed(Action::AddModifier, &keys),
-        warp: !minimap_plain(&keys, &bindings, content.as_deref().map(|c| &*c.0)),
+        warp: !minimap_plain(&keys, &bindings, content.as_deref().map(|c| &*c.0)) && crate::sim_link::warp_allowed(link.curr(), content.as_deref().map(|c| &*c.0)),
     };
     let mut acks = Vec::new();
     for at in clicks {
