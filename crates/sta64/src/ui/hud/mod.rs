@@ -619,8 +619,9 @@ fn place_on_click(
     ),
 ) {
     // A right press on the minimap's square is the command button there (it aims the armed command
-    // when released, `armed_from_minimap`), not STA64's cancel of the main view.
-    let on_minimap = minimap.iter().any(|r| r.cursor_over);
+    // when released, `armed_from_minimap`), not STA64's cancel of the main view. Only where the aiming applies
+    // (`minimap_aims`): on other content the press cancels as before and the click gives the ordinary minimap move.
+    let on_minimap = minimap_aims(&feed) && minimap.iter().any(|r| r.cursor_over);
     if keys
         .as_ref()
         .is_some_and(|k| k.just_pressed(KeyCode::Escape))
@@ -752,12 +753,19 @@ pub(crate) fn minimap_target_order(feed: &HudFeed, mode: TargetMode, at: Vec2, p
     Some((warped, ids))
 }
 
+/// Whether a click on the minimap aims an armed command: Armada II content only (read from that game's executable
+/// only; INTERIM: Armada I's minimap rule is not read, Fleet Operations and Roots draw their minimap through the
+/// hook, STA64's own content has no rule yet). Elsewhere the right press cancels the armed command as in the main
+/// view and the click gives the ordinary minimap move, as before.
+fn minimap_aims(feed: &HudFeed) -> bool {
+    feed.content.as_deref().is_some_and(|d| d.profile() == sta_content::Profile::Sta2Classic)
+}
+
 /// A right-click on the minimap's map (the command button there) with an armed pick or placement: the armed
 /// command is aimed at the map point through [`minimap_target_order`] (or, for a build, the placement rule at the
 /// point on the ground at the builder's height: ground only, read from the executable, static). A refused click
-/// keeps the command armed and does nothing, as in the main view. Only for Armada II content (read from that
-/// game's executable only; INTERIM: Armada I's minimap rule is not read, and Fleet Operations and Roots draw their
-/// minimap through the hook, so they keep refusing).
+/// keeps the command armed and does nothing: STA64's own rule, taken from the main view (what the original does
+/// with an invalid action from the minimap is not in the evidence). Only where [`minimap_aims`] says so.
 #[allow(clippy::too_many_arguments)]
 fn armed_from_minimap(
     mut clicks: MessageReader<crate::ui::radar::RadarClick>,
@@ -780,7 +788,7 @@ fn armed_from_minimap(
         .map(|c| c.at)
         .collect();
     let db = feed.content.as_deref();
-    if points.is_empty() || db.is_none_or(|d| d.profile() != sta_content::Profile::Sta2Classic) {
+    if points.is_empty() || !minimap_aims(&feed) {
         return;
     }
     let plain = match (keys.as_deref(), bindings.as_deref()) {
@@ -1653,17 +1661,64 @@ mod target_tests {
         assert_eq!(app.world().resource::<HudState>().targeting, Some(TargetMode::Move));
     }
 
-    /// A right press over the minimap's square does not cancel the armed command (it is the command button there);
-    /// anywhere else it still does.
+    /// A right press over the minimap's square does not cancel the armed command on Armada II content (it is the
+    /// command button there); anywhere else it still does, and on other content it cancels as on main (the click
+    /// then gives the ordinary minimap move).
     #[test]
     fn a_right_press_over_the_minimap_keeps_the_armed_command() {
-        for (over, armed_after) in [(true, true), (false, false)] {
-            let mut app = click_app(a2_feed(&[1]), HudState { targeting: Some(TargetMode::Move), ..Default::default() }, 0.0);
+        for (a2, over, armed_after) in [(true, true, true), (true, false, false), (false, true, false), (false, false, false)] {
+            let feed = if a2 { a2_feed(&[1]) } else { feed(&[1]) };
+            let mut app = click_app(feed, HudState { targeting: Some(TargetMode::Move), ..Default::default() }, 0.0);
             app.world_mut().spawn((crate::ui::radar::RadarSquare, bevy::ui::RelativeCursorPosition { cursor_over: over, ..Default::default() }));
             app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
             app.world_mut().run_system_once(place_on_click).unwrap();
             assert_eq!(app.world().resource::<HudState>().targeting.is_some(), armed_after, "pointer over the minimap: {over}");
         }
+    }
+
+    /// The minimap's own order system (`GameSet::Input`) and the armed-command system (`GameSet::Ui`) in the real
+    /// set order: a build placed from the minimap is not followed by a move that replaces it. The click is read by
+    /// the first system while the placement is still armed, so that one gives nothing; the second places the build.
+    #[test]
+    fn a_build_placed_from_the_minimap_is_not_followed_by_a_move_in_the_real_schedule() {
+        use crate::app::{GameSet, configure_sets};
+        use sta_sim::{MoveStats, Sim};
+        let mut sim = Sim::new(1);
+        let id = sim.spawn(0, SimVec3::ZERO, (Fixed::ZERO, Fixed::ONE), MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0));
+        assert_eq!(id, EntityId(1), "the first unit of the sim is the builder of the feed");
+        let mut f = feed(&[1]);
+        let fake = f.content.as_ref().unwrap().clone();
+        let mut builder = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta2Classic).features(sta_content::Profile::Sta2Classic.features());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_cruiser" { unit.build.list = vec![sta_content::DefRef::new("fx_station")]; }
+            builder = builder.unit(unit);
+        }
+        let db = builder.build().unwrap();
+        let what = db.key("fx_station").unwrap();
+        f.content = Some(Arc::new(db));
+        f.player = PlayerId(0);
+        let view = Arc::make_mut(&mut f.view);
+        view.units[0].owner = PlayerId(0);
+        view.players = vec![player(0, 0, None)];
+        view.players[0].resources = vec![Fixed::from_int(3000)];
+        let armed = Armed { builder: id, what, odf: "fx_station".into() };
+        let mut app = click_app(f, HudState { placing: Some(armed), ..Default::default() }, 0.0);
+        configure_sets(&mut app);
+        app.add_message::<crate::ui::radar::RadarClick>()
+            .init_resource::<crate::input::keys::KeyBindings>()
+            .init_resource::<crate::ui::presentation::CineractiveState>()
+            .insert_resource(Selection(vec![id]))
+            .insert_resource(SimLink::new(Box::new(sim), Box::new(sta_sim::command::LocalRouter::new()), PlayerId(0)))
+            .add_systems(Update, (crate::input::orders::radar_order.in_set(GameSet::Input), armed_from_minimap.in_set(GameSet::Ui)));
+        app.world_mut().write_message(crate::ui::radar::RadarClick { at: Vec2::new(300.0, 400.0), button: bevy::picking::pointer::PointerButton::Secondary, inside_map: true });
+        for _ in 0..3 {
+            app.update();
+        }
+        let queue = &app.world().resource::<CommandQueue>().0;
+        assert!(matches!(queue.as_slice(), [CommandKind::Order(Order::Build { builder: EntityId(1), .. })]), "only the build, no move after it: {queue:?}");
+        assert!(app.world().resource::<HudState>().placing.is_none());
     }
 
     #[test]
