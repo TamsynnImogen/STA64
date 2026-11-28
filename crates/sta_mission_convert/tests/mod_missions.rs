@@ -299,32 +299,30 @@ fn a_mod_needs_engine_files_and_the_folder_they_are_read_from_is_read_only() {
 }
 
 #[test]
-fn a_mod_is_named_by_a_folder_name_and_every_folder_its_mount_reads_is_read_only() {
+fn a_mod_name_or_a_parent_entry_that_is_a_path_is_refused_by_the_mount() {
     let s = scene("mod-outside");
-    // a name that is a path is refused before anything is mounted
     let outside = s.tmp.path().join("outside");
     write(outside.join("info.ini"), b"[Mod]\n");
     write(outside.join("missions/farS.dsl"), b"junk");
+    // the name given: the mount's own refusal, word for word
     let absolute = outside.to_str().unwrap().to_owned();
     for name in ["..", ".", "../../outside", "Base/../Child", "Base\\..\\Child", absolute.as_str()] {
         let ModError::Mount { reason, .. } = Install::open_mod(&s.root, name).unwrap_err() else { panic!("{name}") };
-        assert!(reason.contains("not by a path"), "{name}: {reason}");
+        assert_eq!(reason, sta_vfs::Vfs::mount_install(&s.root, Some(name)).unwrap_err().to_string(), "{name}");
+        assert!(reason.contains("not a single folder name"), "{name}: {reason}");
     }
-    // a parent entry that leads out of the install: the mount follows it, so that folder is read
-    // and nothing may be written into it or around it
+    // a parent entry that leads out of the install: refused too, naming the mod that asked, so
+    // no folder outside the install is read through a parent
     write(s.root.join("Data/Mods/Child/info.ini"), b"[Mod]\nParentMod=../../../outside\n");
-    let inst = open(&s, "Child");
-    assert_eq!(found(&inst, &[]).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["far"], "the mount reads the outside folder");
-    let why = install::resolve_output(&outside.join("out"), &inst, &Env::default()).unwrap_err();
-    assert!(why.contains("read-only"), "{why}");
-    let out_res = install::resolve_output(&s.tmp.path().join("fine"), &inst, &Env::default()).unwrap();
-    assert!(install::open_cache(&outside.join("cache"), &out_res, &inst, &Env::default()).is_err());
-    // with the plain parent again that folder is no part of the run
+    let ModError::Mount { reason, .. } = Install::open_mod(&s.root, "Child").unwrap_err() else { panic!("the parent entry") };
+    assert!(reason.contains("Child") && reason.contains("outside"), "{reason}");
+    // with the plain parent again the mod opens
     write(s.root.join("Data/Mods/Child/info.ini"), b"[Mod]\nParentMod=Base\n");
-    assert!(install::resolve_output(&outside.join("out"), &open(&s, "Child"), &Env::default()).is_ok());
+    assert_eq!(found(&open(&s, "Child"), &[]).len(), 2);
 }
 
-/// A mod folder that is a link to a folder elsewhere: the folder it leads to is guarded.
+/// The mod named may be a link to a folder anywhere: every folder the mount reads is read-only
+/// for the run, so the folder the link leads to is guarded, with the output and with the cache.
 #[cfg(unix)]
 #[test]
 fn a_linked_mod_folder_is_guarded_where_it_really_is() {
@@ -335,6 +333,9 @@ fn a_linked_mod_folder_is_guarded_where_it_really_is() {
     let inst = open(&s, "Linked");
     let why = install::resolve_output(&real.join("out"), &inst, &Env::default()).unwrap_err();
     assert!(why.contains("read-only"), "{why}");
+    let out_res = install::resolve_output(&s.tmp.path().join("fine"), &inst, &Env::default()).unwrap();
+    assert!(install::open_cache(&real.join("cache"), &out_res, &inst, &Env::default()).is_err());
+    assert!(install::resolve_output(&real.join("out"), &open(&s, "Child"), &Env::default()).is_ok(), "only a folder the run reads is guarded");
     // and inside its parent mod's folder, which is in the install
     assert!(install::resolve_output(&s.root.join("Data/Mods/Base/out"), &inst, &Env::default()).is_err());
 }

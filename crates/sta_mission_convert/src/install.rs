@@ -197,8 +197,8 @@ pub struct Install {
 struct Mounted {
     name: String,
     vfs: Arc<Vfs>,
-    /// The folder of every layer of the mount, resolved: a mod's parent entry (or a link) can
-    /// lead outside the install, and each of them is only read.
+    /// The folder of every layer of the mount, resolved: the mod named may be a link to a
+    /// folder outside the install, and each of them is only read.
     layer_roots: Vec<PathBuf>,
 }
 
@@ -283,10 +283,8 @@ impl Install {
         if name.trim().is_empty() {
             return Err(refused("the mod's name is empty".to_owned()));
         }
-        // a mod is named by its folder in the install's mods folder, never by a path
-        if name.contains(['/', '\\']) || matches!(name, "." | "..") || Path::new(name).is_absolute() {
-            return Err(refused("a mod is named by its folder's name, not by a path".to_owned()));
-        }
+        // A name that is a path, and a parent entry that leads out of the mods folder, are the
+        // mount's to refuse (it names the mod that asked).
         let vfs = Vfs::mount_install(&root, Some(name)).map_err(|e| refused(e.to_string()))?;
         let mut layer_roots = Vec::new();
         for layer in vfs.layers() {
@@ -327,8 +325,8 @@ impl Install {
     }
 
     /// The folders a run only reads, which nothing may be written into: the install, the engine
-    /// folder, and with a mod every folder its mount reads (a parent mod may lie outside the
-    /// install).
+    /// folder, and with a mod every folder its mount reads (a linked mod folder may lie outside
+    /// the install).
     fn read_only_roots(&self) -> Vec<&Path> {
         let layers = self.mounted.iter().flat_map(|m| m.layer_roots.iter().map(PathBuf::as_path));
         std::iter::once(self.root.as_path()).chain(self.engine_root.as_deref()).chain(layers).collect()
