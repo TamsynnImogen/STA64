@@ -461,3 +461,40 @@ fn the_beam_still_lands_after_these_changes_during_its_life() {
         assert_eq!(g.hits.iter().map(|h| h.0).collect::<Vec<_>>(), [fired + LIFE], "{what}: the hit lands when the life ends");
     }
 }
+
+/// #1068, the client's drawing: the view carries the beams the sim holds, so the drawing can end a beam
+/// when the sim loses it.
+#[test]
+fn the_view_shows_the_beams_in_flight_until_they_land_or_are_lost() {
+    use crate::view::BeamRow;
+    let rows = |g: &Game| g.sim.view().beam_rows.clone();
+    // Held for the whole life: from the tick it fired up to the one before the hit.
+    let mut g = game(db(true, |_, _| {}));
+    g.until_fired();
+    let key = g.db.key("fx_beam").unwrap();
+    let view = g.sim.view();
+    assert_eq!(rows(&g), vec![BeamRow { shooter: g.shooter, weapon: key, target: g.target, ends: view.tick - 1 + LIFE }], "the row carries the tick the hit is applied on (the step that makes the view of the next tick)");
+    assert!(g.sim.view().beam_held(g.shooter, key, g.target));
+    g.run(LIFE - 1);
+    assert!(g.sim.view().beam_held(g.shooter, key, g.target), "still held on the last tick of its life");
+    g.run(1);
+    assert!(g.hits.len() == 1 && rows(&g).is_empty() && !g.sim.view().beam_held(g.shooter, key, g.target), "gone with its hit");
+    // Lost in the middle of its life: the row goes on the tick it is lost, with no hit later.
+    let mut lost = game(db(true, |_, _| {}));
+    lost.until_fired();
+    lost.run(LIFE / 4);
+    assert_eq!(rows(&lost).len(), 1);
+    lost.target_at(BEAM_BREAK_RANGE_FACTOR * RANGE + 1);
+    lost.run(1);
+    assert!(rows(&lost).is_empty(), "the beam is lost: it is not in the view");
+    lost.run(2 * LIFE);
+    assert!(lost.hits.is_empty());
+    // Sorted by shooter, weapon, target and end, and none with the switch off.
+    let off = {
+        let mut g = game(db(false, |_, _| {}));
+        g.until_fired();
+        g.run(2);
+        rows(&g)
+    };
+    assert!(off.is_empty(), "no beam is held without the switch");
+}

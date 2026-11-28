@@ -33,8 +33,10 @@
 //! - **Colour** (read from the executable, static; the gain measured): unlit, texel times [`GAIN`] times
 //!   (1 - f, f, 0), f the shield fraction, frozen for the cap's life even if the shields fall meanwhile.
 //!   Projectiles take f after their damage: the view's pool after that tick. Beams take f before their
-//!   damage (the original applies a beam's damage at the end of its life): the view's pool plus the absorbed
-//!   damage of that beam's `Hit` (INTERIM, until the sim's beam timing, #1068, follows). A beam's per-tick
+//!   damage (the original applies a beam's damage at the end of its life): under `beam_damage_at_end`, where the
+//!   sim does the same, the view's pool of the side the beam lands on when the beam arrives
+//!   ([`beam_side_fraction`], #1068); otherwise the view's pool plus the absorbed damage of that beam's `Hit`
+//!   (INTERIM, for every profile without the switch). A beam's per-tick
 //!   refresh of f while it lives is not drawn (not measured).
 //! - **Blend.** Added exactly (the texture's alpha darkens nothing; measured), two-sided, depth test on
 //!   (measured), depth write off (INTERIM: not established).
@@ -90,9 +92,19 @@ pub fn shield_fraction(now: f32, max: f32) -> f32 {
 }
 
 /// A beam's fraction before its own damage: the pool the view shows after the tick plus what the beam's hit
-/// took from it (INTERIM, until the sim applies a beam's damage at the end of its life, #1068).
+/// took from it (INTERIM, for every profile where the sim does not apply a beam's damage at the end of its life: without
+/// `beam_damage_at_end`, #1068).
 pub fn beam_fraction_before(now: f32, absorbed: f32, max: f32) -> f32 {
     shield_fraction(now + absorbed.max(0.0), max)
+}
+
+/// The shield fraction of the side of `target` a beam from `shooter` lands on, in `view`: the side the sim names in the
+/// beam's `Hit` (`combat::weapons::facing`, centre to centre). `None` when either is not in the view.
+pub fn beam_side_fraction(view: &sta_sim::WorldView, shooter: EntityId, target: EntityId) -> Option<f32> {
+    let (s, t) = (view.unit(shooter)?, view.unit(target)?);
+    let side = usize::from(sta_sim::combat::weapons::facing(t.heading, t.pos, s.pos)).min(3);
+    let [now, max] = t.shields[side].map(|v| v.to_f32());
+    Some(shield_fraction(now, max))
 }
 
 /// The cap's colour factor: [`GAIN`] times (1 - f, f, 0).
@@ -361,7 +373,12 @@ pub(super) fn collect_hits(
         }
         let [now, max] = unit.shields[usize::from(*facing).min(3)].map(|v| v.to_f32());
         if ctx.stock_path(def) == Some(ShotPath::Ribbon) {
-            // Made when the beam reaches its target (`stock_shots.rs`); its level is what this hit left plus what it took.
+            // Made when the beam reaches its target (`stock_shots.rs`). Under `beam_damage_at_end` this hit comes at the
+            // end of the beam's life, long after the cap took its level from the view (`spawn_caps`): nothing to record
+            // (#1068). Otherwise its level is what this hit left plus what it took (INTERIM).
+            if ctx.lands_at_end(def) {
+                continue;
+            }
             fractions.0.push((*by, *weapon, *target, tick, beam_fraction_before(now, taken[&(*target, (*facing).min(3))], max)));
             continue;
         }
@@ -395,9 +412,13 @@ pub(super) fn collect_hits(
 pub(super) fn spawn_caps(mut cmds: Commands, mut queue: ResMut<ShieldCapQueue>, fractions: Res<BeamFractions>, content: Res<ContentRes>, link: Res<SimLink>) {
     for r in queue.0.drain(..) {
         let Some(def) = content.0.weapon(r.weapon) else { continue };
+        let at_end = sta_sim::combat::weapons::lands_at_end(content.0.features(), def);
         let f = r
             .fraction
             .or_else(|| match r.origin {
+                // Under `beam_damage_at_end` the sim has not applied the beam's damage when the cap is made: the pool of
+                // the side the hit will land on, as the view shows it now, is the level before it (#1068).
+                CapOrigin::Beam { .. } if at_end => beam_side_fraction(link.real_curr(), r.shooter, r.target),
                 CapOrigin::Beam { fired } => fractions.before(r.shooter, r.weapon, r.target, fired),
                 CapOrigin::Event => None,
             })

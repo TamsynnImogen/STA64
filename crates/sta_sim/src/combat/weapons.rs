@@ -209,7 +209,7 @@ pub(crate) const REGULAR_BEAM_CLASS: &str = "phaser";
 /// fires: the switch is on, and `w` is a beam of the regular class with a life. Every other
 /// beam class, a weapon without ordnance (its class is its own) and a beam with no
 /// `duration` hit on the tick they fire, as without the switch.
-pub(crate) fn lands_at_end(features: &sta_content::Features, w: &sta_content::WeaponDef) -> bool {
+pub fn lands_at_end(features: &sta_content::Features, w: &sta_content::WeaponDef) -> bool {
     features.beam_damage_at_end && w.kind == WeaponKind::Beam && w.class.0 == REGULAR_BEAM_CLASS && w.duration > 0
 }
 
@@ -366,6 +366,13 @@ impl Weapons {
     /// Beams in flight.
     pub fn beams_in_flight(&self) -> usize {
         self.beams.len()
+    }
+
+    /// The beams in flight as the view shows them, sorted (derived, not state).
+    pub(crate) fn beam_rows(&self) -> Vec<crate::view::BeamRow> {
+        let mut rows: Vec<_> = self.beams.iter().map(|b| crate::view::BeamRow { shooter: b.shooter, weapon: b.weapon, target: b.target, ends: b.ends }).collect();
+        rows.sort_by_key(|r| (r.shooter, r.weapon, r.target, r.ends));
+        rows
     }
 
     pub(crate) fn set_crew_delay(&mut self, mut rows: Vec<(EntityId, Fixed)>) {
