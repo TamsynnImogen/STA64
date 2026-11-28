@@ -63,7 +63,7 @@ use super::radar::{RadarPlugin, RadarRoot};
 use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
 use crate::input::orders::{Aim, OrderTargets, formation_moves};
-use crate::input::select::{Targetable, target_seen, unit_under_where};
+use crate::input::select::{Targetable, pickable, unit_under_where};
 use crate::ui::i18n::{tr, trf};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
@@ -825,7 +825,7 @@ fn order_at_aim(
     units: &Targetable,
     local: Option<sta_sim::PlayerId>,
 ) -> Option<(Vec<Order>, Vec<EntityId>)> {
-    let target = unit_under_where(aim.cursor, aim.ray, units, |t| target_seen(&feed.view, local, t));
+    let target = unit_under_where(aim.cursor, aim.ray, units, |t| pickable(&feed.view, local, t));
     let own = feed.own_selection();
     let heights: Vec<f32> = own.iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
     let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
