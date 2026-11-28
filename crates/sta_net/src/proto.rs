@@ -50,7 +50,9 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// snapshot (its move-mode record).
 /// 26 adds the beams in flight to the transferred snapshot and marks the rule change of
 /// `beam_damage_at_end` (#1068): peers of both versions would compute different games.
-pub const PROTOCOL_VERSION: u16 = 26;
+/// 27 adds the dying phases to the transferred snapshot and marks the rule change of
+/// `dying_phase` (#1100), for the same reason.
+pub const PROTOCOL_VERSION: u16 = 27;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -2171,7 +2173,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 26);
+        assert_eq!(PROTOCOL_VERSION, 27);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2179,9 +2181,9 @@ mod tests {
         );
     }
 
-    /// Pinned with protocol 26 (#1068): the header carries the number, so a new number
+    /// Pinned with protocol 27 (#1100): the header carries the number, so a new number
     /// changes this value too (run the test, copy the left side).
-    const GOLDEN: u64 = 7590920664437132725;
+    const GOLDEN: u64 = 17379800489665278561;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.

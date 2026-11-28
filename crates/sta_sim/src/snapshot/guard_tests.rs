@@ -25,7 +25,7 @@ fn the_guard_rows_are_in_a_format_from_33_and_the_previous_formats_are_refused()
     // SIM-40's repair queues with 36, SIM-41's repair-ship beams with 37, SIM-45's decommissions with 38,
     // SIM-75's nebula shields with 39, ReplaceWeapon with 40, shield zero holds with 41,
     // research pod links with 42, freighter docks with 43, and officer upgrades with 44.
-    assert_eq!(FORMAT_VERSION, 53);
+    assert_eq!(FORMAT_VERSION, 54);
     let sim = guarded();
     let bytes = sim.snapshot();
     assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), FORMAT_VERSION);
@@ -42,16 +42,20 @@ fn a_guard_row_survives_and_an_unknown_tag_or_a_cut_file_is_a_load_error() {
     let bytes = sim.snapshot();
     let back = Sim::from_snapshot(&bytes, sim.content.clone()).unwrap();
     assert_eq!(back.snapshot(), bytes, "save, load, save");
-    // Format 52 is the same record chain before the final beams record (two bytes, no rows);
-    // format 51 also lacks the move-mode record before it (two bytes, no rows); format 50 also
-    // lacks the Director's Cut field before that (one byte).
+    // Format 53 is the same record chain before the final dying record (two bytes, no rows);
+    // format 52 also lacks the beams record before it (two bytes, no rows); format 51 also
+    // lacks the move-mode record before that (two bytes, no rows); format 50 also lacks the
+    // Director's Cut field before that (one byte).
     let mut old = bytes[..bytes.len() - 2].to_vec();
-    old[4..6].copy_from_slice(&PRE_BEAMS_FORMAT.to_le_bytes());
+    old[4..6].copy_from_slice(&PRE_DYING_FORMAT.to_le_bytes());
     assert_eq!(Sim::from_snapshot(&old, sim.content.clone()).unwrap().snapshot(), bytes);
     let mut old = bytes[..bytes.len() - 4].to_vec();
+    old[4..6].copy_from_slice(&PRE_BEAMS_FORMAT.to_le_bytes());
+    assert_eq!(Sim::from_snapshot(&old, sim.content.clone()).unwrap().snapshot(), bytes);
+    let mut old = bytes[..bytes.len() - 6].to_vec();
     old[4..6].copy_from_slice(&PRE_MOVE_MODE_FORMAT.to_le_bytes());
     assert_eq!(Sim::from_snapshot(&old, sim.content.clone()).unwrap().snapshot(), bytes);
-    let mut old = bytes[..bytes.len() - 5].to_vec();
+    let mut old = bytes[..bytes.len() - 7].to_vec();
     old[4..6].copy_from_slice(&PRE_DIRECTORS_CUT_FORMAT.to_le_bytes());
     let previous = Sim::from_snapshot(&old, sim.content.clone()).unwrap();
     assert!(!previous.directors_cut);
