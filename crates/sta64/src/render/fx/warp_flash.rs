@@ -61,7 +61,7 @@ pub(crate) struct WarpHull {
 
 /// Whether the Stock warp look is the one drawn: under the Stock look with a stock implementation registered. Without
 /// the profile resources (windowless tests of other effects) it is not.
-fn stock_warp(profile: Option<&RenderProfile>, effects: Option<&ProfileEffects>) -> bool {
+pub(crate) fn stock_warp(profile: Option<&RenderProfile>, effects: Option<&ProfileEffects>) -> bool {
     match (profile, effects) {
         (Some(p), Some(e)) => e.implementation(*p, Effect::Warp) == RenderProfile::Stock,
         _ => false,
@@ -104,46 +104,72 @@ fn row_stretch(row: &WarpRow) -> f32 {
     row.stretch.to_f32().max(1.0)
 }
 
-fn stretch_hulls(
-    profile: Option<Res<RenderProfile>>,
-    effects: Option<Res<ProfileEffects>>,
-    link: Option<Res<SimLink>>,
-    content: Option<Res<ContentRes>>,
-    clock: Res<AnimClock>,
-    ships: Query<&SimEntity>,
-    mut models: Query<(&WarpHull, &ChildOf, &mut Transform)>,
-) {
-    let source = link.as_deref().zip(content.as_deref());
-    let stock = stock_warp(profile.as_deref(), effects.as_deref());
+/// Whether the craft of a content profile carry the hull's stretch: the stock Armada II profile's (the mod family: not
+/// read for this profile, and its hull is not stretched, so neither are its bubble and cap). The one gate of the hull,
+/// the selection bubble and the shield cap.
+pub(crate) fn carries_hull_stretch(profile: sta_content::Profile) -> bool {
+    profile == sta_content::Profile::Sta2Classic
+}
+
+/// What the hull's stretch needs, in one parameter: the one source of a craft's stretch now, for the hull, the
+/// selection bubble and the shield cap.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct WarpStretch<'w> {
+    profile: Option<Res<'w, RenderProfile>>,
+    effects: Option<Res<'w, ProfileEffects>>,
+    link: Option<Res<'w, SimLink>>,
+    content: Option<Res<'w, ContentRes>>,
+    clock: Option<Res<'w, AnimClock>>,
+}
+
+impl WarpStretch<'_> {
+    /// The frame's place between the two views (1 without a clock).
+    fn alpha(&self) -> f32 {
+        self.clock.as_deref().map_or(1.0, AnimClock::alpha)
+    }
+
+    /// The longitudinal stretch of craft `id` now (1 when it is not in warp): the Stock look's by the stored ramp, the
+    /// other look's by speed.
+    pub(crate) fn of(&self, id: EntityId) -> f32 {
+        let (Some(link), Some(content)) = (self.link.as_deref(), self.content.as_deref()) else { return 1.0 };
+        let stock = stock_warp(self.profile.as_deref(), self.effects.as_deref());
+        (|| {
+            link.warp_phase(id)?;
+            let unit = link.real_curr().unit(id)?;
+            let def = content.0.unit(unit.def)?;
+            let row = link.real_curr().warp_of(id)?;
+            let (impulse, warp) = warp_speeds(link, unit, def);
+            if warp <= impulse || impulse < 0.0 {
+                return None;
+            }
+            if stock {
+                // The stored ramp, on the sim clock: the view shows tick `tick - 1` at alpha 0 and `tick` at 1.
+                let now = link.real_curr().tick as f64 - 1.0 + f64::from(self.alpha());
+                return Some(1.0 + (row_stretch(row) - 1.0) * ramp_progress(row, now));
+            }
+            let now = unit.speed.to_f32();
+            let then = link.prev().unit(id).map_or(now, |previous| previous.speed.to_f32());
+            let speed = then + (now - then) * self.alpha();
+            // The original sweeps a deformation plane through the mesh. Use
+            // the live speed ramp for the visual transform during the transition.
+            let progress = ((speed - impulse) / (warp - impulse)).clamp(0.0, 1.0);
+            Some(1.0 + (row_stretch(row) - 1.0) * progress)
+        })()
+        .unwrap_or(1.0)
+    }
+
+    /// The stretch the selection bubble and the shield cap take (read from the executable, static: they follow the
+    /// hull's warp progress): the Stock look's, wherever the hull carries the stretch ([`carries_hull_stretch`]); 1 otherwise.
+    /// INTERIM: the same uniform stretch as the hull, about the unit's origin.
+    pub(crate) fn of_stock(&self, id: EntityId) -> f32 {
+        let stock_content = self.content.as_deref().is_some_and(|c| carries_hull_stretch(c.0.profile()));
+        if stock_content && stock_warp(self.profile.as_deref(), self.effects.as_deref()) { self.of(id) } else { 1.0 }
+    }
+}
+
+fn stretch_hulls(warp: WarpStretch, ships: Query<&SimEntity>, mut models: Query<(&WarpHull, &ChildOf, &mut Transform)>) {
     for (model, parent, mut transform) in &mut models {
-        let stretch = source
-            .and_then(|(link, content)| {
-                let id = ships.get(parent.parent()).ok()?.0;
-                link.warp_phase(id)?;
-                let unit = link.real_curr().unit(id)?;
-                let def = content.0.unit(unit.def)?;
-                let row = link.real_curr().warp_of(id)?;
-                let (impulse, warp) = warp_speeds(link, unit, def);
-                if warp <= impulse || impulse < 0.0 {
-                    return None;
-                }
-                if stock {
-                    // The stored ramp, on the sim clock: the view shows tick `tick - 1` at alpha 0 and `tick` at 1.
-                    let now = link.real_curr().tick as f64 - 1.0 + f64::from(clock.alpha());
-                    return Some(1.0 + (row_stretch(row) - 1.0) * ramp_progress(row, now));
-                }
-                let now = unit.speed.to_f32();
-                let then = link
-                    .prev()
-                    .unit(id)
-                    .map_or(now, |previous| previous.speed.to_f32());
-                let speed = then + (now - then) * clock.alpha();
-                // The original sweeps a deformation plane through the mesh. Use
-                // the live speed ramp for the visual transform during the transition.
-                let progress = ((speed - impulse) / (warp - impulse)).clamp(0.0, 1.0);
-                Some(1.0 + (row_stretch(row) - 1.0) * progress)
-            })
-            .unwrap_or(1.0);
+        let stretch = ships.get(parent.parent()).map_or(1.0, |id| warp.of(id.0));
         let scale = Vec3::new(1.0, 1.0, stretch);
         let translation = Vec3::Z * (model.pivot_z * (1.0 - stretch));
         if transform.scale != scale || transform.translation != translation {

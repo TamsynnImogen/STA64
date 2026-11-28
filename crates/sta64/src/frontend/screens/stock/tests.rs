@@ -377,6 +377,77 @@ fn directors_cut_advanced_is_profile_gated_and_cancel_restores_the_choice() {
     assert!(!app.world_mut().query::<&Act>().iter(app.world()).any(|a| *a == Act::ToggleDirectorsCut));
 }
 
+/// The content of the stock Armada II profile, with or without the warp rule on.
+fn warp_content(profile: sta_content::Profile, rule: Option<bool>) -> Arc<sta_content::ContentDb> {
+    let db = sta_content::ContentDb::builder().profile(profile).build().unwrap();
+    let rules = db.rules().clone().with_warp(rule);
+    Arc::new(db.with_rules(rules))
+}
+
+#[test]
+fn warp_allowed_is_offered_only_where_the_content_has_it_and_cancel_and_default_follow_the_draft() {
+    for layout in [ScreenLayout::Stock, ScreenLayout::Plain] {
+        let mut data = four_races();
+        data.content = warp_content(sta_content::Profile::Sta2Classic, None);
+        let mut app = app_with(data, None, 1.0);
+        app.world_mut().resource_mut::<ScreensConfig>().layout = layout;
+        go(&mut app, Screen::Setup);
+        press(&mut app, Act::Goto(Screen::Advanced));
+        assert!(app.world().resource::<SetupDraft>().options.allow_warp, "on by default");
+        press(&mut app, Act::ToggleWarp);
+        assert!(!app.world().resource::<SetupDraft>().options.allow_warp);
+        press(&mut app, Act::CloseAdvanced(false));
+        assert!(app.world().resource::<SetupDraft>().options.allow_warp, "cancel restores the choice");
+        press(&mut app, Act::Goto(Screen::Advanced));
+        press(&mut app, Act::ToggleWarp);
+        press(&mut app, Act::CloseAdvanced(true));
+        assert!(!app.world().resource::<SetupDraft>().options.allow_warp, "OK keeps it");
+        press(&mut app, Act::Goto(Screen::Advanced));
+        press(&mut app, Act::DefaultOptions);
+        assert!(app.world().resource::<SetupDraft>().options.allow_warp, "Default is on");
+    }
+    // Not offered: another profile, the content rule off, a game without content.
+    for (what, content) in [
+        ("armada one", warp_content(sta_content::Profile::Sta1Classic, None)),
+        ("rule off", warp_content(sta_content::Profile::Sta2Classic, Some(false))),
+        ("no content", four_races().content),
+    ] {
+        for layout in [ScreenLayout::Stock, ScreenLayout::Plain] {
+            let mut data = four_races();
+            data.content = content.clone();
+            let mut app = app_with(data, None, 1.0);
+            app.world_mut().resource_mut::<ScreensConfig>().layout = layout;
+            go(&mut app, Screen::Advanced);
+            assert!(!app.world_mut().query::<&Act>().iter(app.world()).any(|a| *a == Act::ToggleWarp), "{what}");
+        }
+    }
+}
+
+#[test]
+fn warp_allowed_reads_its_captions_through_the_two_label_keys_and_falls_back_to_its_own_wording() {
+    let text_on_screen = |app: &mut App, want: &str| {
+        let want = want.to_lowercase();
+        app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).any(|t| t.text.to_lowercase() == want)
+    };
+    let mut data = four_races();
+    data.content = warp_content(sta_content::Profile::Sta2Classic, None);
+    // label data authored here, with invented texts
+    let authored = crate::ui::i18n::Strings::from_pairs("english", &[]).with_labels("+ warp_enabled {Alpha text}\n+ warp_disabled {Beta text}\n");
+    let mut app = app_with(data.clone(), None, 1.0);
+    app.insert_resource(authored);
+    go(&mut app, Screen::Advanced);
+    assert!(text_on_screen(&mut app, "Alpha text"));
+    press(&mut app, Act::ToggleWarp);
+    assert!(text_on_screen(&mut app, "Beta text") && !text_on_screen(&mut app, "Alpha text"));
+    // label data without the keys: STA64's own wording
+    let mut app = app_with(data, None, 1.0);
+    app.insert_resource(crate::ui::i18n::Strings::from_pairs("english", &[]).with_labels("+ other_key {Gamma text}\n"));
+    go(&mut app, Screen::Advanced);
+    assert!(text_on_screen(&mut app, "Warp: On"));
+    press(&mut app, Act::ToggleWarp);
+    assert!(text_on_screen(&mut app, "Warp: Off"));
+}
+
 #[test]
 fn plain_advanced_speed_cycles_and_resets() {
     let mut app = app();

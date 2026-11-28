@@ -41,6 +41,8 @@ pub enum MpAct {
     CycleResources,
     CycleOfficers,
     ToggleDirectorsCut,
+    /// The match option "warp allowed" (#1102, #1402): the host's, read-only for a joiner.
+    ToggleWarp,
     /// Leave the room.
     Leave,
 }
@@ -449,6 +451,13 @@ fn map_window(p: &mut Box_, ctx: &Ctx, s: &Session, view: &LobbyView) {
             cap(ctx, "directors_on", "Director's Cut: Off")
         };
         act_button(p, ctx, MSlot::DirectorsCut, &caption, MpAct::ToggleDirectorsCut, host && open);
+    }
+    // The same slot as Director's Cut (different profiles, never together). Where the content offers the option the
+    // host sets it while the room is open; a joiner sees the host's choice and cannot change it. STA64's own, INTERIM:
+    // offered here as in the skirmish, in the slot of Director's Cut.
+    if sta_sim::setup::GameOptions::warp_offered(&ctx.data.content) {
+        let (key, fallback) = crate::frontend::screens::view::warp_label(view.options.allow_warp);
+        act_button(p, ctx, MSlot::DirectorsCut, &cap(ctx, key, fallback), MpAct::ToggleWarp, host && open);
     }
 }
 

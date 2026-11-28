@@ -639,7 +639,7 @@ pub(crate) fn attach_models(
         let partial = progress.is_some_and(|progress| progress < 1.0);
         let warp_craft = sim.is_some()
             && override_model.is_none()
-            && content.0.profile() == sta_content::Profile::Sta2Classic
+            && crate::render::fx::warp_flash::carries_hull_stretch(content.0.profile())
             && sta_sim::world::EntityKind::of_def(def) == sta_sim::world::EntityKind::Craft
             && !def.is_evolver();
         let stats = if warp_craft {
