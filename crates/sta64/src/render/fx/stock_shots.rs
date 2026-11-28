@@ -673,6 +673,15 @@ pub(super) fn update_shots(
             }
             let hit = q.iter().filter(|(_, s)| s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target)).min_by_key(|(_, s)| s.fired).map(|(e, _)| e);
             if let Some(e) = hit {
+                // A projectile that took damage past the shields struck the hull node it was aimed at (the target
+                // hardpoint chosen for the shot, the centre where the model has none; read from the executable, static;
+                // the choice per shot is INTERIM): the hull-hit spark is drawn there (`stock_hull_hits`).
+                if hull.to_f32() > 0.0
+                    && let Ok((_, s)) = q.get(e)
+                    && let Some(body) = ctx.body(&link, *target, alpha, &offsets, s.target_node)
+                {
+                    points.0.push((*by, *weapon, *target, beam_end(s.muzzle, &body, true)));
+                }
                 cmds.entity(e).try_despawn();
             }
         }

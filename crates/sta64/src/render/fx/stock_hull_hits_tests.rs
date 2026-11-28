@@ -25,7 +25,7 @@ fn table(family: bool) -> SpriteTable {
             text += &format!("{name} tex_{name} 0 0 32 32 @anim=flip4\n");
         }
     }
-    text += "beamspr tex_beam 0 64 32 32\n";
+    text += "beamspr tex_beam 0 64 32 32\ntorpspr tex_torp 0 96 32 32\n";
     text += "other tex_other 0 32 32 32\n@animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n";
     SpriteTable::parse(text.as_bytes())
 }
@@ -34,10 +34,14 @@ fn content() -> sta_content::ContentDb {
     let mut beam = WeaponDef::new("t_beam", "phaser", WeaponKind::Beam);
     beam.range = sta_sim::Fixed::from_int(1000);
     beam.look = ShotLook { sprite: Some("beamspr".into()), radius: Some(4.0), life_span: Some(1.0), travel_time_fraction: Some(0.2), ..Default::default() };
+    let mut torpedo = WeaponDef::new("t_torp", "photontorpedo", WeaponKind::Projectile);
+    torpedo.range = sta_sim::Fixed::from_int(1000);
+    torpedo.shot_speed = sta_sim::Fixed::from_int(300);
+    torpedo.look = ShotLook { sprite: Some("torpspr".into()), radius: Some(4.0), ..Default::default() };
     let mut ship = UnitDef::new("t_ship", "cruiser");
     ship.stats.hull_target_hardpoints = vec!["hull_a".into()];
     ContentBuilder::default()
-        .weapon(WeaponDef::new("t_torp", "photontorpedo", WeaponKind::Projectile))
+        .weapon(torpedo)
         .weapon(beam)
         .unit(ship)
         .build()
@@ -230,7 +234,7 @@ fn stock_draws_no_damage_smoke_at_any_hull_level_and_the_remaster_look_keeps_it(
 }
 
 #[test]
-fn a_beams_hull_hit_spark_is_drawn_at_its_end_on_the_hull_and_a_projectiles_at_the_centre() {
+fn a_beams_and_a_projectiles_hull_hit_spark_is_drawn_on_the_hull_node_and_else_at_the_centre() {
     let spark_at = |events: &str, with_node: bool| {
         let mut app = run_scene(Some(RenderProfile::Stock), true, events, 30, |app, f| {
             if f == 0 && with_node {
@@ -248,9 +252,14 @@ fn a_beams_hull_hit_spark_is_drawn_at_its_end_on_the_hull_and_a_projectiles_at_t
     let beam = beam_hit(14);
     let (on_node, on_centre) = (spark_at(&beam, true), spark_at(&beam, false));
     assert!(((on_node - on_centre).length() - 5.0).abs() < 0.01, "{on_node} against {on_centre}");
-    // A projectile: the node does not matter; it is where the event puts it, the target's centre in the sim.
-    let torp = hit(14, 4, 0, 40);
-    assert_eq!(spark_at(&torp, true), spark_at(&torp, false));
+    // A projectile drawn the Stock way, in flight when it hits: aimed at the same node, so the spark is there.
+    let fired = "{ at: 10, event: { Fired: { shooter: 1, weapon: TORP, hardpoint: 0, target: { Entity: 4 } } } },";
+    let torp = format!("{fired}{}", hit(14, 4, 0, 40));
+    let (on_node, on_centre) = (spark_at(&torp, true), spark_at(&torp, false));
+    assert!(((on_node - on_centre).length() - 5.0).abs() < 0.01, "{on_node} against {on_centre}");
+    // A projectile with no stock shot in flight (none was fired in the view): where the event puts it, the centre.
+    let bare = hit(14, 4, 0, 40);
+    assert_eq!(spark_at(&bare, true), spark_at(&bare, false));
 }
 
 #[test]
