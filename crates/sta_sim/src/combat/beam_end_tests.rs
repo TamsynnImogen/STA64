@@ -57,7 +57,18 @@ fn db(switch: bool, patch: impl Fn(&mut sta_content::Features, &mut WeaponDef)) 
     phaser.odf = "fx_phaser".into();
     phaser.hardpoints = vec![Hardpoint { weapon: DefRef::new("fx_phase_cloak"), node: "hp01".into(), arc: None }];
     let cloak = WeaponDef::new("fx_phase_cloak", "phasecloakdevice", WeaponKind::Beam);
-    Arc::new(b.weapon(cloak).unit(beamer).unit(phaser).build().unwrap())
+    // An ordinary cloak that takes longer to engage than the beam lives, for the shooter
+    // (`fx_cloak_beamer`) and for a target (`fx_cloak_target`).
+    let mut slow_cloak = WeaponDef::new("fx_slow_cloak", "cloakingdeviceimp", WeaponKind::Beam);
+    slow_cloak.effect_ticks = 3 * LIFE;
+    let cloak_slot = Hardpoint { weapon: DefRef::new("fx_slow_cloak"), node: "hp02".into(), arc: None };
+    let mut cloak_beamer = beamer.clone();
+    cloak_beamer.odf = "fx_cloak_beamer".into();
+    cloak_beamer.hardpoints.push(cloak_slot.clone());
+    let mut cloak_target = phaser.clone();
+    cloak_target.odf = "fx_cloak_target".into();
+    cloak_target.hardpoints = vec![cloak_slot];
+    Arc::new(b.weapon(cloak).weapon(slow_cloak).unit(beamer).unit(phaser).unit(cloak_beamer).unit(cloak_target).build().unwrap())
 }
 
 struct Game {
@@ -79,10 +90,15 @@ fn game(db: Arc<ContentDb>) -> Game {
 
 /// [`game`] with a target of `target_def`.
 fn game_against(db: Arc<ContentDb>, target_def: &str) -> Game {
+    game_of(db, "fx_beamer", target_def)
+}
+
+/// [`game`] with a shooter of `shooter_def` and a target of `target_def`.
+fn game_of(db: Arc<ContentDb>, shooter_def: &str, target_def: &str) -> Game {
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
     let setup = GameSetup { seed: 7, map: Arc::new(sta_content::MapDef::empty()), content: db.clone(), players: vec![seat(1), seat(2)], options: GameOptions::default() };
     let mut sim = Sim::from_setup(&setup);
-    let shooter = sim.spawn_def(db.key("fx_beamer").unwrap(), PlayerId(1), v(2000, 2000), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let shooter = sim.spawn_def(db.key(shooter_def).unwrap(), PlayerId(1), v(2000, 2000), (Fixed::ZERO, Fixed::ONE)).unwrap();
     let target = sim.spawn_def(db.key(target_def).unwrap(), PlayerId(2), v(2000, 2300), (Fixed::ZERO, Fixed::ONE)).unwrap();
     let mut g = Game { sim, db, shooter, target, ticks: 0, fired: Vec::new(), hits: Vec::new() };
     let order = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![shooter], target }) };
@@ -378,4 +394,29 @@ fn a_beam_row_with_an_unknown_weapon_is_corrupt_and_one_with_a_removed_unit_is_n
     let mut forged = good[..good.len() - record.len()].to_vec();
     forged.extend(postcard::to_allocvec(&(1u8, forged_rows)).unwrap());
     assert!(matches!(Sim::from_snapshot(&forged, Some(g.db.clone())), Err(crate::snapshot::SnapshotError::Corrupt(_))));
+}
+
+/// What happens to the shooter or the target during the beam's life without losing it
+/// (measured on the original, once each): the hit still lands on the tick the life ends.
+#[test]
+fn the_beam_still_lands_after_these_changes_during_its_life() {
+    use crate::command::Edit;
+    type Change = fn(&Game) -> Command;
+    let cases: [(&str, &str, &str, Change); 5] = [
+        ("the shooter's weapons are switched off", "fx_beamer", "fx_frigate", |g| Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Weapons(g.shooter, false)) }),
+        ("the shooter is given a move order", "fx_beamer", "fx_frigate", |g| Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![g.shooter], to: v(2000, 1000), queue: false, mode: None }) }),
+        ("the shooter starts to cloak", "fx_cloak_beamer", "fx_frigate", |g| Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Cloak { units: vec![g.shooter], on: true }) }),
+        ("the target starts to cloak", "fx_beamer", "fx_cloak_target", |g| Command { player: PlayerId(2), seq: 0, kind: CommandKind::Order(Order::Cloak { units: vec![g.target], on: true }) }),
+        ("the target changes side", "fx_beamer", "fx_frigate", |g| Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::Team(g.target, PlayerId(1))) }),
+    ];
+    for (what, shooter, target, change) in cases {
+        let mut g = game_of(db(true, |_, _| {}), shooter, target);
+        let fired = g.until_fired();
+        g.run(LIFE / 4);
+        assert_eq!(g.beams(), 1, "{what}");
+        let cmd = change(&g);
+        g.step_with(&[cmd]);
+        g.run(LIFE);
+        assert_eq!(g.hits.iter().map(|h| h.0).collect::<Vec<_>>(), [fired + LIFE], "{what}: the hit lands when the life ends");
+    }
 }
