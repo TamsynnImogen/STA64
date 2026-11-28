@@ -796,6 +796,26 @@ fn no_selection_hover_uses_low_offset_and_missing_or_hidden_targets_clear_stats(
     assert_eq!(info_bar_label(&mut app, Crew).unwrap().3, Visibility::Hidden);
 }
 
+/// The strip does not depend on how long the pointer has rested: the short and the verbose tooltip phase leave it as it
+/// is (measured, frame, modded bench, one launch; it holds by construction, this pins it).
+#[test]
+fn the_strip_is_the_same_through_the_tooltip_phases() {
+    use infobar::InfoBarField::{Name, Hull, Shields, Crew, Energy};
+    let mut app = populated_info_bar(false, "");
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    feed.selected.clear();
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(2));
+    app.update();
+    let read = |app: &mut App| [Name, Hull, Shields, Crew, Energy].map(|f| info_bar_label(app, f).map(|l| (l.1, l.2, l.3)));
+    let first = read(&mut app);
+    assert!(first.iter().flatten().any(|l| !l.0.is_empty()), "the strip is filled");
+    for _ in 0..240 {
+        app.update();
+    }
+    assert_eq!(read(&mut app), first);
+}
+
 fn tiered_info_config() -> HudConfig {
     let mut raw = CFG.replace("infoPanelArea_1 = 400 900 500 300", "infoPanelArea_1 = 400 1000 500 200");
     raw.push_str("\
