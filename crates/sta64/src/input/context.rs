@@ -46,8 +46,8 @@ pub(crate) struct Situation<'a> {
     /// unit is not a builder that is busy building (the sim's `BUILDING` flag), and the pointer's ray
     /// meets the map plane.
     pub moves: bool,
-    /// The click on open ground would be a warp move (`orders::world_warp`: Alt held, not with the
-    /// queue modifier, not on Armada I content).
+    /// The click on open ground would be a warp move (`orders::world_warp`: Alt held, on Armada II
+    /// content; with the queue modifier it is a queued warp move).
     pub warp: bool,
     /// The pointer is over the minimap's square (it is HUD, but its right-click is an order).
     pub minimap: Option<MinimapPointer>,
@@ -58,8 +58,7 @@ pub(crate) struct Situation<'a> {
 pub(crate) struct MinimapPointer {
     /// The map point under it is inside the map's rectangle, not in a strip.
     pub inside_map: bool,
-    /// The click is a plain move, not a warp move (`orders::minimap_plain`: Alt, the queue
-    /// modifier or Armada I content).
+    /// The click is a plain move, not a warp move (`orders::minimap_plain`: Alt or Armada I content).
     pub plain: bool,
     /// Some selected own unit would be moved (not a builder busy building).
     pub movers: bool,
@@ -145,7 +144,6 @@ pub fn cursor(
     radar: Query<&bevy::ui::RelativeCursorPosition, With<crate::ui::radar::RadarSquare>>,
     radar_state: Option<Res<crate::ui::radar::RadarState>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
-    bindings: Option<Res<super::keys::KeyBindings>>,
 ) {
     // Over a cutscene no order is on offer (selection and orders are gated the same way), so the
     // cursor stays the arrow: the selection is kept, inert, and the cursor reads it again afterwards.
@@ -165,13 +163,13 @@ pub fn cursor(
         let at = crate::ui::radar::click_at(s, m, r.normalized?, bevy::picking::pointer::PointerButton::Secondary);
         Some(MinimapPointer {
             inside_map: at.inside_map,
-            plain: keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::minimap_plain(k, b, content.as_deref().map(|c| &*c.0))),
+            plain: keys.as_deref().is_some_and(|k| super::orders::minimap_plain(k, content.as_deref().map(|c| &*c.0))),
             movers: !heights.is_empty(),
         })
     });
     // The armed pick (the HUD's system) writes over this when it is on.
     let over_hud = hud.is_some_and(|h| h.0);
-    let warp = keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::world_warp(k, b, content.as_deref().map(|c| &*c.0)));
+    let warp = keys.as_deref().is_some_and(|k| super::orders::world_warp(k, content.as_deref().map(|c| &*c.0)));
     wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, warp, minimap });
     let want = match icon {
         Some(Order::Attack { .. }) => SystemCursorIcon::Crosshair,
@@ -420,8 +418,8 @@ mod tests {
 
     /// Alt held in the world: the warp cursor exactly where the click gives the warp move (open
     /// space, an own craft, a free moon for a warship), the cursors of the targets with an order of
-    /// their own unchanged, stationary builders still without an order, and no warp cursor without Alt,
-    /// with the queue modifier or without a mover. The click goes through the minimap's order path.
+    /// their own unchanged, stationary builders still without an order, and no warp cursor without Alt
+    /// or without a mover. With the queue modifier too it is the warp cursor and a queued warp move. The click goes through the minimap's order path.
     #[test]
     fn alt_gives_the_warp_cursor_and_the_warp_move_where_the_plain_cursor_is_move() {
         let cases: [(usize, f32, &str); 8] = [
@@ -444,7 +442,7 @@ mod tests {
             assert_eq!(kind_cursor(&cmds).unwrap_or("c_select"), cursor_name, "select {select} at {x}: {cmds:?}");
             assert_eq!(cmds.is_empty(), cursor_name == "c_select", "select {select} at {x}: {cmds:?}");
         }
-        // The queue modifier keeps the plain queued move and its cursor (INTERIM, as on the minimap).
+        // The queue modifier keeps the warp cursor and gives a queued warp move (STA64's own rule, #1173).
         let (mut app2, _) = app_as(1, A2);
         app2.init_resource::<crate::ui::cursor::WantedCursor>();
         for k in [KeyCode::AltLeft, KeyCode::ShiftLeft] {
@@ -452,8 +450,9 @@ mod tests {
         }
         let cmds = right_click_at(&mut app2, 20000.0);
         app2.world_mut().run_system_once(cursor).unwrap();
-        assert_eq!(app2.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_move");
-        assert_eq!(kind_cursor(&cmds), Some("c_move"));
+        assert_eq!(app2.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_warp");
+        assert_eq!(kind_cursor(&cmds), Some("c_warp"));
+        assert!(matches!(&cmds[..], [CommandKind::Order(Order::MoveWarp { queue: true, .. })]), "{cmds:?}");
         // A pointer whose ray misses the map plane: nothing to warp to.
         let (mut app3, _) = app_as(1, A2);
         app3.init_resource::<crate::ui::cursor::WantedCursor>();
