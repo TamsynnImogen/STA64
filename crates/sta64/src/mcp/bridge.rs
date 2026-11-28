@@ -163,6 +163,13 @@ fn serve(listener: TcpListener, token: String, send: SyncSender<Pending>, stop: 
 }
 
 fn handle(mut stream: TcpStream, token: &str, send: &SyncSender<Pending>) {
+    // The listener is non-blocking so that `serve` can poll its stop flag. On
+    // macOS and Windows an accepted socket inherits that mode (on Linux it
+    // does not), and a non-blocking read fails at once instead of waiting for
+    // its timeout. The deadlines below need a blocking socket.
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
     let deadline = Instant::now() + IO_DEADLINE;
     let result = read_line(&mut stream, deadline).and_then(|line| parse_request(&line, token));
     let request = match result {
@@ -336,6 +343,45 @@ mod tests {
         );
         drop(bridge);
         assert!(!endpoint.exists());
+    }
+
+    /// A client may connect first and send later. The bridge accepts the
+    /// connection within one `ACCEPT_PAUSE`, so by the time this request is
+    /// written the bridge is already reading; it has to wait for the line.
+    #[test]
+    fn a_request_written_after_the_connection_is_accepted_is_still_read() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.set_read_timeout(Some(IO_DEADLINE)).unwrap();
+        // Accept as `serve` does, from the non-blocking listener, so the
+        // connection is known to be accepted before anything is sent.
+        let accepted = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::yield_now(),
+                Err(e) => panic!("accept failed: {e}"),
+            }
+        };
+        let (send, receive) = mpsc::sync_channel(QUEUE_DEPTH);
+        let worker = thread::spawn(move || handle(accepted, "secret", &send));
+        // Give `handle` time to reach its read with nothing to read. If the
+        // pause is too short the test still passes; it cannot fail falsely.
+        thread::sleep(ACCEPT_PAUSE * 10);
+        writeln!(client, "{}", json!({ "token": "secret", "op": "status" })).unwrap();
+
+        let pending: Pending = receive
+            .recv_timeout(IO_DEADLINE)
+            .expect("the late request was not queued");
+        assert_eq!(pending.request.op, "status");
+        pending.reply.send(Ok(json!({ "ready": true }))).unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&response).unwrap(),
+            json!({ "ok": true, "data": { "ready": true } })
+        );
+        worker.join().unwrap();
     }
 
     #[test]
