@@ -340,3 +340,29 @@ fn the_header_fallback_still_writes_its_value_as_the_base() {
     play(&mut rt, &mut sim, &mut view, 2);
     assert_eq!(base_of(&view, 0), Some(Fixed::from_int(41)), "the header value is unchanged by the station rule");
 }
+
+/// A map that is there and cannot be read is not a map without a team table: it is refused, so the
+/// install header's start is not granted in its place, and the runtime lists it once.
+#[test]
+fn an_unreadable_map_is_refused_and_does_not_fall_back_to_the_header() {
+    let db = header_db();
+    let failed = from_read("m.bzn", Some(Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))));
+    assert!(failed.seats.is_empty());
+    let why = failed.refused.as_deref().expect("refused");
+    assert!(why.contains("m.bzn") && why.contains("could not be read"), "{why}");
+    assert_eq!(failed.clone().or_header(db.rules(), [PlayerId(0)]), failed, "no header start for a map that was not read");
+    // A map that was read and has no table, and one that is not in the file system, take the header's start.
+    for read in [Some(Ok(Vec::new())), None] {
+        let start = from_read("m.bzn", read);
+        assert_eq!(start, StartStock::default());
+        assert!(!start.or_header(db.rules(), [PlayerId(0)]).seats.is_empty());
+    }
+
+    // Through the runtime: nothing is sent and the refusal is listed once.
+    let (mut sim, mut view, db) = bare([Control::Human, Control::Idle]);
+    let cfg = MissionConfig { content: Some(db.clone()), view: Some(view.clone()), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::load_with_start("m.lua", 3, cfg, Vec::new(), failed, |_| Some(Vec::new()));
+    assert!(play(&mut rt, &mut sim, &mut view, 2).is_empty());
+    let listed: Vec<_> = rt.unsupported().into_iter().filter(|(n, _)| n.contains("could not be read")).collect();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+}
