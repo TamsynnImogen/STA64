@@ -1,7 +1,7 @@
 # ADR 0003: Clean-room content policy
 
 - **Status:** accepted
-- **Date:** 2026-11-07 (first "Legal boundary" text, foundation commit e25f1c1); extended 2026-11-13 (#469, research and game assets) and 2026-11-13 (#636, mission conversion)
+- **Date:** 2026-11-07 (first "Legal boundary" text, foundation commit e25f1c1); extended 2026-11-13 (#469, research and game assets) and 2026-11-13 (#636, mission conversion); clarification on engine lookup names proposed 2026-11-28 (not yet in force)
 - **Deciders:** "Legal boundary": not recorded. Research and game-asset rules (#469): not recorded (the commit message names no approver). Mission conversion rule (#636): decision of Cedric, agreed by Tammy on 2026-11-13 (commit message of #636 and the WORKPLAN note under the LUA table)
 - **Relates to:** [AGENTS.md](../../AGENTS.md) ("Research and game files", the operative wording for agents), [ARCHITECTURE.md](../ARCHITECTURE.md) ("Legal boundary"), [MISSIONS.md](../MISSIONS.md), WORKPLAN LUA-15
 
@@ -48,6 +48,26 @@ From AGENTS.md, "Research and game files":
   directory (WORKPLAN LUA-15 and the note under the LUA table).
 
 AGENTS.md carries the operative wording; where the two texts ever differ, AGENTS.md is followed until this ADR is superseded.
+
+### Clarification 2026-11-28: engine lookup names (PROPOSED, binds nothing until both deciders approve)
+
+*Ruled by Cedric (`cedrichaase`) on 2026-11-28; awaiting Tammy (`TamsynnImogen`). Until she approves and this note is marked accepted, the rules above stand unchanged and AGENTS.md is not changed.*
+
+Context: under the Stock look STA64 must draw the original's effects. Some effects are defined in the player's own install, but the name by which the original engine selects the definition exists only in the engine, not in any data file. Without that name the code cannot find the entry. The first case is the spark drawn when a weapon hits a bare hull (issue #1153). `main` already carries one such name as the constant `IMPACT_SPRITE` in `crates/sta64/src/render/fx/stock_flares.rs`, for the beam impact effect.
+
+Clarification: a fixed lookup name by which the original engine selects an entry that the install's own data defines may be a named constant in STA64's code, where the code needs it to find that entry at run time. Each such constant has a one-line comment with the rule and the evidence grade, and a mod may define the entry under that name (as the comment on `IMPACT_SPRITE` does).
+
+Limits:
+
+- This covers lookup names only. It does not cover the definitions themselves, values, or any other names from game assets (units, maps, missions, files, textures); those stay under the rules above.
+- The names appear in code only: not in issues, pull request bodies, review comments, commit messages, docs, WORKPLAN or TODO.md.
+
+Alternatives considered and not chosen:
+
+- Finding the entries by a name pattern at run time: the pattern itself would come from the engine, and it is fragile.
+- A mod-facing key written on the player's machine at first-run import: clean, but a new mechanism for a handful of names.
+
+Consequences: a follow-up package draws the hull-hit effect under the Stock look once the dying phase (#1100) is in. On acceptance, one matching sentence is added to AGENTS.md, "Research and game files", in the same or a companion docs PR.
 
 ## Alternatives considered
 
