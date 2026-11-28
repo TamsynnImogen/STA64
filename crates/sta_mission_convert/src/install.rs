@@ -197,6 +197,9 @@ pub struct Install {
 struct Mounted {
     name: String,
     vfs: Arc<Vfs>,
+    /// The folder of every layer of the mount, resolved: a mod's parent entry (or a link) can
+    /// lead outside the install, and each of them is only read.
+    layer_roots: Vec<PathBuf>,
 }
 
 /// Why an install cannot be opened with a mod ([`Install::open_mod`]).
@@ -280,9 +283,20 @@ impl Install {
         if name.trim().is_empty() {
             return Err(refused("the mod's name is empty".to_owned()));
         }
+        // a mod is named by its folder in the install's mods folder, never by a path
+        if name.contains(['/', '\\']) || matches!(name, "." | "..") || Path::new(name).is_absolute() {
+            return Err(refused("a mod is named by its folder's name, not by a path".to_owned()));
+        }
         let vfs = Vfs::mount_install(&root, Some(name)).map_err(|e| refused(e.to_string()))?;
+        let mut layer_roots = Vec::new();
+        for layer in vfs.layers() {
+            match resolve(&layer.root) {
+                Ok(p) => layer_roots.push(p),
+                Err(e) => return Err(refused(format!("the folder {} of the mount cannot be resolved: {e}", layer.root.display()))),
+            }
+        }
         let missions_dir = child(&root, "Data").unwrap_or_else(|| root.clone());
-        let mounted = Some(Mounted { name: name.to_owned(), vfs: Arc::new(vfs) });
+        let mounted = Some(Mounted { name: name.to_owned(), vfs: Arc::new(vfs), layer_roots });
         Ok(Install { root, game: Game::Armada2, missions_dir, mounted, engine_root: None })
     }
 
@@ -312,9 +326,12 @@ impl Install {
         self.engine_root.as_deref().unwrap_or(&self.root)
     }
 
-    /// The folders a run only reads, which nothing may be written into.
+    /// The folders a run only reads, which nothing may be written into: the install, the engine
+    /// folder, and with a mod every folder its mount reads (a parent mod may lie outside the
+    /// install).
     fn read_only_roots(&self) -> Vec<&Path> {
-        std::iter::once(self.root.as_path()).chain(self.engine_root.as_deref()).collect()
+        let layers = self.mounted.iter().flat_map(|m| m.layer_roots.iter().map(PathBuf::as_path));
+        std::iter::once(self.root.as_path()).chain(self.engine_root.as_deref()).chain(layers).collect()
     }
 }
 

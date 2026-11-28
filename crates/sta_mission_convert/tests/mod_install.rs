@@ -71,7 +71,7 @@ fn the_missions_of_a_real_mod_convert_and_each_reports_its_outcome() {
     let mut reported = Vec::new();
     let summary = install::convert_install(&inst, &Options::default(), &mut dir, None, &mut decoder, &|| false, &mut |e: &Event| match e {
         Event::Done { mission, .. } => reported.push(mission.clone()),
-        Event::Failed { mission, message, .. } => assert!(!message.trim().is_empty(), "{mission} failed without a reason"),
+        Event::Failed { message, .. } => assert!(!message.trim().is_empty(), "a mission failed without a reason"),
         _ => {}
     });
     assert!(summary.aborted.is_none() && summary.finish_error.is_none() && !summary.cancelled, "the run ended early: {:?}", summary.aborted);
@@ -84,13 +84,13 @@ fn the_missions_of_a_real_mod_convert_and_each_reports_its_outcome() {
         if m.converted && !m.written.is_empty() {
             converted += 1;
             for f in &m.written {
-                assert!(out.join("missions").join(f).is_file(), "{f} is in the folder of the install with the mod");
+                assert!(out.join("missions").join(f).is_file(), "a written script is missing in the folder of the install with the mod");
             }
-            eprintln!("converted {} -> {}", m.mission, m.written.join(", "));
         } else {
-            assert!(!m.failures.is_empty() || !m.kept.is_empty(), "{} neither converted nor says why", m.mission);
+            assert!(!m.failures.is_empty() || !m.kept.is_empty(), "a mission neither converted nor says why");
             assert!(m.failures.iter().all(|f| !f.trim().is_empty()));
-            eprintln!("failed {}: {}", m.mission, m.failures.join("; "));
+            // the converter's reason, without the mission's name
+            eprintln!("a mission failed: {}", m.failures.join("; "));
         }
     }
     eprintln!("{converted} of {} missions converted", summary.missions.len());

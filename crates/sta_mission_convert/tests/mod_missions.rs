@@ -299,6 +299,47 @@ fn a_mod_needs_engine_files_and_the_folder_they_are_read_from_is_read_only() {
 }
 
 #[test]
+fn a_mod_is_named_by_a_folder_name_and_every_folder_its_mount_reads_is_read_only() {
+    let s = scene("mod-outside");
+    // a name that is a path is refused before anything is mounted
+    let outside = s.tmp.path().join("outside");
+    write(outside.join("info.ini"), b"[Mod]\n");
+    write(outside.join("missions/farS.dsl"), b"junk");
+    let absolute = outside.to_str().unwrap().to_owned();
+    for name in ["..", ".", "../../outside", "Base/../Child", "Base\\..\\Child", absolute.as_str()] {
+        let ModError::Mount { reason, .. } = Install::open_mod(&s.root, name).unwrap_err() else { panic!("{name}") };
+        assert!(reason.contains("not by a path"), "{name}: {reason}");
+    }
+    // a parent entry that leads out of the install: the mount follows it, so that folder is read
+    // and nothing may be written into it or around it
+    write(s.root.join("Data/Mods/Child/info.ini"), b"[Mod]\nParentMod=../../../outside\n");
+    let inst = open(&s, "Child");
+    assert_eq!(found(&inst, &[]).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["far"], "the mount reads the outside folder");
+    let why = install::resolve_output(&outside.join("out"), &inst, &Env::default()).unwrap_err();
+    assert!(why.contains("read-only"), "{why}");
+    let out_res = install::resolve_output(&s.tmp.path().join("fine"), &inst, &Env::default()).unwrap();
+    assert!(install::open_cache(&outside.join("cache"), &out_res, &inst, &Env::default()).is_err());
+    // with the plain parent again that folder is no part of the run
+    write(s.root.join("Data/Mods/Child/info.ini"), b"[Mod]\nParentMod=Base\n");
+    assert!(install::resolve_output(&outside.join("out"), &open(&s, "Child"), &Env::default()).is_ok());
+}
+
+/// A mod folder that is a link to a folder elsewhere: the folder it leads to is guarded.
+#[cfg(unix)]
+#[test]
+fn a_linked_mod_folder_is_guarded_where_it_really_is() {
+    let s = scene("mod-linked");
+    let real = s.tmp.path().join("elsewhere");
+    write(real.join("info.ini"), b"[Mod]\nParentMod=Base\n");
+    std::os::unix::fs::symlink(&real, s.root.join("Data/Mods/Linked")).unwrap();
+    let inst = open(&s, "Linked");
+    let why = install::resolve_output(&real.join("out"), &inst, &Env::default()).unwrap_err();
+    assert!(why.contains("read-only"), "{why}");
+    // and inside its parent mod's folder, which is in the install
+    assert!(install::resolve_output(&s.root.join("Data/Mods/Base/out"), &inst, &Env::default()).is_err());
+}
+
+#[test]
 fn a_mission_dll_inside_an_archive_is_reported_and_the_others_convert() {
     use sta_vfs::sta_write::{Compression, Content, pack};
     let s = scene("mod-packed");
