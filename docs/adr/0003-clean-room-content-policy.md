@@ -64,6 +64,8 @@ Limits:
 
 Extension, same day (the same decider): the same exception holds for a fixed file path by which the original engine opens data that the player's install provides (by kind: a shell background picture, an intro movie). It may be a named constant in STA64's code only, where the code needs it to open that file at run time. Each such constant has a one-line comment with the rule and the evidence grade. Where the path is specific to one game or profile, it must be identifiable which one, by the constant's name, its module or the comment. The file itself and anything read from it are never committed, and a mod may provide its own file under that path. `main` already carries such constants for the intro movies, and the campaign-screen work (draft PR #1374) depends on this extension.
 
+Second extension, same day (the same decider, issue #1377): a description, in STA64's own words, of how a stock mission plays (what the player is asked to do, in what order, what ends it) is allowed in the repository, as hand-written playthrough plans for tests and as descriptive lines in docs. Still excluded: names from game files (units, maps, files, objects), measured thresholds and timings, map positions, caption and dialogue texts, and anything copied or converted from the mission files. A plan describes the play; it does not reproduce the script. The converted scripts themselves stay out as before.
+
 Alternatives considered and not chosen:
 
 - Finding the entries by a name pattern at run time: the pattern itself would come from the engine, and it is fragile.
