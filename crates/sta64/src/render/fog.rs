@@ -1075,8 +1075,8 @@ mod tests {
     /// Install-gated: the shroud's art is the mounted mod's own `Gshroud.tga`.
     #[test]
     fn the_shroud_art_comes_from_the_mods_gshroud() {
-        let roots = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
-        let Ok(vfs) = sta_vfs::Vfs::mount_install(roots, Some("Fleet Ops 4.0")) else { return };
+        let roots = sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(&roots, Some("Fleet Ops 4.0")) else { return };
         let (img, size) = pattern_image(Some(&vfs), "Gshroud", [255, 0, 255]);
         assert_ne!(texel(&img), [255, 0, 255], "the fallback colour is not used when the mod has the texture");
         let mean = crate::ui::radar_fog::mean_colour(img.data.as_ref().unwrap()).unwrap();

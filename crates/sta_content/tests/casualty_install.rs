@@ -2,12 +2,9 @@
 //! crew-casualty keys the sim reads (counts of definitions with a non-default
 //! value are printed with `--nocapture`). Absent installs are skipped.
 
-use std::path::Path;
-
 use sta_content::{ContentDb, OdfIndex};
 use sta_vfs::Vfs;
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
 const ROOTS: &str = "Star Trek Armada II Fleet Operations Roots";
 
 struct Counts {
@@ -33,7 +30,7 @@ struct Counts {
 }
 
 fn load(dir: &str, modname: Option<&str>) -> Option<(String, Counts)> {
-    let root = Path::new(HEROIC).join(dir);
+    let root = sta_testkit::game_root(dir);
     if !root.is_dir() {
         eprintln!("{dir}: skipped, not installed");
         return None;

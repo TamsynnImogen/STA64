@@ -1022,9 +1022,9 @@ mod tests {
     /// adjacency rule over every installed `gui*.cfg` and every piece set it declares.
     #[test]
     fn installed_gui_cfgs_have_no_gap_or_overlap_between_adjacent_pieces() {
-        let roots: Vec<_> = ["STA64_TEST_INSTALL", "STA64_TEST_A1_INSTALL"].iter().filter_map(std::env::var_os).collect();
+        let roots: Vec<_> = ["STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL", "STA64_TEST_A1_INSTALL"].iter().filter_map(std::env::var_os).collect();
         if roots.is_empty() {
-            eprintln!("SKIP: set STA64_TEST_INSTALL and/or STA64_TEST_A1_INSTALL to an install root");
+            eprintln!("SKIP: set STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_A1_INSTALL");
             return;
         }
         let mut checked = 0;

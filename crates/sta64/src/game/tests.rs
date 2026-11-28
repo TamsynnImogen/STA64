@@ -196,13 +196,14 @@ fn an_idle_opponent_never_acts_and_survives() {
 /// craft, and that craft hitting the human opponent.
 #[test]
 fn install_skirmish_starts_and_the_ai_acts() {
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
     let ticks: u64 = std::env::var("STA64_TEST_AI_TICKS").map_or(9000, |s| s.parse().expect("STA64_TEST_AI_TICKS is an integer"));
     assert!((1..=108_000).contains(&ticks), "STA64_TEST_AI_TICKS must be between 1 and 108000");
     let require_combat = std::env::var("STA64_TEST_AI_REQUIRE_COMBAT").is_ok_and(|s| s == "1");
-    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "blueamber".into());
+    let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = Races::load(&vfs, &index);
@@ -274,10 +275,11 @@ fn install_skirmish_starts_and_the_ai_acts() {
 #[test]
 fn install_skirmish_rig_starts_building() {
     use sta_sim::command::{Command, CommandKind, Edit, Order};
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "boobytrap".into());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = Races::load(&vfs, &index);
@@ -334,10 +336,11 @@ fn install_skirmish_rig_starts_building() {
 #[test]
 fn install_skirmish_freighter_mines_a_moon() {
     use sta_sim::command::CommandKind;
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "Adapt".into());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = Races::load(&vfs, &index);
@@ -425,10 +428,11 @@ fn install_skirmish_freighter_mines_a_moon() {
 fn install_map_picks_resource_moons() {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "Adapt".into());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = Races::load(&vfs, &index);
@@ -499,10 +503,11 @@ fn install_map_icons_over_resource_moons() {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
     use crate::render::strategic::{Strategic, centre_for_bounds, shape_for, silhouette_size, SYMBOL_ENTER_PX};
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "Adapt".into());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = Races::load(&vfs, &index);
@@ -609,10 +614,11 @@ fn install_map_icons_over_resource_moons() {
 #[test]
 fn install_preplaced_miners_mine_the_moons_the_seat_sees() {
     use sta_sim::command::CommandKind;
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "Adapt".into());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = Races::load(&vfs, &index);
@@ -664,10 +670,11 @@ fn install_preplaced_miners_mine_the_moons_the_seat_sees() {
 fn install_map_resource_objects_are_pickable_top_down() {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "Adapt".into());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
+    let Some(map_name) = sta_testkit::a_map(&vfs) else { return };
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let (races, _) = Races::load(&vfs, &index);

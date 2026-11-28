@@ -5737,6 +5737,7 @@ dependencies = [
  "sta_odf",
  "sta_sim",
  "sta_surface",
+ "sta_testkit",
  "sta_vfs",
  "winresource",
 ]
@@ -5805,6 +5806,7 @@ dependencies = [
  "sta_bzn",
  "sta_core",
  "sta_odf",
+ "sta_testkit",
  "sta_vfs",
  "thiserror 2.0.21",
 ]
@@ -5904,12 +5906,20 @@ dependencies = [
  "sta_content",
  "sta_core",
  "sta_odf",
+ "sta_testkit",
  "sta_vfs",
 ]
 
 [[package]]
 name = "sta_surface"
 version = "0.1.0"
+
+[[package]]
+name = "sta_testkit"
+version = "0.1.0"
+dependencies = [
+ "sta_vfs",
+]
 
 [[package]]
 name = "sta_tools"

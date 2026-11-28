@@ -1323,8 +1323,9 @@ mod tests {
     /// layers) must have been seen. Skips without an install.
     #[test]
     fn install_map_sprite_and_icon_keys_resolve_through_the_sprite_table() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let m = found.mod_string();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let (db, _) = ContentDb::load(&vfs, &index).unwrap();

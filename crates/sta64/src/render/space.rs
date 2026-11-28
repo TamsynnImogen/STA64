@@ -425,8 +425,8 @@ mod tests {
     /// Install-gated: Fleet Ops 4.0's own `ART_CFG.h` and `stars_default.odf`.
     #[test]
     fn fo4_files_give_the_expected_star_sizes() {
-        let roots = std::path::Path::new("/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots");
-        let Ok(vfs) = sta_vfs::Vfs::mount_install(roots, Some("Fleet Ops 4.0")) else { return };
+        let roots = sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(&roots, Some("Fleet Ops 4.0")) else { return };
         let cfg = sta_content::layered::cfg_h(&vfs, "ART_CFG.h");
         assert_eq!(StarSizing::from_cfg(cfg.as_ref()), StarSizing::default());
         let odf = vfs.list("odf").into_iter().find(|p| p.to_ascii_lowercase().ends_with("stars_default.odf")).unwrap();

@@ -1427,11 +1427,9 @@ fn the_remaster_look_raises_no_flares_and_the_flare_sprites_are_resolved_for_the
 /// sprite of the mounted sprite table whose texture exists in the mounted files. Skips without an install.
 #[test]
 fn install_every_stock_shot_resolves_its_sprite_and_texture() {
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-        eprintln!("SKIP: STA64_TEST_INSTALL names no install");
-        return;
-    };
-    let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
@@ -1466,11 +1464,9 @@ fn install_every_stock_shot_resolves_its_sprite_and_texture() {
 /// flare sprite in the mounted sprite table and finds its texture, and so does the impact flare's.
 #[test]
 fn install_every_flare_resolves_its_sprite_and_texture() {
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-        eprintln!("SKIP: STA64_TEST_INSTALL names no install");
-        return;
-    };
-    let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let m = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();
     let (index, _) = sta_content::OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();

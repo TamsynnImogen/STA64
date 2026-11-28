@@ -242,8 +242,9 @@ mod tests {
     /// `--nocapture` for the listing.
     #[test]
     fn install_lists_each_miners_orbit_beam_and_berth() {
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let root = found.root_string();
+        let m = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let (db, _) = ContentDb::load(&vfs, &index).unwrap();

@@ -437,11 +437,13 @@ fn personnel_flags_and_zero_rectangles_suppress_only_authored_labels() {
 /// readouts exist; a live PlayerView supplies their values without rebuilding them.
 #[test]
 fn installed_sta2_classic_personnel_respects_race_cfg() {
-    let (Some(root), Ok(mode)) = (std::env::var_os("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
-        eprintln!("SKIP: set STA64_TEST_INSTALL and STA64_TEST_MOD=STA2 Classic");
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+    let root = found.root.clone();
+    let mode = found.mod_string();
+    if mode != "STA2 Classic" {
+        sta_testkit::skip("set STA64_TEST_ROOTS_MOD=STA2 Classic (this test needs that mod)");
         return;
-    };
-    if mode != "STA2 Classic" { return; }
+    }
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mode)).unwrap();
     for (cfg_name, crew_visible) in [
         ("gui_fed.cfg", true), ("gui_kli.cfg", true), ("gui_rom.cfg", true),
@@ -2148,7 +2150,7 @@ fn the_movie_panel_and_the_window_read_the_same_keys_and_the_window_goes_quiet_w
 #[test]
 fn installed_layouts_give_a_window_exactly_where_they_declare_one_and_its_art_resolves() {
     let mut ran = 0;
-    for var in ["STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL", "STA64_TEST_INSTALL"] {
+    for var in ["STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL"] {
         let Some(root) = std::env::var_os(var) else { continue };
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
         let tables: Vec<_> = vfs
@@ -2184,7 +2186,7 @@ fn installed_layouts_give_a_window_exactly_where_they_declare_one_and_its_art_re
         }
     }
     if ran == 0 {
-        eprintln!("SKIP (or no layout declares the window): set STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_INSTALL");
+        eprintln!("SKIP (or no layout declares the window): set STA64_TEST_A2_STOCK_INSTALL or STA64_TEST_ROOTS_INSTALL");
     }
 }
 

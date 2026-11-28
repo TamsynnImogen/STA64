@@ -3,8 +3,6 @@
 //! (stock Armada II: D/J unpopulated, H sparse, K light, L medium, M heavy; pod
 //! `partySize` 100, `orbitRange` 150).
 
-use std::path::Path;
-
 use sta_content::{ContentDb, OdfIndex, Overrides, PlanetRole, Profile, Warning, odf::load_with};
 use sta_core::Fixed;
 use sta_vfs::Vfs;
@@ -83,11 +81,10 @@ fn population_level_changes_the_hash_and_the_fake_hash_is_unchanged() {
     assert_ne!(h(light), h(none));
 }
 
-/// The stock Armada II install, or `STA64_TEST_INSTALL`; skipped when absent.
+/// The stock Armada II install (`STA64_TEST_A2_STOCK_INSTALL`); skipped when absent.
 fn install() -> Option<Vfs> {
-    let root = std::env::var("STA64_TEST_INSTALL").unwrap_or_else(|_| "/home/cedric/Games/Heroic/Star Trek Armada II (Stock)".into());
-    let root = Path::new(&root);
-    root.is_dir().then(|| Vfs::mount_install(root, None).ok()).flatten()
+    let root = sta_testkit::install(sta_testkit::Kind::StockSecond)?;
+    Vfs::mount_install(&root, None).ok()
 }
 
 #[test]

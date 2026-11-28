@@ -523,8 +523,9 @@ mod tests {
     #[test]
     fn real_install_voices_follow_the_front_end_mod_switch() {
         use crate::frontend::screens::ModChosen;
-        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
-        let modname = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty()).unwrap_or_else(|| "STA2 Classic Mod".into());
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+        let root = found.root_string();
+        let modname = found.active_mod.clone().unwrap_or_else(|| "STA2 Classic Mod".into());
         let root = std::path::PathBuf::from(root);
         let Ok(mod_vfs) = sta_vfs::Vfs::mount_install(&root, Some(&modname)) else {
             eprintln!("SKIP: mod {modname:?} does not mount under {}", root.display());

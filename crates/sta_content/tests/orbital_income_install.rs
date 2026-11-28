@@ -4,18 +4,16 @@
 //! `p_mining` eligibility read from the executable, static; the free-unit
 //! extension follows #1091's shipped implementation and data, not measured.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sta_content::{ContentDb, OdfIndex, Profile, Warning};
 use sta_vfs::Vfs;
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
 const ROOTS: &str = "Star Trek Armada II Fleet Operations Roots";
 const KEYS: [&str; 7] = ["miningMultiplier", "resourcesCanHandle", "miningRate", "trickleAmount", "trickleMiningRateFraction", "isInfinite", "miningRateModifier"];
 
 fn load(root: &Path, modname: Option<&str>, required: bool) -> Option<(ContentDb, Vec<Warning>, Vfs, OdfIndex)> {
     if !root.is_dir() {
-        assert!(!required, "{}: configured install is missing", root.display());
         eprintln!("{}: skipped, not installed", root.display());
         return None;
     }
@@ -43,20 +41,15 @@ fn about_keys(w: &[Warning]) -> Vec<String> {
 
 #[test]
 fn installs_parse_the_income_keys_without_warnings() {
-    let mut cases = vec![
-        ("A2", Path::new(HEROIC).join("Star Trek Armada II (Stock)"), None, true, false),
-        ("Classic", Path::new(HEROIC).join(ROOTS), Some("STA2 Classic Mod"), true, false),
-        ("Classic Enhanced", Path::new(HEROIC).join(ROOTS), Some("STA2 Classic Mod Enhanced Gameplay"), true, false),
-        ("FO 3.2.7", Path::new(HEROIC).join("Star Trek Armada II Fleet Operations"), None, false, false),
-        ("DW", Path::new(HEROIC).join("Star Trek Armada II Dominion War"), None, false, false),
-        ("Roots", Path::new(HEROIC).join(ROOTS), None, false, false),
-        ("A1", Path::new(HEROIC).join("Star Trek Armada"), None, false, false),
+    let cases = vec![
+        ("A2", sta_testkit::game_root("Star Trek Armada II (Stock)"), None, true, false),
+        ("Classic", sta_testkit::game_root(ROOTS), Some("STA2 Classic Mod"), true, false),
+        ("Classic Enhanced", sta_testkit::game_root(ROOTS), Some("STA2 Classic Mod Enhanced Gameplay"), true, false),
+        ("FO 3.2.7", sta_testkit::game_root("Star Trek Armada II Fleet Operations"), None, false, false),
+        ("DW", sta_testkit::game_root("Star Trek Armada II Dominion War"), None, false, false),
+        ("Roots", sta_testkit::game_root(ROOTS), None, false, false),
+        ("A1", sta_testkit::game_root("Star Trek Armada"), None, false, false),
     ];
-    let local_root = std::env::var_os("STA64_TEST_INSTALL").map(PathBuf::from);
-    let local_mod = std::env::var("STA64_TEST_MOD").unwrap_or_default();
-    if let Some(root) = local_root {
-        cases.push(("local install", root, Some(local_mod.as_str()).filter(|m| !m.is_empty()), true, true));
-    }
     for (label, root, modname, a2_data, required) in cases {
         let Some((db, warnings, vfs, index)) = load(&root, modname, required) else { continue };
         let bad = about_keys(&warnings);

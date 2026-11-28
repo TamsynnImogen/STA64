@@ -11,10 +11,8 @@ fn classic_defiant_has_visible_opaque_hull_parts() {
         eprintln!("SKIP: set STA64_DEFIANT_TESTS=1 for the Classic Defiant fixture");
         return;
     }
-    let (Ok(install), Ok(mod_name)) = (std::env::var("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
-        eprintln!("SKIP: set STA64_TEST_INSTALL and STA64_TEST_MOD (empty for base install)");
-        return;
-    };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+    let (install, mod_name) = (found.root_string(), found.mod_string());
     let vfs = sta_vfs::Vfs::mount_install(
         std::path::Path::new(&install),
         Some(mod_name.as_str()).filter(|name| !name.is_empty()),

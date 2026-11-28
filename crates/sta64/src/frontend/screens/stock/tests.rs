@@ -812,11 +812,9 @@ fn hud_layout_dropdown_follows_the_setting() {
 /// stock buttons. Needs `STA64_TEST_INSTALL` (and `STA64_TEST_MOD`).
 #[test]
 fn captions_come_from_the_installs_label_map() {
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-        eprintln!("SKIP: set STA64_TEST_INSTALL (and STA64_TEST_MOD) for the install's label.map captions");
-        return;
-    };
-    let active = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let active = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active.as_deref()).unwrap();
     let strings = crate::ui::i18n::Strings::load(&vfs, "english");
     let native = |k: &str| strings.native_label(k).map(str::to_owned);

@@ -32,6 +32,8 @@ mod mcp;
 mod media;
 mod render;
 mod ui;
+#[cfg(test)]
+mod testsupport;
 mod viewer;
 
 use app::LaunchConfig;

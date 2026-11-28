@@ -14,11 +14,13 @@ use std::sync::{Arc, Mutex};
 
 #[test]
 fn installed_moon_has_no_highlight_and_a_lit_core() {
-    let (Ok("1"), Ok(root)) = (std::env::var("STA64_GPU_TESTS").as_deref(), std::env::var("STA64_TEST_INSTALL")) else {
-        eprintln!("SKIP: set STA64_GPU_TESTS=1 and STA64_TEST_INSTALL");
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        sta_testkit::skip("set STA64_GPU_TESTS=1 (the GPU opt-in)");
         return;
-    };
-    let active_mod = std::env::var("STA64_TEST_MOD").ok();
+    }
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let active_mod = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active_mod.as_deref()).unwrap();
     let model_key = std::env::var("STA64_TEST_MODEL").unwrap_or_else(|_| "mdmoon".into());
     eprintln!("GPU fixture: {model_key}");
@@ -249,11 +251,9 @@ impl MoonFrame {
 fn installed_moon_materials_draw_no_highlight_in_the_stock_look() {
     use crate::render::hulls::{hull_material, HullPart, HullView};
     use crate::render::stock::hulls::StockLight;
-    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
-        eprintln!("SKIP: set STA64_TEST_INSTALL");
-        return;
-    };
-    let active_mod = std::env::var("STA64_TEST_MOD").ok();
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let active_mod = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active_mod.as_deref()).unwrap();
     let Some((path, fmt)) = sta_assets::find_model(&vfs, "mdmoon") else {
         eprintln!("SKIP: no moon model in this install");

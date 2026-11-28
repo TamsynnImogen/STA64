@@ -4,3 +4,4 @@
 /.claude/target-check/
 __pycache__/
 *.pyc
+/tools/gated.local

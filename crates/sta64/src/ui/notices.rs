@@ -1337,11 +1337,12 @@ mod tests {
     #[test]
     fn installed_command_tooltips_resolve_from_the_mounted_header() {
         if std::env::var("STA64_TOOLTIP_TESTS").as_deref() != Ok("1") {
-            eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 STA64_TEST_INSTALL and optional STA64_TEST_MOD");
+            eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 an install variable (docs/GATED_TESTS.md)");
             return;
         }
-        let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-        let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|s| !s.is_empty());
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let install = found.root_string();
+        let active_mod = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let odf = sta_assets::a2fmt::odf::Odf::load_layered("stop.odf", |name, version| {

@@ -11,11 +11,12 @@ fn installed_defiant_draws_offscreen() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1")
         || std::env::var("STA64_DEFIANT_TESTS").as_deref() != Ok("1")
     {
-        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_DEFIANT_TESTS=1 and STA64_TEST_INSTALL/STA64_TEST_MOD");
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_DEFIANT_TESTS=1 and an install variable (docs/GATED_TESTS.md)");
         return;
     }
-    let root = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let active_mod = std::env::var("STA64_TEST_MOD").expect("STA64_TEST_MOD");
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let root = found.root_string();
+    let active_mod = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&active_mod)).unwrap();
     let model_key = std::env::var("STA64_TEST_MODEL").unwrap_or_else(|_| "fdestroy".into());
     eprintln!("GPU fixture: {model_key}");
