@@ -45,6 +45,7 @@ impl Sim {
         sim.ai_seats.sort();
         sim.ai_seats.dedup();
         sim.directors_cut = s.options.directors_cut && s.content.profile() == sta_content::Profile::Sta1Classic;
+        sim.match_warp_off = !s.options.allow_warp && crate::setup::GameOptions::warp_option_counts(&s.content);
         sim.content = Some(Arc::clone(&s.content));
         sim.starts = s.map.starts.clone();
         sim.regions = s.map.regions.clone();

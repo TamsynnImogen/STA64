@@ -51,7 +51,9 @@ pub const MAGIC: [u8; 4] = *b"STAR";
 /// middle of the command bytes): formats 6 and 7 are refused, not migrated, as
 /// their commands no longer decode alike. PROVISIONAL number: the merge steward
 /// assigns the real one.
-pub const FORMAT_VERSION: u16 = 8;
+/// Format 9 (#1102) records the match option "warp allowed" (a new field of the options in the
+/// header): format 8 is refused, not migrated.
+pub const FORMAT_VERSION: u16 = 9;
 /// Digest every this many ticks unless the recorder is told otherwise.
 pub const DEFAULT_DIGEST_EVERY: Tick = 30;
 
@@ -859,10 +861,11 @@ mod tests {
             Replay::decode(&bytes[..bytes.len() - 3]),
             Err(ReplayError::Corrupt(_))
         ));
-        bytes[4] = 9;
+        let other = FORMAT_VERSION + 1;
+        bytes[4] = other as u8;
         assert_eq!(
             Replay::decode(&bytes).unwrap_err(),
-            ReplayError::FormatVersion { found: 9 }
+            ReplayError::FormatVersion { found: other }
         );
         let mut other = replay.clone();
         other.seam_rev = SEAM_REV + 1;
