@@ -635,8 +635,8 @@ impl ContentDb {
         self.explosions.explosion(u.stats.self_destruct.as_deref()?)
     }
 
-    /// This database with these explosion definitions. The digest does not change.
-    pub(crate) fn with_explosions(mut self, table: crate::ExplosionTable) -> ContentDb {
+    /// This database with these explosion definitions (authored ones in tests). The digest does not change.
+    pub fn with_explosions(mut self, table: crate::ExplosionTable) -> ContentDb {
         self.explosions = Arc::new(table);
         self
     }

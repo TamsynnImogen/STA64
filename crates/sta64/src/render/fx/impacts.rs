@@ -35,7 +35,7 @@
 
 use bevy::prelude::*;
 use sta_content::WeaponKind;
-use sta_sim::{EntityId, SimEvent, TICK_HZ, Tick};
+use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 use std::collections::BTreeMap;
 
 use super::fire::{self, FireFrame, FireMaterial, RingFrame};
@@ -143,21 +143,24 @@ struct SeenUnit {
     heading: Vec3,
     radius: f32,
     faction: Faction,
+    /// Its definition, for the explosion it names (#1153).
+    def: Option<ContentKey>,
 }
 
 impl Default for SeenUnit {
     fn default() -> SeenUnit {
-        SeenUnit { pos: Vec3::ZERO, heading: Vec3::NEG_Z, radius: DEFAULT_RADIUS, faction: Faction::of_odf("") }
+        SeenUnit { pos: Vec3::ZERO, heading: Vec3::NEG_Z, radius: DEFAULT_RADIUS, faction: Faction::of_odf(""), def: None }
     }
 }
 
 #[derive(Resource, Default)]
-struct Seen(BTreeMap<EntityId, SeenUnit>);
+pub(super) struct Seen(BTreeMap<EntityId, SeenUnit>);
 
 pub struct ImpactFxPlugin;
 
 impl Plugin for ImpactFxPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins(super::stock_explosions::StockExplosionsPlugin);
         app.init_resource::<Seen>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_units)
             .add_systems(OnExit(crate::app::AppState::InGame), forget_units)
@@ -252,12 +255,12 @@ fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<
         let radius = ents.as_ref().and_then(|m| m.0.get(&u.id)).and_then(|e| radii.get(*e).ok()).map_or(DEFAULT_RADIUS, |r| r.0);
         let heading = Vec3::new(u.heading.0.to_f32(), 0.0, -u.heading.1.to_f32()).normalize_or(Vec3::NEG_Z);
         let faction = content.as_ref().and_then(|c| c.0.unit(u.def)).map_or(Faction::of_odf(""), |d| Faction::of_odf(&d.odf));
-        seen.0.insert(u.id, SeenUnit { pos: to_bevy(u.pos.to_f32()), heading, radius, faction });
+        seen.0.insert(u.id, SeenUnit { pos: to_bevy(u.pos.to_f32()), heading, radius, faction, def: Some(u.def) });
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_impacts(
+pub(super) fn spawn_impacts(
     mut cmds: Commands,
     mut msgs: MessageReader<SimMsg>,
     clock: Res<AnimClock>,
@@ -266,9 +269,13 @@ fn spawn_impacts(
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
     fog: Option<Res<crate::render::fog::FogState>>,
+    mut explosions: Option<ResMut<super::stock_explosions::ExplosionQueue>>,
 ) {
     let tick = clock.tick();
     let shell = refit_shield_shell(profile.as_deref(), effects.as_deref());
+    // #1153: under Stock the explosion of a unit whose definition resolves is `stock_explosions.rs`'. The hull sparks of
+    // a hit stay Refit's in both looks (INTERIM: the original's hull-hit node particle is not drawn yet).
+    let stock = super::stock_explosions::stock_explosions(profile.as_deref(), effects.as_deref());
     for SimMsg(ev) in msgs.read() {
         match ev {
             SimEvent::Hit { target, weapon, facing, shield, hull, at, .. } => {
@@ -357,6 +364,13 @@ fn spawn_impacts(
             SimEvent::Destroyed { id, .. } => {
                 let Some(s) = seen.0.remove(id) else { continue };
                 let p = s.pos;
+                if stock
+                    && let (Some(queue), Some(content), Some(def)) = (explosions.as_mut(), content.as_ref(), s.def)
+                    && let Some(req) = super::stock_explosions::request(&content.0, def, *id, p, s.heading, s.radius, clock.now() * TICK_HZ as f64)
+                {
+                    queue.0.push(req);
+                    continue;
+                }
                 let mk = |kind, idx, life, vel, colour| {
                     (
                         ImpactFx {
