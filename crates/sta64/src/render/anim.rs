@@ -30,11 +30,10 @@
 //!   ([`Trigger::None`]); the track rests.
 //!
 //! What the original engine does, per trigger (read from the executable, static; the
-//! owning functions are `ConstructionRig::StartBuild` / `WorkerBeeHasReturned`,
-//! `ResourceTransferInterface::SetDock`, `Shipyard::SetRepairDock` and
-//! `Weapon::Simulate`): every call sets the owner's animation flags and restarts its
-//! clock. Flag 1 loops, flag 2 plays forward once and holds the last key, flag 4 plays
-//! backwards once and holds the first key. A rig sets 2 at `StartBuild` and 4 once the
+//! triggers are a rig starting a build, a worker bee's return, a dock at a transfer station
+//! or a shipyard, and a weapon's shot): every one sets the owner's animation flags and
+//! restarts its clock. Flag 1 loops, flag 2 plays forward once and holds the last key, flag 4 plays
+//! backwards once and holds the first key. A rig sets 2 when the build starts and 4 once the
 //! last worker bee is back: **workers at work** is the construction hold already done
 //! by `ConstructionBays` (open from the start of the build until every worker is
 //! home). A freighter docking at a transfer station sets 1 on the station (loop) and
