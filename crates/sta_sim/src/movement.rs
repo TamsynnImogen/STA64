@@ -85,6 +85,11 @@ impl Movement {
         self.edit(id, |c| c.waypoints.clear());
     }
 
+    /// Add a leg after the queued ones.
+    pub(crate) fn push_waypoint(&mut self, id: EntityId, leg: Vec3) {
+        self.edit(id, |c| c.waypoints.push(leg));
+    }
+
     /// Replace the legs after the current target (a patrol's lap).
     pub(crate) fn set_waypoints(&mut self, id: EntityId, legs: Vec<Vec3>) {
         self.edit(id, |c| c.waypoints = legs);

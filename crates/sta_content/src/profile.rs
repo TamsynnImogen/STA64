@@ -237,6 +237,7 @@ impl Profile {
             // `Sta2Classic` `pd_energy`, `Fo4` `pd_energy` + `pd_debt_timer`.
             Profile::Sta2Classic => Features {
                 shield_zero_hold: true,
+                beam_damage_at_end: true,
                 turrets: true,
                 point_defense_cycles: true,
                 weapon_shot_timing: true,
@@ -530,7 +531,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 42] = [
+pub const FEATURE_NAMES: [&str; 43] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -573,6 +574,7 @@ pub const FEATURE_NAMES: [&str; 42] = [
     "weapon_cloak_fire",
     "crew_weapon_delay",
     "shield_zero_hold",
+    "beam_damage_at_end",
 ];
 
 impl Features {
@@ -620,6 +622,7 @@ impl Features {
             "weapon_cloak_fire" => &mut self.weapon_cloak_fire,
             "crew_weapon_delay" => &mut self.crew_weapon_delay,
             "shield_zero_hold" => &mut self.shield_zero_hold,
+            "beam_damage_at_end" => &mut self.beam_damage_at_end,
             _ => return None,
         })
     }
@@ -880,7 +883,8 @@ mod tests {
             "target_score",
             "idle_assist",
             "assist_on_ally_fire",
-            "shield_zero_hold"
+            "shield_zero_hold",
+            "beam_damage_at_end"
         ]);
     }
 

@@ -187,7 +187,8 @@ fn single_player(p: &mut Box_, ctx: &Ctx, b: Vec2) {
             }
         }
     }
-    off_button(p, ctx, b, Slot::SpLoad, &cap(ctx, "load_game", "Load game"));
+    let load = region(Slot::SpLoad).px(b);
+    put(p, Slot::SpLoad, load, (kit_button(ctx.theme, &cap(ctx, "load_game", "Load game"), load.width()), crate::ui::save_menu::OpenSaveButton(crate::ui::save_menu::SaveMode::Load)));
     act_button(p, ctx, b, Slot::SpBack, &cap(ctx, "previous_menu", "Previous menu"), Act::Goto(Screen::Main));
 }
 

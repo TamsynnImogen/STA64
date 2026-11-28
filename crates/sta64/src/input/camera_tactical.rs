@@ -56,6 +56,12 @@ impl TacticalView {
     pub(crate) fn request_toggle(&mut self) {
         self.toggle_requested = true;
     }
+
+    /// Whether a swap was requested since the last call (the tests' read of the request).
+    #[cfg(test)]
+    pub(crate) fn take_toggle_request(&mut self) -> bool {
+        std::mem::take(&mut self.toggle_requested)
+    }
 }
 
 pub(crate) fn overview_active(view: Option<Res<TacticalView>>) -> bool {

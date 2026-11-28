@@ -246,6 +246,15 @@ fn engagement_memory_is_digested_snapshotted_and_forgotten_after_a_second() {
         let u = sim.units.get_mut(id).unwrap();
         u.flags = u.flags.with(crate::view::UnitFlags::WEAPONS_OFF, true);
     }
+    // A beam fired before the weapons went off still lands when its life ends
+    // (`beam_damage_at_end`) and is remembered from then: let those end first.
+    for _ in 0..30 * 5 {
+        if sim.weapons.beams_in_flight() == 0 {
+            break;
+        }
+        WorldSource::step(&mut sim, &[]);
+    }
+    assert_eq!(sim.weapons.beams_in_flight(), 0);
     for _ in 0..31 {
         WorldSource::step(&mut sim, &[]);
     }

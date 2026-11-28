@@ -207,6 +207,7 @@ impl Plugin for HudPlugin {
                     (avatar::press, host).chain().run_if(crate::editor::play_mode),
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
+                    stock::apply_cinematic_switch,
                     (
                         press.run_if(not(crate::ui::presentation::cutscene_running)),
                         status_gpu::press_queue,

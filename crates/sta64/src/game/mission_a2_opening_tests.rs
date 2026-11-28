@@ -112,10 +112,7 @@ pub fn drive(seconds: f64) -> Option<Trace> {
     let data = temp_dir("a2open-data");
     let dir = temp_dir("a2open-menu");
     let _cleanup = Cleanup(vec![data.clone(), dir.clone()]);
-    let tool = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/convert_install_missions.py");
-    let run = std::process::Command::new("python3").arg("-I").arg(tool).arg("--install").arg(root).env("STA64_DATA_DIR", &data).output().expect("run the converter");
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-    let conv = sta_mission::converted::dir_in(&data, root, None);
+    let conv = crate::game::convert_e2e_tests::hook_convert(root, &data).0;
     let vfs = sta_vfs::Vfs::mount_install(root, None).expect("mounts");
     let (mut cs, _) = load_campaigns_with(&vfs, Some(root), None, Some(&conv), |b| crate::frontend::campaign::ProgressStore::in_dir(&dir, b)).expect("campaigns");
     let (campaign, mission) = cs
