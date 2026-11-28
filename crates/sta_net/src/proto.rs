@@ -57,7 +57,9 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// 31 adds the match option "warp allowed" to `GameOptions` (#1102), which the lobby state
 /// and the start message carry, and to the transferred snapshot. (30 is not used here: the
 /// number is reserved.)
-pub const PROTOCOL_VERSION: u16 = 31;
+/// 32 adds the flights of torpedoes to the transferred snapshot and marks the rule change of
+/// `ordnance_flight` (#1068), for the same reason.
+pub const PROTOCOL_VERSION: u16 = 32;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -2180,7 +2182,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 31);
+        assert_eq!(PROTOCOL_VERSION, 32);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2188,9 +2190,9 @@ mod tests {
         );
     }
 
-    /// Pinned with protocol 31 (#1102): the header carries the number, so a new number
+    /// Pinned with protocol 32 (#1068): the header carries the number, so a new number
     /// changes this value too (run the test, copy the left side).
-    const GOLDEN: u64 = 5851316650157715204;
+    const GOLDEN: u64 = 12778985215870054580;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.

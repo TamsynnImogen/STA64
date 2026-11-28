@@ -1439,6 +1439,15 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     {
         c.raw("variance_rows", &table(l));
     }
+    // `ordnance_flight`: the keys a torpedo's flight reads, only under the switch and only for a
+    // torpedo class, so every other weapon keeps its text.
+    if features.ordnance_flight && w.kind == crate::WeaponKind::Projectile && crate::weapon::TORPEDO_CLASSES.contains(&w.class.0.as_str()) {
+        c.raw("flight", &group(
+            Canon::new()
+                .opt_fixed("life_span", w.base.life_span)
+                .opt_fixed("seek_time", w.base.seek_time)
+                .opt_fixed("omega_turn", w.base.omega_turn)));
+    }
     // The weapon's `special` key (read by `sta_sim::movement::approach`); only when set to 1.
     if w.base.special == Some(true) {
         c.raw("special", "1");

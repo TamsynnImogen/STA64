@@ -61,7 +61,7 @@ fn typed_only_keys_do_not_move_the_content_hash() {
     let plain = load(PLAIN_WEAPON, PLAIN_ORDNANCE).hash();
     let keyed = load(
         &format!("{PLAIN_WEAPON}hitChance = 0.5\n\"fbattle.odf\" 0.1\nneedTarget = 1\ntargetEnemyCraft = 0\nstopToHitModifier = -0.2\n"),
-        &format!("{PLAIN_ORDNANCE}ignoreShield = 1\nomegaTurn = 2\n"),
+        &format!("{PLAIN_ORDNANCE}ignoreShield = 1\nshotAccel = 2\n"),  // omegaTurn is read now, under `ordnance_flight`
     )
     .hash();
     assert_eq!(plain, keyed, "nothing in the sim reads the base keys yet (SIM-73 digests what it reads)");

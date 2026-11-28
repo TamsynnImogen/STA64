@@ -87,8 +87,11 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// nor read: the number is reserved.)
 /// Format 58 appends the match option "warp allowed" (#1102); 50 to 56 still load, with warp
 /// allowed. (57 is neither written nor read: the number is reserved.)
+/// Format 59 appends the flights of the torpedoes under `ordnance_flight` (#1068): their heading and the tick
+/// their life ends; 50 to 58 still load, a torpedo in flight in one of them gets its heading toward its target and
+/// a life counted from the load (INTERIM: its launch is not known). (57 is neither written nor read.)
 /// Earlier formats are refused.
-pub const FORMAT_VERSION: u16 = 58;
+pub const FORMAT_VERSION: u16 = 59;
 /// The last format without the Director's Cut flag (still loads). Fixed history, not renumbered.
 #[doc(hidden)]
 pub const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
@@ -107,6 +110,9 @@ pub const PRE_WARP_RAMP_FORMAT: u16 = 54;
 /// The last format without the warp option (still loads).
 #[doc(hidden)]
 pub const PRE_WARP_OPTION_FORMAT: u16 = 56;
+/// The last format without the flights of torpedoes (still loads).
+#[doc(hidden)]
+pub const PRE_FLIGHT_FORMAT: u16 = 58;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -156,7 +162,7 @@ fn check_header(bytes: &[u8]) -> Result<(u16, u64), SnapshotError> {
         return Err(SnapshotError::BadMagic);
     }
     let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | PRE_DYING_FORMAT | PRE_WARP_RAMP_FORMAT | PRE_WARP_OPTION_FORMAT | FORMAT_VERSION) {
+    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | PRE_DYING_FORMAT | PRE_WARP_RAMP_FORMAT | PRE_WARP_OPTION_FORMAT | PRE_FLIGHT_FORMAT | FORMAT_VERSION) {
         return Err(SnapshotError::FormatVersion { found });
     }
     let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -311,6 +317,13 @@ struct BeamsRec {
 struct WarpRampRec {
     version: u8,
     rows: Vec<(EntityId, crate::movement::approach::Ramp)>,
+}
+
+/// Format 59 (#1068): the flights of the torpedoes in flight under `ordnance_flight`, by shot id.
+#[derive(Serialize, Deserialize)]
+struct FlightRec {
+    version: u8,
+    rows: Vec<(u32, crate::combat::flight::Flight)>,
 }
 
 /// Format 54 (#1100): the units in their dying phase under `dying_phase`, by unit id.
@@ -598,6 +611,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&DyingRec { version: 1, rows: self.dying.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&WarpRampRec { version: 1, rows: self.approach_warp.ramps_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&!self.match_warp_off).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&FlightRec { version: 1, rows: self.weapons.flights_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -731,6 +745,14 @@ impl Sim {
         } else {
             postcard::take_from_bytes(rest).map_err(corrupt_postcard)?
         };
+        // Formats 50 to 58 carry no torpedo flights (#1068): their shots in flight are given one below.
+        let (flight_rows, rest): (Vec<(u32, crate::combat::flight::Flight)>, _) = if format <= PRE_FLIGHT_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (FlightRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown flight record version".into())); }
+            (record.rows, rest)
+        };
         if !allow_warp && !content.as_deref().is_some_and(crate::setup::GameOptions::warp_option_counts) {
             return Err(SnapshotError::Corrupt("the warp option is off for content it does not count for".into()));
         }
@@ -830,6 +852,13 @@ impl Sim {
         let mut weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
         if !weapons.set_beams(content.as_deref(), beam_rows) {
             return Err(corrupt("beams"));
+        }
+        if format <= PRE_FLIGHT_FORMAT {
+            if let Some(db) = content.as_deref() {
+                weapons.adopt_flights(db, &units, b.tick);
+            }
+        } else if !weapons.set_flights(content.as_deref(), flight_rows) {
+            return Err(corrupt("torpedo flights"));
         }
         let dying = crate::combat::dying::Dying::from_rows(dying_rows, b.tick, &units)
             .ok_or_else(|| SnapshotError::Corrupt("dying rows out of order, ended or of a unit that is not dying".into()))?;

@@ -495,7 +495,7 @@ fn with_the_switch_off_a_unit_at_zero_hull_is_removed_at_once() {
     assert_eq!(g.until_removed(t), arrives);
     assert_eq!(g.deaths(t), [(arrives, SimEvent::Destroyed { id: t, by: Some(l) })]);
     // A content without the switch never has a dying row: the snapshot's record stays empty
-    // (the empty warp ramp record and the warp option's byte follow it).
+    // (the empty warp ramp record, the warp option's byte and the empty flights record follow it).
     let bytes = g.sim.snapshot();
-    assert_eq!(&bytes[bytes.len() - 5..], [1, 0, 1, 0, 1]);
+    assert_eq!(&bytes[bytes.len() - 7..], [1, 0, 1, 0, 1, 1, 0]);
 }
