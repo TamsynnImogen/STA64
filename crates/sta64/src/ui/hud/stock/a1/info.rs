@@ -45,7 +45,7 @@ pub struct Extra {
 #[derive(Component)]
 pub(in crate::ui::hud) struct CrewText;
 
-/// The native RaceIcon and ShieldBar read these colours from the selected object on draw.
+/// The native race icon and shield bar read these colours from the selected object on draw.
 #[derive(Component, Clone, Copy)]
 pub(in crate::ui::hud) enum LiveTint {
     Race(EntityId),
@@ -135,7 +135,7 @@ fn key_rect(layout: &StockLayout, origin: Vec2, keys: &[&str]) -> Option<R> {
     keys.iter().find_map(|k| layout.at(origin, k))
 }
 
-/// Armada I StandardBar draws a tinted track and a clipped fill using the same sprite.
+/// Armada I's bar draws a tinted track and a clipped fill using the same sprite.
 fn sprite_bar(
     commands: &mut Commands,
     root: Entity,
@@ -203,7 +203,7 @@ fn single_card(
     for piece in layout.pieces_in("info", "infoSingleBackground") {
         picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
     }
-    // RaceIcon draws both layers in the selected owner's colour. A1Compat restores
+    // The native race icon draws both layers in the selected owner's colour. A1Compat restores
     // the bar in Roots, where the native insignia and team palette are still available.
     if let Some(r) = layout.at(origin, "infoSingleRaceIconArea") {
         let sprite = layout.name("infoSingleRaceIconBackground")

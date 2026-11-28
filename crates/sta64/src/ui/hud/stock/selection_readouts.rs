@@ -172,7 +172,7 @@ pub(in crate::ui::hud) fn update(
             .and_then(|unit| feed.def(unit).map(|def| (unit, def)))
             .and_then(|(unit, def)| {
                 field.value(unit, def).map(|(value, share)| {
-                    // TextAndSprite uses the faction's thresholds for crew and energy.
+                    // The native text-and-icon readout uses the faction's thresholds for crew and energy.
                     let colour = if share > 0.0 {
                         state.info_style.color(&def.race, Some(share))
                     } else {
@@ -194,7 +194,7 @@ pub(in crate::ui::hud) fn update(
         };
         if let Some(mut label) = label {
             let value = match field {
-                // Armada II's EnergyText prints a rounded percentage.
+                // Armada II's energy readout prints a rounded percentage.
                 Field::Energy => format!("{value}%"),
                 _ => value.to_string(),
             };

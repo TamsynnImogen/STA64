@@ -767,7 +767,7 @@ fn spawn_single(
         )
     {
         let fills: &[&str] = if builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
-        // The stock HealthBar uses hull for width and shields for tint.
+        // The stock health bar uses hull for width and shields for tint.
         let (kind, tip) = if native_health {
             (StockBar::NativeHealth(r.w), Readout::Hull)
         } else {
