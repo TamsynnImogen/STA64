@@ -18,6 +18,7 @@ stated in AGENTS.md, "Decisions: ADRs and experiments".
 | [0009](0009-sprite-colours-in-a-storage-buffer.md) | Sprite colour and fade in a storage buffer instead of per-node materials, S1 to S6 | proposed | 2026-11-20, S2 and S3 amended 2026-11-23 |
 | [0010](0010-save-and-load.md) | Save and load: compatibility, container, mission script state, scope of v1, V1 to V7 | proposed | 2026-11-27 |
 | [0011](0011-group-movement.md) | Group movement: formations per base game, pace by the slowest member, one route per group, G1 to G14 | proposed | 2026-11-27 |
+| [0012](0012-vendored-patched-lua.md) | A vendored, patched Lua for reproducible mission scripts, L1 to L3 | proposed | 2026-11-27 |
 
 ADR 0007 was merged as `0001-ui-text-and-icons.md` by mistake (PR #663) and
 renumbered on 2026-11-14; its text is unchanged.
@@ -32,7 +33,7 @@ recorded" instead of supplying one.
 - **Numbers** are four digits, in order of decision date, never reused. A new
   ADR takes the next free number; check open pull requests for one already
   taken.
-- **Decision ids inside an ADR** (D1 to D13, N1 to N6, T1 to T8, H1 to H7, V1 to V7, G1 to G14) are stable
+- **Decision ids inside an ADR** (D1 to D13, N1 to N6, T1 to T8, H1 to H7, V1 to V7, G1 to G14, L1 to L3) are stable
   and are what issues, pull requests and code comments cite (`Implements D7`).
 - **Status** is one of: proposed, accepted, superseded by ADR NNNN. A proposed
   ADR binds nothing. Who has to approve is stated in the ADR; decisions on
