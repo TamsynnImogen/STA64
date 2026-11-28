@@ -104,6 +104,13 @@ fn row_stretch(row: &WarpRow) -> f32 {
     row.stretch.to_f32().max(1.0)
 }
 
+/// Whether the craft of a content profile carry the hull's stretch: the stock Armada II profile's (the mod family: not
+/// read for this profile, and its hull is not stretched, so neither are its bubble and cap). The one gate of the hull,
+/// the selection bubble and the shield cap.
+pub(crate) fn carries_hull_stretch(profile: sta_content::Profile) -> bool {
+    profile == sta_content::Profile::Sta2Classic
+}
+
 /// What the hull's stretch needs, in one parameter: the one source of a craft's stretch now, for the hull, the
 /// selection bubble and the shield cap.
 #[derive(bevy::ecs::system::SystemParam)]
@@ -152,10 +159,10 @@ impl WarpStretch<'_> {
     }
 
     /// The stretch the selection bubble and the shield cap take (read from the executable, static: they follow the
-    /// hull's warp progress): the Stock look's, for the stock Armada II craft that carry the hull stretch; 1 otherwise.
+    /// hull's warp progress): the Stock look's, wherever the hull carries the stretch ([`carries_hull_stretch`]); 1 otherwise.
     /// INTERIM: the same uniform stretch as the hull, about the unit's origin.
     pub(crate) fn of_stock(&self, id: EntityId) -> f32 {
-        let stock_content = self.content.as_deref().is_some_and(|c| c.0.profile() == sta_content::Profile::Sta2Classic);
+        let stock_content = self.content.as_deref().is_some_and(|c| carries_hull_stretch(c.0.profile()));
         if stock_content && stock_warp(self.profile.as_deref(), self.effects.as_deref()) { self.of(id) } else { 1.0 }
     }
 }

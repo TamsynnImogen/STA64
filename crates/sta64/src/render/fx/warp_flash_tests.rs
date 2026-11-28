@@ -412,3 +412,13 @@ fn the_bubble_and_the_cap_take_the_hulls_stretch_under_the_stock_look_of_stock_a
     assert_eq!(stretches_at_warp(Some(RenderProfile::Stock), Profile::Native).1, 1.0, "no stock Armada II content: unchanged");
     assert_eq!(stretches_at_warp(None, Profile::Sta2Classic).1, 1.0, "no profile resources: unchanged");
 }
+
+#[test]
+fn the_bubble_and_the_cap_are_gated_where_the_hull_carries_its_stretch() {
+    use sta_content::Profile;
+    assert!(super::carries_hull_stretch(Profile::Sta2Classic));
+    // The mod family and the rest: no hull stretch, so no bubble or cap stretch either (not read for the mod family).
+    for p in [Profile::Fo3, Profile::Fo4, Profile::Sta1Classic, Profile::Native] {
+        assert!(!super::carries_hull_stretch(p), "{p:?}");
+    }
+}

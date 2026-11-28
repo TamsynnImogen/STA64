@@ -1,10 +1,13 @@
 //! The stock Armada II warp sounds (#1154): one when a craft starts its entry ramp, one when it starts its exit ramp.
 //!
 //! Rules (grades: "static" is read from the Armada II executable):
-//! - The entry sound plays when the craft's warp row turns to `Entering`, the exit sound when it turns to `Leaving`; none
-//!   while at warp (read from the executable, static). Both are positional, at the craft, and only for craft the local
-//!   player can see (the unit drawing's visibility). Not measured: the exact tick (the sound starts on the view that
-//!   shows the new phase: INTERIM, up to one view tick later than the original).
+//! - The entry sound plays when the craft's warp row turns to `Entering`, the exit sound when it turns from at warp to
+//!   `Leaving`; none while at warp (read from the executable, static: the sounds sit at the state changes from nothing to
+//!   entering and from at warp to leaving). An entry aborted into a leave plays no exit sound: not established (INTERIM,
+//!   pinned). Not measured: the exact tick (the sound starts on the view that shows the new phase: INTERIM, up to one
+//!   view tick later than the original).
+//! - STA64's own choice, not part of the reading: the sounds are positional, at the craft, and only for craft the local
+//!   player can see (the unit drawing's visibility), as its other unit sounds are.
 //! - Under the Stock look only; the Remaster look plays none (it did not before). Armada I plays none (it has no
 //!   warp effect). The mod-family profiles (Fleet Operations) are not read for these sounds: they follow the stock
 //!   reading (INTERIM, not read for the profile); a pin test names that.
@@ -61,7 +64,7 @@ impl WarpWatch {
             {
                 match now {
                     Some(WarpPhase::Entering) => out.push((STOCK_A2_WARP_ENTRY.to_owned(), u.pos)),
-                    Some(WarpPhase::Leaving) => out.push((STOCK_A2_WARP_EXIT.to_owned(), u.pos)),
+                    Some(WarpPhase::Leaving) if before == Some(WarpPhase::AtWarp) => out.push((STOCK_A2_WARP_EXIT.to_owned(), u.pos)),
                     _ => {}
                 }
             }
@@ -114,6 +117,14 @@ mod tests {
         let got = w.wanted(&view(4, &[(1, WarpPhase::Leaving)], &[1]), true, SEEN);
         assert_eq!(got.iter().map(|g| g.0.as_str()).collect::<Vec<_>>(), [STOCK_A2_WARP_EXIT]);
         assert!(w.wanted(&view(5, &[], &[1]), true, SEEN).is_empty(), "the ramp's end: none");
+    }
+
+    #[test]
+    fn an_entry_aborted_into_a_leave_plays_no_exit_sound_not_established_interim() {
+        let mut w = WarpWatch::default();
+        w.wanted(&view(0, &[], &[1]), true, SEEN);
+        assert_eq!(w.wanted(&view(1, &[(1, WarpPhase::Entering)], &[1]), true, SEEN).len(), 1, "the entry sound");
+        assert!(w.wanted(&view(2, &[(1, WarpPhase::Leaving)], &[1]), true, SEEN).is_empty(), "the aborted entry: none");
     }
 
     #[test]
