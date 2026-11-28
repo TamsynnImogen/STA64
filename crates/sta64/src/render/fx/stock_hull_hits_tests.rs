@@ -5,7 +5,7 @@ use crate::app::configure_sets;
 use crate::render::fx::impacts::{self, ImpactFx, ImpactFxPlugin, SmokeEmitter, HIT_SPARKS};
 use crate::render::fx::stock_shots;
 use crate::render::sprites::SpriteTables;
-use crate::render::hulls::{HullPart, HullSample};
+use crate::render::hulls::HullPart;
 use crate::render::units::HullShare;
 use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink, SimLinkPlugin};
 use bevy::time::TimeUpdateStrategy;

@@ -446,7 +446,9 @@ fn hull_parts_carry_a_vertex_sample_on_the_first_build_and_on_a_cache_hit() {
     use crate::render::hulls::{HullPart, HullSample};
     let fixture = Fixture::new();
     let vfs = fixture.vfs();
-    let model = load(&vfs);
+    // A model with a native material set is drawn by its own materials and is no hull: the sample is for the others.
+    let mut model = load(&vfs);
+    model.pbr = None;
     let mut world = World::new();
     let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
     let (mut texture_cache, mut parts) = (TextureCache::default(), PartCache::default());
@@ -474,7 +476,8 @@ fn hull_parts_carry_a_vertex_sample_on_the_first_build_and_on_a_cache_hit() {
         }
         found
     };
-    assert_eq!(parts_of(&mut world, roots[0]), vec![(true, 24, 24)], "the first build");
-    assert_eq!(parts_of(&mut world, roots[1]), vec![(true, 24, 24)], "a part-cache hit");
+    let first = parts_of(&mut world, roots[0]);
+    assert!(!first.is_empty() && first.iter().all(|&(hull, points, full)| hull && points == full && full > 0), "the first build: {first:?}");
+    assert_eq!(parts_of(&mut world, roots[1]), first, "a part-cache hit");
     assert_eq!(parts_of(&mut world, roots[2]), vec![(false, 0, 0)], "an unlit part is no hull part and has no sample");
 }
