@@ -105,7 +105,7 @@ fn add(a: Fixed, b: Fixed) -> Fixed {
     Fixed::from_bits(a.to_bits().saturating_add(b.to_bits()))
 }
 
-/// A float to an integer count as the original's `ftol` does (toward zero).
+/// A float to an integer count truncated toward zero, as the original does.
 fn trunc(v: Fixed) -> Fixed {
     Fixed::from_bits((v.to_bits() / (1 << 32)) << 32)
 }
@@ -135,8 +135,8 @@ pub fn crew_pool_after(op: TeamOp, pool: Fixed, x: Fixed, capacity: Fixed) -> Op
 }
 
 /// The officer count after an A1 officer [`TeamOp`] (`None` for another kind of op):
-/// `AddOfficers` is `min(used + ftol(x), max)`, `SetOfficers` `min(ftol(v), max)`;
-/// no floor (Armada I `Team` calls, read from the executable, static).
+/// an add gives `min(used + trunc(x), max)`, a set `min(trunc(v), max)`;
+/// no floor (Armada I team rules, read from the executable, static).
 pub fn officer_count_after(op: TeamOp, used: Fixed, x: Fixed, cap: Fixed) -> Option<Fixed> {
     Some(match op {
         TeamOp::OfficersAddA1 => add(used, trunc(x)).min(cap),

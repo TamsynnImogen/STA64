@@ -813,7 +813,7 @@ impl Production {
             }
             if let Some(id) = next_job.filter(|_| evolves) {
                 // Starting the build turns the embryo at the site into a
-                // cocoon (read from the executable, static). The product is constructed only at FinishBuild.
+                // cocoon (read from the executable, static). The product is constructed only when the build finishes.
                 self.last_job_id = id.0;
                 self.queues.insert(rig, vec![Item { id, def: d.def, owner: d.owner, done: 0, started: true, paid: true }]);
                 events.push(SimEvent::BuildStarted { builder: rig, what: d.def });
