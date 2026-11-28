@@ -464,6 +464,7 @@ pub(super) fn update_caps(
     shots: Query<&StockShot>,
     mut caps: Query<(Entity, &mut ShieldCap, &mut Transform, &mut Visibility, Option<&CapVisual>), Without<CapMesh>>,
     mut turns: Query<&mut Transform, With<CapMesh>>,
+    warp: super::warp_flash::WarpStretch,
 ) {
     let now = clock.now() * TICK_HZ as f64;
     let alpha = clock.alpha();
@@ -487,7 +488,9 @@ pub(super) fn update_caps(
             *vis = want;
         }
         let Some(r_db) = assets.as_ref().map(|a| a.r_db) else { continue };
-        let (frame, turn) = cap_frame(body.centre, rot, axes, r_db, cap.dir);
+        // A craft in warp: the cap stretches with the hull along its motion (read from the executable, static; INTERIM:
+        // the hull's uniform stretch).
+        let (frame, turn) = cap_frame(body.centre, rot, Vec3::new(axes.x, axes.y, axes.z * warp.of_stock(cap.target)), r_db, cap.dir);
         *tf = frame;
         if let Some(CapVisual(child)) = visual
             && let Ok(mut t) = turns.get_mut(*child)

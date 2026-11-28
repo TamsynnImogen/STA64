@@ -50,6 +50,8 @@ pub enum Act {
     LoadSetup,
     CycleOfficerLimit,
     ToggleDirectorsCut,
+    /// The match option "warp allowed" (#1102, #1402): shown only where the content offers it.
+    ToggleWarp,
     CycleMatchSpeed,
     PickTeamColour(usize),
     RandomTeamColour,
@@ -347,6 +349,7 @@ fn advanced(ctx: &Ctx) -> impl Bundle {
         .filter(|s| !s.trim().is_empty()).map(str::to_owned).unwrap_or_else(|| tr(resources.1));
     let officer = officer_caption(ctx);
     let directors = directors_caption(ctx);
+    let warp = warp_caption(ctx);
     content(ctx.theme, move |p| {
         p.spawn((button(&t, &resources, 360.0), Act::CycleResources));
         if let Some(caption) = &officer {
@@ -358,11 +361,38 @@ fn advanced(ctx: &Ctx) -> impl Bundle {
         if let Some(caption) = &directors {
             p.spawn((button(&t, caption, 360.0), Act::ToggleDirectorsCut));
         }
+        if let Some(caption) = &warp {
+            p.spawn((button(&t, caption, 360.0), Act::ToggleWarp));
+        }
         p.spawn(row(t.gap)).with_children(|r| {
             r.spawn((button(&t, &tr("OK"), 140.0), Act::CloseAdvanced(true)));
             r.spawn((button(&t, &tr("Cancel"), 140.0), Act::CloseAdvanced(false)));
             r.spawn((button(&t, &tr("Default"), 170.0), Act::DefaultOptions));
         });
+    })
+}
+
+/// The label keys of the match option "warp allowed" and STA64's own wording for a mount whose label data lacks
+/// them. The texts themselves are the install's, read at run time through the keys.
+pub(crate) const WARP_ON_KEY: &str = "warp_enabled";
+pub(crate) const WARP_OFF_KEY: &str = "warp_disabled";
+pub(crate) const WARP_ON_FALLBACK: &str = "Warp: On";
+pub(crate) const WARP_OFF_FALLBACK: &str = "Warp: Off";
+
+/// The key and the fallback of the option's caption for the state `on`.
+pub(crate) fn warp_label(on: bool) -> (&'static str, &'static str) {
+    if on { (WARP_ON_KEY, WARP_ON_FALLBACK) } else { (WARP_OFF_KEY, WARP_OFF_FALLBACK) }
+}
+
+/// The caption of the "warp allowed" control, or `None` where the content does not offer the option (anything but
+/// the stock Armada II profile with content that has warp: `GameOptions::warp_offered`). STA64's own, INTERIM: it is
+/// offered in the skirmish as in the lobby (whether the original offers it outside a network match is not
+/// established), the control sits in the slot of Director's Cut (the two belong to different profiles, so they never
+/// show together), and the default is on.
+pub(crate) fn warp_caption(ctx: &Ctx) -> Option<String> {
+    sta_sim::setup::GameOptions::warp_offered(&ctx.data.content).then(|| {
+        let (key, fallback) = warp_label(ctx.draft.options.allow_warp);
+        ctx.strings.and_then(|s| s.native_label(key)).filter(|s| !s.trim().is_empty()).map_or_else(|| tr(fallback), str::to_owned)
     })
 }
 

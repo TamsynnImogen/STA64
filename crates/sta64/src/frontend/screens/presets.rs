@@ -366,6 +366,21 @@ mod tests {
         std::fs::remove_file(file).unwrap();
     }
 
+    /// The match option "warp allowed" is not part of a preset (INTERIM, a TODO line): a preset made before the
+    /// option existed, and one saved with it off, load with it on.
+    #[test]
+    fn a_preset_loads_with_warp_allowed_on_whatever_was_chosen() {
+        let data = ScreenData::fake();
+        let file = path("warp-option");
+        let mut draft = SetupDraft::new(&data);
+        draft.options.allow_warp = false;
+        save_at(&file, &draft, &data).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("warp"), "the option is not written");
+        assert!(load_at(&file, &data).unwrap().options.allow_warp, "a preset without the option loads it on");
+        std::fs::remove_file(file).unwrap();
+    }
+
     #[test]
     fn old_preset_defaults_directors_cut_off_and_invalid_value_is_rejected() {
         let mut data = ScreenData::fake();
