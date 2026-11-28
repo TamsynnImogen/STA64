@@ -201,16 +201,17 @@ use crate::render::profile::RenderProfile;
 use sta_assets::a2fmt::spr::SpriteTable;
 
 #[test]
-fn under_stock_a_unit_and_a_building_ask_for_the_stock_effect_and_a_hull_hit_keeps_refits_sparks() {
+fn under_stock_a_unit_and_a_building_ask_for_the_stock_effect_and_a_hull_hit_draws_none_of_refits_sparks() {
     let d = run(RenderProfile::Stock);
     let units: BTreeSet<u32> = d.fireballs.iter().map(|f| f.0).collect();
     assert_eq!(units, BTreeSet::from([1, 2]), "the ship and the building each request the stock explosion: {d:?}");
     // The unit whose definition does not resolve keeps today's effect: its fireball, ring and blast sparks.
     let of = |k: &str| d.impacts.get(k).map_or(0, |s| s.iter().filter(|i| i.0 == 3).count());
     assert_eq!((of("Fire"), of("Ring"), of("Spark")), (1, 1, BLAST_SPARKS as usize), "{d:?}");
-    // Nothing of today's explosion for the two with a definition; the hull hit's sparks stay Refit's (INTERIM).
-    assert!(d.impacts.values().flatten().all(|i| i.0 == 3 || (i.0 == 4 && i.2 < HIT_SPARKS)), "only the unit without a definition draws Refit's explosion: {:?}", d.impacts);
-    assert_eq!(d.impacts["Spark"].iter().filter(|i| i.0 == 4).count(), HIT_SPARKS as usize);
+    // Nothing of today's explosion for the two with a definition, and none of Refit's streaks for the hull hit (the
+    // stock spark is `stock_hull_hits.rs`', drawn by the node particles, which this scene does not carry).
+    assert!(d.impacts.values().flatten().all(|i| i.0 == 3), "only the unit without a definition draws Refit's explosion: {:?}", d.impacts);
+    assert!(d.impacts["Spark"].iter().all(|i| i.0 != 4), "no Refit streak at the hull hit under Stock");
 }
 
 #[test]

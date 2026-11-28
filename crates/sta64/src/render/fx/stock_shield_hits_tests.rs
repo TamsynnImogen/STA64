@@ -717,10 +717,11 @@ fn the_remaster_look_still_spawns_its_shield_shell_and_no_stock_cap_and_stock_th
     // Without profile resources (today's windowless path) it is Refit's, too.
     assert_eq!(one_hit(None).0, 0);
     assert_eq!(one_hit(None).1, 1);
-    // Stock look: the cap, no Refit shell; everything else `impacts.rs` draws (the hull sparks) is unchanged.
+    // Stock look: the cap, no Refit shell; and none of Refit's hull streaks either (the stock spark is
+    // `stock_hull_hits.rs`', #1153).
     let (cap, shell, stock_spark) = one_hit(Some(RenderProfile::Stock));
     assert_eq!((cap, shell), (1, 0), "under Stock one cap and no Refit shell");
-    assert_eq!(stock_spark, spark, "the hull sparks are the same in both looks");
+    assert_eq!(stock_spark, 0, "no Refit hull streak under Stock");
 }
 
 #[test]

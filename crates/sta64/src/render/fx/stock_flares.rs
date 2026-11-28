@@ -55,6 +55,25 @@ pub const IMPACT_SIZE_FACTOR: f32 = 2.0;
 /// The impact flare's life, seconds (measured).
 pub const IMPACT_LIFE: f32 = 1.0;
 
+/// The sprite-table names of the spark family a weapon hit on a bare hull and a dying hull draw (#1153): one member,
+/// picked at random. No data key names them; the original uses these fixed names (read from the executable,
+/// static). A mod's sprite table may define them.
+pub const SPARK_FAMILY: [&str; 7] = ["systemexpl1", "systemexpl2", "systemexpl3", "systemexpl4", "systemexpl5", "systemexpl6", "systemexpl7"];
+/// A spark's half size is this share of the unit's radius, at least [`SPARK_MIN_HALF`] (read from the executable,
+/// static). The radius the original uses is not resolved: STA64 takes the unit's selection radius (INTERIM).
+pub const SPARK_SIZE_FACTOR: f32 = 0.14;
+/// The smallest half size of a spark, world units (read from the executable, static).
+pub const SPARK_MIN_HALF: f32 = 4.0;
+/// A spark's life, seconds (read from the executable, static).
+pub const SPARK_LIFE: f32 = 1.0;
+/// Seconds between the sparks a dying hull emits (read from the executable, static).
+pub const DEATH_SPARK_INTERVAL: f32 = 0.05;
+
+/// A spark's half size for a unit of `radius`.
+pub fn spark_half(radius: f32) -> f32 {
+    (radius * SPARK_SIZE_FACTOR).max(SPARK_MIN_HALF)
+}
+
 /// The muzzle flare's life in seconds: (1 - `travelTimeFraction`) times `lifeSpan`, at most the cap.
 pub fn muzzle_life(life_span: f32, travel: f32) -> f32 {
     ((1.0 - travel.clamp(0.0, 1.0)) * life_span).clamp(0.0, MUZZLE_LIFE_CAP)
@@ -80,6 +99,10 @@ pub struct FlareSpec {
 pub enum FlareKind {
     Muzzle,
     Impact,
+    /// The spark of a weapon hit on a bare hull (`stock_hull_hits.rs`).
+    HullHit,
+    /// A spark of a dying hull (`stock_hull_hits.rs`).
+    DeathSpark,
 }
 
 /// Where a flare hangs.
