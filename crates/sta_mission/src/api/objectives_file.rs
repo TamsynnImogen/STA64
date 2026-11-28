@@ -8,11 +8,13 @@ pub(crate) struct ParsedObjectives {
     pub goals: Vec<String>,
 }
 
-/// Parses a UTF-8 objectives file, accepting an optional UTF-8 BOM.
+/// Parses an objectives file. Its text is decoded as every game text file is
+/// (`sta_content::strings::decode_text`): UTF-8 when the bytes are valid UTF-8, with an optional
+/// BOM, otherwise Windows-1252. The objective texts of a localised install are in that code page;
+/// refusing them left its missions without objectives (#1372).
 pub(crate) fn parse(bytes: &[u8]) -> Result<ParsedObjectives, String> {
-    let text =
-        std::str::from_utf8(bytes).map_err(|_| "objectives file is not valid UTF-8".to_owned())?;
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let text = sta_content::strings::decode_text(bytes);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
     if text.is_empty() {
         return Err("objectives file is empty".to_owned());
     }
