@@ -573,25 +573,65 @@ mission's ending from a mid-mission state (headless, stand-in host).
 
 ## Playing stock Armada II missions (experimental)
 
-Why the menu cannot start them out of the box: a stock mission is a compiled DLL
-(`*R.drl` rules, `*S.dsl` script) that STA64 never loads (D2), so the resolver
-finds no Lua and the campaign book blocks the mission as "legacy DLL only": the
-menu lists it "(cannot run yet)". The conversion makes the Lua the resolver wants.
+A stock mission is a compiled DLL (`*R.drl` rules, `*S.dsl` script) that STA64
+never loads (D2), so the resolver finds no Lua and the campaign book blocks
+the mission as "legacy DLL only": the mission list shows it "(cannot run
+yet)". The conversion makes the Lua the resolver wants, and the game runs it
+itself, from the player's own install, with the converter library
+("Converting an install's missions" below is the same converter on the command
+line). Nothing has to be run by hand.
 
-Two steps, the first only once per install (see "Converting an install's
-missions" below; it needs neither Python nor `objdump`):
+**When it runs.** By itself, once a session, the first time the campaign cards
+of Single Player are shown for the base game of an install whose missions wait
+for a conversion. Later runs are the player's, with the buttons under the
+mission list:
 
-```sh
-cargo run --release -p sta_mission_convert -- --install "<Armada II root>"
-cargo run --release -- --install-root "<Armada II root>"
-```
+| Button | When it is offered | What it does |
+|---|---|---|
+| Prepare missions | nothing is converted yet and no run has just ended | a normal run; a mission whose inputs are unchanged comes from the cache, and a run whose inputs and output are those of the last complete run is skipped |
+| Convert again | something is converted, or a normal run ended without doing more | converts everything again, ignoring the cache and the record of the last run; scripts the player edited are kept |
+| Replace 1 edited script / Replace N edited scripts | at least one converted script was edited | as Convert again, and each edited script is moved aside as `<name>.old` (`.old2`, `.old3` and so on when that name is taken) and a fresh conversion is written in its place |
+| Cancel | while a run is going | stops the run between two missions. Before the first one the earlier conversion is left untouched. Later, only what this run has written so far is left: a full run replaces the earlier set, so the missions it had not reached are gone until the next run |
 
-The converter writes `missions/<map>.lua` into
-`<user data dir>/converted/<key>/`, the folder the game looks in. The output is
-derived from game files and is refused inside the repository or an install. Only the base install's own `missions` folder is converted and only for a game started without `--mod` (a mod's chain is not converted). When
-that folder holds `missions/`, the game mounts it *below* the install (D6: a script at the same path in the install wins; a differently named script the resolver tries later loses to the converted one, a known limit),
-and the campaign menu marks those missions "(experimental)". When it is absent
-and missions wait for a conversion, the mission details show the command to run.
+While a run is going the line under the list reads "Preparing missions N of
+M". The run is on its own thread and the game stays usable.
+
+**How a run ends.** A notice and the line under the mission list say how many
+missions are ready (marked experimental), how many could not be converted, and
+how many edited scripts were kept. A mission whose conversion failed stays
+"(cannot run yet)" and its details give the converter's reason for that
+mission. When the files may have changed the campaigns are loaded again, so the
+converted scripts are mounted and the missions marked, and the player stays on
+the screen, campaign and mission they were on; during a match this waits until
+the player is back in the front end. A run can also end as cancelled, as
+stopped by a fault (with its text), as refused, or because another STA64 is
+already preparing the same install: a lock beside the output keeps two game
+processes from converting one install at once.
+
+**Edited scripts.** A converted script the player has changed since the
+converter wrote it is the player's: the mission list marks it "(edited)", a
+run keeps it as it is, and so does Convert again. Only the Replace button
+writes over it, and the edit is then moved aside under the `.old` name (or the
+next free one) in the same folder, never deleted or overwritten.
+
+**Where it applies.** Only for the base game of an install: nothing is
+converted while a mod is active (D6: a mod's chain is not converted), and the
+buttons are not offered then. The run is refused, with its reason shown, when
+no user data folder is known, when the folder is not an install the converter
+can read missions from, or when the output or cache folder is one the
+converter does not accept (inside an install, a game folder or the checkout).
+An install with no mission DLL has nothing to convert and nothing is shown.
+
+**Where the scripts go.** `missions/<map>.lua` in
+`<user data dir>/converted/<key>/` (see the next section for the folder and
+the key), with the cache in `convert-cache/<key>/` and the record of the last
+complete run and the lock as `<key>.stamp` and `<key>.lock` beside the output
+folder. The game mounts the output *below* the install (D6: a script at the
+same path in the install wins; a differently named script the resolver tries
+later loses to the converted one, a known limit), and the mission list marks
+those missions "(experimental)". The DLLs are only read as bytes, never loaded
+or run (D2), and converted Lua runs in the same restricted state as every
+script (D13).
 
 Experimental means: the conversion reproduces the rules and steps of the DLL but not
 every engine call (see "Converted Armada II missions: progress"); a mission can stop
@@ -604,8 +644,8 @@ mission by itself; the end rules are LUA-13's).
 The compiled missions of an install (Armada I and Armada II) are converted to
 Lua by the Rust converter, the crate `sta_mission_convert`. It reads the
 install, which it never writes to, decodes the mission DLLs itself and needs no
-other program. This section is the command line. (The game calls the same
-library; that part is described here once its front end has merged.)
+other program. The game calls the same library by itself (the section
+above); this section is the command line, for a conversion outside the game.
 
 ```sh
 cargo run --release -p sta_mission_convert -- --install "<game root>"

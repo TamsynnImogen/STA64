@@ -18,6 +18,7 @@
 //! - [`flow`] is the front end around it (INT-M4): launch, loading, the match, back.
 
 pub mod flow;
+pub mod convert_frontend;
 pub mod mission_convert;
 pub mod mission_host;
 pub mod net_match;
@@ -367,7 +368,7 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         // Headless frame runs have no notice plugin; the match still posts its notices.
         app.add_message::<Notice>()
-            .add_plugins(mission_convert::MissionConvertPlugin)
+            .add_plugins((mission_convert::MissionConvertPlugin, convert_frontend::ConvertFrontendPlugin))
             .add_systems(Update, (apply_race.before(crate::ui::radar::RadarUi).before(crate::ui::gui_sprites::paint), outcome).in_set(crate::app::GameSet::Ui));
     }
 }
