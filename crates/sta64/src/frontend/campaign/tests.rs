@@ -808,10 +808,13 @@ fn authored_mount(tag: &str, art: bool) -> PathBuf {
     let dir = temp_dir(tag);
     std::fs::write(dir.join("info.ini"), "[Mod]\nUiProfile=armada2\n").unwrap();
     if art {
-        std::fs::create_dir_all(dir.join("bitmaps/single")).unwrap();
-        std::fs::create_dir_all(dir.join("bitmaps/MissionSelect")).unwrap();
-        image::RgbaImage::from_pixel(8, 6, image::Rgba([SINGLE_RGB[0], SINGLE_RGB[1], SINGLE_RGB[2], 255])).save(dir.join("bitmaps/single/singleplay.png")).unwrap();
-        std::fs::write(dir.join("bitmaps/MissionSelect/MissionSelectBG.bmp"), bmp_of(8, 6, LIST_RGB)).unwrap();
+        // The paths are the code's own constants, so the test cannot drift from them.
+        let single = dir.join(format!("{}.png", super::shell_art::SINGLE_PLAYER));
+        let list = dir.join(format!("{}.bmp", super::shell_art::MISSION_LIST));
+        std::fs::create_dir_all(single.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(list.parent().unwrap()).unwrap();
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([SINGLE_RGB[0], SINGLE_RGB[1], SINGLE_RGB[2], 255])).save(single).unwrap();
+        std::fs::write(list, bmp_of(8, 6, LIST_RGB)).unwrap();
     }
     dir
 }
@@ -841,10 +844,10 @@ fn backdrops(app: &mut App) -> Vec<(Screen, [u8; 3])> {
 }
 
 #[test]
-fn the_three_campaign_screens_draw_the_shell_art_under_a_stock_profile_and_the_widget_theme_under_the_other() {
+fn campaign_select_and_the_mission_list_draw_the_shell_picture_under_a_stock_profile_and_the_widget_theme_under_the_other_and_the_briefing_never() {
     let dir = authored_mount("shell-art", true);
     for (name, w, h) in [("4:3", 1600, 1200), ("16:9", 1920, 1080), ("21:9", 3440, 1440)] {
-        for (screen, want) in [(Screen::SinglePlayer, SINGLE_RGB), (Screen::Missions, LIST_RGB), (Screen::Briefing, LIST_RGB)] {
+        for (screen, want) in [(Screen::SinglePlayer, SINGLE_RGB), (Screen::Missions, LIST_RGB)] {
             let mut cs = fixture(true, None);
             cs.campaign = Some("federation".into());
             let mut app = art_app(&dir, false, cs, (w, h));
@@ -868,10 +871,11 @@ fn the_three_campaign_screens_draw_the_shell_art_under_a_stock_profile_and_the_w
             go(&mut lcars, screen);
             assert!(backdrops(&mut lcars).is_empty(), "{name} {screen:?}: the widget theme keeps its look");
         }
-        // The other screens keep their recorded choice.
-        for other in [Screen::Main, Screen::Debrief] {
+        // The other screens keep their recorded choice; the briefing is STA64's own screen and keeps it too.
+        for other in [Screen::Main, Screen::Briefing, Screen::Debrief] {
             let mut cs = fixture(true, None);
             won_first(&mut cs);
+            cs.campaign = Some("federation".into());
             let mut app = art_app(&dir, false, cs, (w, h));
             go(&mut app, other);
             assert!(backdrops(&mut app).is_empty(), "{name} {other:?}");

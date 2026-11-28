@@ -1,24 +1,22 @@
 //! The campaign screens' backdrops from the mounted content's own shell bitmaps (#931).
 //!
 //! Under a stock profile ([`UiProfile::is_stock`](crate::ui::profile::UiProfile::is_stock)) the
-//! single-player screen (the campaign select), the mission list and the briefing draw the mounted
-//! content's shell picture behind their controls; under the LCARS profile they keep the widget
-//! theme. Nothing of the art is in the repository: the pictures are read from the mounted layers
-//! (install or mod) at run time, a mod's own files winning by the layering, and a screen whose
-//! picture the content does not have keeps the widget theme.
+//! single-player screen (the campaign select) and the mission list draw the mounted content's shell
+//! picture behind their controls; under the LCARS profile they keep the widget theme. The briefing is
+//! STA64's own screen (the original has no pre-mission briefing screen) and keeps the widget theme.
+//! Nothing of the art is in the repository: the pictures are read from the mounted layers (install
+//! or mod) at run time, a mod's own files winning by the layering, and a screen whose picture the
+//! content does not have keeps the widget theme.
 //!
 //! Rules and grades:
-//! - Which bitmap backs which screen: INTERIM. The lookup names below are constants of the code (no
-//!   data file names them), taken from the folder and file names of the shell bitmaps the installs
-//!   carry; that a screen draws the picture of that name is inferred from the name, not read from
-//!   the executable and not measured.
+//! - Which pictures the engine opens: the two paths below are constants of the code, read from the
+//!   executable, static (its string table). Which screen draws which is not traced (the shell is
+//!   built in the executable; no data file names a screen's picture): INTERIM.
 //! - The picture fills the stock box the screen is laid out in ([`StockBoxNode`]), so the art
 //!   and the controls move together at every window shape (arranged, STA64's own).
-//! - INTERIM: the briefing has no bitmap of its own that is established; it reuses the mission list's.
-//! - INTERIM: the controls keep their arranged regions and the widget kit's look over the picture; a
-//!   dim layer keeps their text readable (STA64's own, not the original's). The original's own
-//!   placement of the lists and buttons on these pictures, and the row and button art, are not
-//!   established.
+//! - INTERIM, a first step: only the backdrop. The controls keep their arranged regions and the widget
+//!   kit's look over it. The original's lists and buttons have their own art and places on these
+//!   screens (not drawn here yet), and the single-player screen has more pictures than the one drawn.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -29,14 +27,14 @@ use crate::frontend::screens::Screen;
 use crate::ui::profile::UiProfile;
 use crate::viewer::Mounted;
 
-/// The single-player screen's picture, without extension (a file name of the installs' shell bitmaps; INTERIM).
-const SINGLE_PLAYER: &str = "bitmaps/single/singleplay";
-/// The mission list's picture, without extension (a file name of the installs' shell bitmaps; INTERIM).
-const MISSION_LIST: &str = "bitmaps/missionselect/missionselectbg";
+/// The single-player screen's picture, without extension: a path the engine opens (read from the executable, static,
+/// string table; which screen draws it is not traced).
+pub(crate) const SINGLE_PLAYER: &str = "bitmaps/single/singleplay";
+/// The mission list's picture, without extension: a path the engine opens (read from the executable, static,
+/// string table; which screen draws it is not traced).
+pub(crate) const MISSION_LIST: &str = "bitmaps/missionselect/missionselectbg";
 /// Extensions tried, in order.
-const EXTENSIONS: [&str; 3] = ["png", "bmp", "tga"];
-/// The dim layer over the picture, so the widget kit's text stays readable (STA64's own).
-const SHADE: Color = Color::srgba(0.01, 0.02, 0.04, 0.45);
+pub(crate) const EXTENSIONS: [&str; 3] = ["png", "bmp", "tga"];
 
 /// The shell pictures of the mounted content, by screen. `None`: the content has none.
 #[derive(Resource, Default)]
@@ -52,7 +50,7 @@ impl ShellArt {
     pub fn backdrop(&self, screen: Screen) -> Option<&Handle<Image>> {
         match screen {
             Screen::SinglePlayer => self.single_player.as_ref(),
-            Screen::Missions | Screen::Briefing => self.mission_list.as_ref(),
+            Screen::Missions => self.mission_list.as_ref(),
             _ => None,
         }
     }
@@ -132,7 +130,6 @@ pub(crate) fn sync_backdrop(
             ImageNode { image: image.clone(), image_mode: bevy::ui::widget::NodeImageMode::Stretch, ..default() },
             Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
             Pickable::IGNORE,
-            children![(Pickable::IGNORE, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, BackgroundColor(SHADE))],
         ))
         .id();
     commands.entity(stock_box).insert_children(0, &[backdrop]);
