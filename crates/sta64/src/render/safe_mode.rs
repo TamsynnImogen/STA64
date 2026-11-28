@@ -225,6 +225,31 @@ pub(crate) fn guard_stock_meshes(meshes: Option<Res<Assets<Mesh>>>, q: Query<(En
     }
 }
 
+fn raise_notice(mut safe: ResMut<SafeMode>, mut out: MessageWriter<Notice>) {
+    if safe.notice_due
+        && let Some(n) = safe.take_notice()
+    {
+        out.write(n);
+    }
+}
+
+/// Safe mode: everything drawn with the stock shot material is hidden (every frame: the effects set their own
+/// visibility each frame).
+fn hide_stock_effects(safe: Res<SafeMode>, mut q: Query<&mut Visibility, With<MeshMaterial3d<StockShotMaterial>>>) {
+    if !safe.on {
+        return;
+    }
+    for mut v in &mut q {
+        v.set_if_neq(Visibility::Hidden);
+    }
+}
+
+fn log_count_at_exit(mut exits: MessageReader<AppExit>, safe: Res<SafeMode>) {
+    if exits.read().next().is_some() && safe.errors > 1 {
+        error!("Safe mode: {} validation errors in this session", safe.errors);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
