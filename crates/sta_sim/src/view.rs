@@ -58,6 +58,24 @@ pub struct WorldView {
     /// shooter, weapon, target and end tick. Empty when the switch is off. Derived from the weapons state.
     #[serde(default)]
     pub beam_rows: Vec<BeamRow>,
+    /// The shots in flight that fly by their own flight under `ordnance_flight` (#1068): where each is and which way
+    /// it heads, by shot id. Empty when the switch is off. Derived from the weapons state; no state of its own.
+    #[serde(default)]
+    pub shot_rows: Vec<ShotRow>,
+}
+
+/// A torpedo in flight under `ordnance_flight`, as the drawing needs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShotRow {
+    /// The sim's shot number: ascending in the order the shots fired in.
+    pub id: u32,
+    pub shooter: EntityId,
+    pub weapon: ContentKey,
+    pub target: EntityId,
+    /// Where the shot is now (the sim's own place: it leaves its shooter's centre).
+    pub pos: Vec3,
+    /// A unit vector in the ground plane: the way it is flying.
+    pub heading: (Fixed, Fixed),
 }
 
 /// A beam whose life has not ended: the sim still holds it, and applies its damage on tick `ends`
@@ -127,6 +145,11 @@ impl WorldView {
         let key = (shooter, weapon, target);
         let at = self.beam_rows.partition_point(|r| (r.shooter, r.weapon, r.target) < key);
         self.beam_rows.get(at).is_some_and(|r| (r.shooter, r.weapon, r.target) == key)
+    }
+
+    /// The flown shot `id`, if the sim still holds it (it has not hit, expired or been shot down).
+    pub fn shot_row(&self, id: u32) -> Option<&ShotRow> {
+        self.shot_rows.binary_search_by_key(&id, |row| row.id).ok().map(|i| &self.shot_rows[i])
     }
 
     /// The craft's warp row, if it is in warp or dropping out.

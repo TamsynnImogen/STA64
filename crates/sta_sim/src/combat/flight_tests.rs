@@ -432,3 +432,26 @@ fn a_malformed_flights_record_is_refused() {
     forged.extend(postcard::to_allocvec(&(1u8, vec![good])).unwrap());
     assert!(Sim::from_snapshot(&forged, off.sim.content.clone()).is_err());
 }
+
+#[test]
+fn the_view_lists_a_flown_shot_with_its_place_and_heading_until_it_hits_and_not_without_the_switch() {
+    let keys = Keys { seek: Some(2.0), omega: Some(0.5), ..Keys::default() };
+    let mut g = game_at(db(true, keys), "fx_frigate", v(2300, 2000));
+    g.until_fired();
+    g.run(5);
+    let view = g.sim.view();
+    assert_eq!(view.shot_rows.len(), 1);
+    let (row, flight) = (view.shot_rows[0], g.sim.weapons.flights_rec()[0]);
+    assert_eq!((row.id, row.shooter, row.target, row.heading), (flight.0, g.shooter, g.target, flight.1.heading));
+    assert!(view.shot_row(row.id).is_some() && view.shot_row(row.id + 1).is_none());
+    assert!(row.pos.z > Fixed::from_int(2000), "it has flown ahead of its shooter");
+    g.until_hit();
+    g.run(1);
+    assert!(g.sim.view().shot_rows.is_empty(), "no row once it has hit");
+    // the switch off: the shot has no flight and no row
+    let mut off = game_at(db(false, keys), "fx_frigate", v(2300, 2000));
+    off.until_fired();
+    off.run(5);
+    assert_eq!(off.shots(), 1);
+    assert!(off.sim.view().shot_rows.is_empty());
+}
