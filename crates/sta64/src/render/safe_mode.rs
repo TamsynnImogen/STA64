@@ -11,7 +11,8 @@
 //!
 //! What a player loses in safe mode: the stock look's weapon shots, sparks, impact flares, shield caps, shields-down
 //! bands and explosions are not drawn for the rest of the session; the game itself goes on. The session's log names the
-//! pipeline.
+//! pipeline. The notice is the player's only clue, so it also says that restarting the game switches the effects back on
+//! and that the log names what failed.
 //!
 //! Tests and the bench do not install the handler (pinned): there a render error stays fatal, so a defect cannot pass
 //! unnoticed.
@@ -67,7 +68,7 @@ impl SafeMode {
 
     /// The notice the first error asked for, once.
     pub fn take_notice(&mut self) -> Option<Notice> {
-        std::mem::take(&mut self.notice_due).then(|| Notice::new(Severity::Warn, tr("An effect could not be drawn; stock effects are switched off for this session.")))
+        std::mem::take(&mut self.notice_due).then(|| Notice::new(Severity::Warn, tr("An effect could not be drawn; stock effects are switched off for this session. Restarting the game switches them back on; the log names what failed.")))
     }
 }
 
