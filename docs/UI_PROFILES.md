@@ -60,8 +60,8 @@ UI-18's CFG/SPR renderer and current verification boundaries are documented in
 
 ## Original behaviour followed for UI-18
 
-Evidence grade: read from the stock A2 executable (static, Ghidra); the
-function-level notes are kept outside the repository.
+Evidence grade: read from the executable, static; the notes are kept outside
+the repository.
 
 - A panel reads `<panel>Size` with default zero, then loops only over `0..size`,
   resolving sprite `<configured-name>.<n>` and CFG `<panel>_<n>`. Zero is not a
