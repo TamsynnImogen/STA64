@@ -589,7 +589,8 @@ fn the_list_shows_the_progress_and_cancel_while_it_runs_and_the_buttons_send_the
 #[test]
 fn replacing_what_the_player_edited_is_a_button_of_its_own() {
     use sta_mission_convert::output::OutDir;
-    let dir = temp_dir("replace-button");
+    // the resolved folder: `OutDir` refuses a write when its folder no longer resolves to itself
+    let dir = sta_mission_convert::paths::resolve(&temp_dir("replace-button")).unwrap();
     let mut out = OutDir::inspect(&dir, dir.clone(), false).unwrap();
     out.write("syn_fed01.lua", b"-- converted one\n").unwrap();
     out.write("syn_fed02.lua", b"-- converted two\n").unwrap();
@@ -700,7 +701,8 @@ fn a_failed_mission_shows_its_own_failure_where_the_blocked_reason_is() {
 #[test]
 fn a_script_the_player_edited_is_marked_and_kept_apart_from_the_others() {
     use sta_mission_convert::output::OutDir;
-    let dir = temp_dir("edited-marks");
+    // the resolved folder: `OutDir` refuses a write when its folder no longer resolves to itself
+    let dir = sta_mission_convert::paths::resolve(&temp_dir("edited-marks")).unwrap();
     let mut out = OutDir::inspect(&dir, dir.clone(), false).unwrap();
     out.write("syn_fed01.lua", b"-- converted one\n").unwrap();
     out.write("syn_fed02.lua", b"-- converted two\n").unwrap();
