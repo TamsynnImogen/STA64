@@ -593,9 +593,44 @@ fn every_screen_fits_three_window_shapes() {
     }
     // The three windows are three different shapes, and the screen follows each.
     assert_eq!(shapes.len(), 3);
-    for (i, (na, ba, ra)) in shapes.iter().enumerate() {
-        for (nb, bb, rb) in &shapes[i + 1..] {
-            assert!(ba != bb && (ra - rb).abs() > 0.01, "{na} and {nb} gave the same geometry ({ba:?} {ra} / {bb:?} {rb})");
+    for (i, (na, ba, _)) in shapes.iter().enumerate() {
+        for (nb, bb, _) in &shapes[i + 1..] {
+            assert!(ba != bb, "{na} and {nb} gave the same box {ba:?}");
         }
     }
+    // The box follows the window's shape up to the widest the layouts allow (16:9): 4:3 and 16:9 differ,
+    // and 21:9 is held to the widest box rather than stretched.
+    assert!((shapes[0].2 - shapes[1].2).abs() > 0.01, "4:3 and 16:9 gave the same shape");
+    assert!((shapes[1].2 - shapes[2].2).abs() < 0.01, "21:9 is held to the 16:9 shape");
+}
+
+#[test]
+fn the_installs_caption_keys_win_over_the_screens_own_text() {
+    let dir = temp_dir("labels");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("label.map"),
+        "+ save_game_disallowed {Authored: not now}\n+ save_game_failure {Authored: failed}\n+ game_type_unloadable {Authored: unloadable}\n+ load_game {Authored load}\n",
+    )
+    .unwrap();
+    let mut vfs = sta_vfs::Vfs::default();
+    vfs.push_dir("authored".into(), dir.clone()).unwrap();
+    let strings = Strings::load(&vfs, "english");
+    assert_eq!(caption(Some(&strings), "load_game", "Load game"), "Authored load");
+    assert_eq!(caption(Some(&strings), "no_such_key", "Own text"), "Own text", "the screen's own text where the install has no key");
+    let refused = entry("a.stasave", Some("another version"));
+    assert!(detail_text(Some(&refused), Some(&strings)).starts_with("Authored: unloadable: another version"));
+    assert!(detail_text(Some(&refused), None).starts_with("This save cannot be loaded"));
+
+    // On the screen: the not-allowed line and the refused save's line lead with the install's text.
+    let mut a = bare(1280, 720);
+    a.world_mut().insert_resource(strings);
+    a.world_mut().insert_resource(SaveAvailability(Some(crate::save::SaveBlock::Networked)));
+    a.world_mut().write_message(OpenSaveScreen(SaveMode::Save));
+    settle(&mut a, 3);
+    assert!(texts(&mut a).iter().any(|t| t.starts_with("Authored: not now: ")), "{:?}", texts(&mut a));
+    a.world_mut().write_message(SaveOutcome::Refused(container::SaveError::Invalid("x".into())));
+    settle(&mut a, 3);
+    assert!(texts(&mut a).iter().any(|t| t.starts_with("Authored: failed: ")), "{:?}", texts(&mut a));
+    let _ = std::fs::remove_dir_all(&dir);
 }
