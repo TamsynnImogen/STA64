@@ -54,6 +54,23 @@ fn the_ramps_are_saved_and_a_malformed_record_is_refused_with_its_reason() {
     assert_eq!(why(1, vec![(s, Ramp { ticks: 0, ..ramp })]), bad);
     assert_eq!(why(1, vec![(EntityId(999), ramp)]), bad);
     assert_eq!(why(1, vec![(s, ramp), (s, ramp)]), bad);
+    // a ramp the rules cannot have made, one refusal each: longer than the longest ramp (so
+    // an entry that would never end, or a length that does not fit a signed number), a shift
+    // below zero, a shift beyond what the craft's hull allows, a start after this snapshot
+    let unreal = "warp ramp longer than a ramp can be, with a shift out of range or from the future";
+    let longest = crate::movement::approach::longest_ramp();
+    assert!(ramp.ticks <= longest && Sim::from_snapshot(&rec(1, vec![(s, Ramp { ticks: longest, ..ramp })]), content.clone()).is_ok(), "the longest ramp loads");
+    assert_eq!(why(1, vec![(s, Ramp { ticks: longest + 1, ..ramp })]), unreal);
+    assert_eq!(why(1, vec![(s, Ramp { ticks: u32::MAX, ..ramp })]), unreal);
+    assert_eq!(why(1, vec![(s, Ramp { shift: Fixed::from_bits(-1), ..ramp })]), unreal);
+    let hull = sim.content.as_ref().unwrap().unit(sim.unit(s).unwrap().def).unwrap().radius;
+    let most = (crate::movement::approach::stretch(Fixed::from_int(30_000), Fixed::ONE) - Fixed::ONE) * hull;
+    assert!(ramp.shift < most && Sim::from_snapshot(&rec(1, vec![(s, Ramp { shift: most, ..ramp })]), content.clone()).is_ok(), "the largest shift of this hull loads");
+    assert_eq!(why(1, vec![(s, Ramp { shift: most + Fixed::from_bits(1), ..ramp })]), unreal);
+    assert_eq!(why(1, vec![(s, Ramp { shift: Fixed::from_int(1_000_000), ..ramp })]), unreal);
+    assert!(Sim::from_snapshot(&rec(1, vec![(s, Ramp { start: sim.tick, ..ramp })]), content.clone()).is_ok(), "a start on the snapshot's tick loads");
+    assert_eq!(why(1, vec![(s, Ramp { start: sim.tick + 1, ..ramp })]), unreal);
+    assert_eq!(why(1, vec![(s, Ramp { start: u64::MAX, ..ramp })]), unreal);
     // a craft may be without its ramp (it had not been stepped yet): that loads
     assert!(Sim::from_snapshot(&rec(1, Vec::new()), content.clone()).is_ok());
     // the record is mandatory in its format, and nothing may follow it

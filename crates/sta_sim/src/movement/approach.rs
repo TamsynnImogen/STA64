@@ -101,8 +101,18 @@ pub(crate) fn ramp_ticks(radius: Fixed, s: Fixed, dv: Fixed) -> u32 {
     let span = Fixed::from_int(2) * radius * (s - Fixed::ONE);
     // the quotient is only formed where it lies below the upper bound (a tiny `dv` would overflow)
     let secs = if dv <= Fixed::ZERO || dv * ramp_max() <= span { ramp_max() } else { (span / dv).max(ramp_min()) };
+    whole_ticks(secs)
+}
+
+/// `secs` in ticks, rounded up, at least one.
+fn whole_ticks(secs: Fixed) -> u32 {
     let bits = (secs * Fixed::from_int(TICK_HZ as i32)).to_bits().max(0);
     u32::try_from((bits + Fixed::ONE.to_bits() - 1) >> 32).unwrap_or(u32::MAX).max(1)
+}
+
+/// The longest ramp [`ramp_ticks`] gives.
+pub(crate) fn longest_ramp() -> u32 {
+    whole_ticks(ramp_max())
 }
 
 /// The ramp of a craft entering or leaving warp under `warp_shape` (#1102 part 2), fixed on
@@ -132,6 +142,10 @@ impl Ramp {
     /// The extra forward shift of tick `now`: entering, the whole shift is spread evenly over
     /// the later half of the ramp; leaving, over the first half. Measured (the halves and the
     /// total), repeated.
+    ///
+    /// INTERIM: leaving, the measurement shows one step of the original at impulse speed
+    /// before the shifted ones. That step is shorter than a tick of STA64, so it cannot be put
+    /// here without inventing a part of a tick: the shift starts with the exit's first tick.
     pub(crate) fn shift_at(&self, now: Tick, entering: bool) -> Fixed {
         let len = Fixed::from_int(self.ticks.max(1) as i32);
         let at = |k: u64| Fixed::from_int(k.min(u64::from(self.ticks)) as i32) / len;
@@ -140,6 +154,18 @@ impl Ramp {
         let half = Fixed::ONE / Fixed::from_int(2);
         let share = if entering { b.max(half) - a.max(half) } else { b.min(half) - a.min(half) };
         self.shift * Fixed::from_int(2) * share
+    }
+
+    /// Whether this ramp is one the rules can have made for a craft of bounding radius
+    /// `radius` by tick `now`: a length within the longest there is, a shift between nothing
+    /// and what the highest stretch factor gives that radius, a start not in the future. A
+    /// stored ramp is checked with this when a snapshot is loaded, so a crafted one cannot make
+    /// an entry that never ends or move a craft by an arbitrary amount.
+    pub(crate) fn plausible(&self, now: Tick, radius: Fixed) -> bool {
+        (1..=longest_ramp()).contains(&self.ticks)
+            && self.shift >= Fixed::ZERO
+            && self.shift <= (stretch_max() - Fixed::ONE) * radius.max(Fixed::ZERO)
+            && self.start <= now
     }
 
     /// Whether tick `now` is the last of the ramp (or lies behind it).

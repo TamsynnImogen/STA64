@@ -851,6 +851,12 @@ impl Sim {
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
         }
+        // A ramp the rules cannot have made is refused: too long, a shift below zero or beyond
+        // what the craft's hull allows, or begun after this snapshot was taken.
+        let hull = |id: EntityId| units.get(id).and_then(|u| content.as_deref().and_then(|db| db.unit(u.def))).map_or(Fixed::ZERO, |d| d.radius);
+        if approach_warp.ramps_rec().iter().any(|(id, ramp)| !ramp.plausible(b.tick, hull(*id))) {
+            return Err(SnapshotError::Corrupt("warp ramp longer than a ramp can be, with a shift out of range or from the future".into()));
+        }
         let engagement = crate::combat::targeting::Engagement::from_rec(engagement_rows, b.tick, |id| units.contains(id))
             .ok_or_else(|| SnapshotError::Corrupt("engagement rows out of order, from the future or of an unknown entity".into()))?;
         let alerts = crate::alert::Alerts::from_rec(
