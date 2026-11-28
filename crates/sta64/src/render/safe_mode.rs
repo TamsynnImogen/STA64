@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn the_frame_count_runs_only_in_safe_mode() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).add_plugins(SafeModePlugin).init_asset::<StockShotMaterial>().init_asset::<Image>();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default())).add_plugins(SafeModePlugin).init_asset::<StockShotMaterial>().init_asset::<Image>();
         app.update();
         assert_eq!(app.world().resource::<SafeMode>().frames, 0);
         app.world_mut().resource_mut::<SafeMode>().validation_error();
@@ -295,6 +295,8 @@ mod tests {
     fn guarded_app(mesh: Mesh) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default())).add_plugins(SafeModePlugin).init_asset::<StockShotMaterial>().init_asset::<Mesh>().init_asset::<Image>();
+        // The stock effects' own plugin registers the guard in a scene; here it is added by hand.
+        app.add_systems(PostUpdate, guard_stock_meshes);
         let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params: Default::default(), texture: Handle::default() });
         let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
         app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material), Visibility::Inherited));
