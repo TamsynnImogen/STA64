@@ -11,6 +11,7 @@ pub mod cull;
 pub mod fog;
 pub mod fog_objects;
 pub mod fx;
+pub mod safe_mode;
 pub mod hulls;
 pub mod lod_switch;
 pub mod map_grid;

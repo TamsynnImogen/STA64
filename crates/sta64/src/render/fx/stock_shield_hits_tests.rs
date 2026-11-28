@@ -845,6 +845,7 @@ fn gpu_the_cap_adds_in_its_level_colour_in_its_cell_with_the_pole_at_the_hit_and
         }
     }
     app.add_systems(Update, (attach_visuals, animate_caps, place).chain());
+    crate::render::safe_mode::register_mesh_guard(&mut app);
 
     let eye = Vec3::new(0.0, 0.0, 64.0 / (std::f32::consts::FRAC_PI_8).tan());
     let mut target = Image::new_target_texture(128, 128, TextureFormat::Rgba8UnormSrgb, None);
@@ -1006,4 +1007,20 @@ fn install_the_default_model_resolves_loads_and_every_vertex_lies_within_its_dat
 fn the_cap_mesh_carries_the_attributes_the_material_reads() {
     let geo = cap_geometry(&authored_model()).unwrap();
     assert!(crate::render::fx::stock_shots::missing_attributes(&geo.mesh).is_empty());
+}
+
+/// The guard runs in the shield cap's scene (the plugin registers it): a cap mesh without its colour fails the scene.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "lacks")]
+fn a_cap_mesh_without_the_colour_fails_the_shield_cap_scene() {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default())).init_asset::<Mesh>().init_asset::<Image>().init_asset::<StockShotMaterial>();
+    app.add_plugins(StockShieldHitsPlugin);
+    let mut mesh = cap_geometry(&authored_model()).unwrap().mesh;
+    mesh.remove_attribute(Mesh::ATTRIBUTE_COLOR);
+    let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
+    let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params: ShotParams::default(), texture: Handle::default() });
+    app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material), Visibility::Inherited));
+    app.update();
 }

@@ -1246,6 +1246,8 @@ pub struct StockShotsPlugin;
 
 impl Plugin for StockShotsPlugin {
     fn build(&self, app: &mut App) {
+        // Debug builds and tests: every scene that draws a stock effect checks its meshes (#1418).
+        crate::render::safe_mode::register_mesh_guard(app);
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Shots);
         app.init_resource::<ShieldCapQueue>().init_resource::<super::stock_hull_hits::HullHitPoints>();
@@ -1282,6 +1284,7 @@ pub struct StockShotsMaterialPlugin;
 
 impl Plugin for StockShotsMaterialPlugin {
     fn build(&self, app: &mut App) {
+        crate::render::safe_mode::register_mesh_guard(app);
         embedded_asset!(app, "stock_shots.wesl");
         app.add_plugins(MaterialPlugin::<StockShotMaterial>::default());
     }

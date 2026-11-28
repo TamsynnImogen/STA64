@@ -352,6 +352,7 @@ pub struct StockShieldsDownPlugin;
 
 impl Plugin for StockShieldsDownPlugin {
     fn build(&self, app: &mut App) {
+        crate::render::safe_mode::register_mesh_guard(app);
         app.init_resource::<ProfileEffects>();
         app.init_resource::<DownLoadState>();
         app.add_systems(Update, reset_on_remount.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(load_assets).in_set(GameSet::Interpolate));

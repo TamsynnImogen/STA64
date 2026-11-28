@@ -503,6 +503,7 @@ pub struct StockExplosionsPlugin;
 
 impl Plugin for StockExplosionsPlugin {
     fn build(&self, app: &mut App) {
+        crate::render::safe_mode::register_mesh_guard(app);
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Explosions);
         app.init_resource::<ExplosionQueue>().init_resource::<ExplosionAssets>();
