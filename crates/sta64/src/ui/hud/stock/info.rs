@@ -523,7 +523,7 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
     names
 }
 
-/// Native Wireframe::Render draws five independent GUI SPR layers in one square.
+/// The native wireframe draws five independent GUI SPR layers in one square.
 pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
     wireframe_layers_of(commands, root, r, model, None, None, None);
 }
@@ -541,7 +541,7 @@ pub(in crate::ui::hud) struct WireLayer {
 /// wireframe art by eye; the original draws layer n with the ship's system n-1).
 const LAYER_SYSTEM: [usize; 5] = [1, 0, 3, 2, 4];
 
-/// A wireframe layer's colour (A2 `WireframeIcon::DrawSystem`, read from the executable, static):
+/// A wireframe layer's colour (A2, read from the executable, static):
 /// white; with damage left `r` above 0.01, `(r, 0.2(1 - r), 0.2(1 - r))`, pure red when destroyed;
 /// a switched-off system yellow (the original flashes it; here it is steady, ours).
 pub(super) fn wire_tint(health: Fixed, on: bool) -> Color {
