@@ -254,6 +254,25 @@ fn warp_rate() -> Fixed {
     Fixed::from_int(2)
 }
 
+/// The ramp between impulse and warp speed as the view reports it: its length
+/// in ticks (rounded up) and how many ticks of it `speed` has covered, going
+/// up (`rising`) or down. Whole ticks of the same rate [`step_planned`] uses;
+/// zero outside the range between impulse and warp speed.
+pub(crate) fn warp_ramp(stats: &sta_content::MoveStats, speed: Fixed, rising: bool) -> (u32, u32) {
+    let (vi, vw) = (stats.max_speed, stats.warp_speed);
+    if vw <= vi {
+        return (0, 0);
+    }
+    let step = vw * warp_rate() * dt();
+    let ticks = |span: Fixed| -> u32 {
+        let bits = (span / step).to_bits().max(0);
+        u32::try_from((bits + Fixed::ONE.to_bits() - 1) >> 32).unwrap_or(u32::MAX)
+    };
+    let len = ticks(vw - vi);
+    let done = if rising { speed - vi } else { vw - speed };
+    (len, ticks(done.max(Fixed::ZERO).min(vw - vi)).min(len))
+}
+
 /// One tick of `u` under an approach plan: warp, the warp-out down to the
 /// cap, then the model's own step at the capped speed, or turning to face.
 pub(crate) fn step_planned(model: Model, u: &mut Unit, leg: Leg, plan: Plan) {

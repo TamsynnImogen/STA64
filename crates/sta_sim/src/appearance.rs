@@ -193,22 +193,29 @@ mod tests {
         }]);
         for _ in 0..10 { sim.step(&[]); }
         assert!(sim.unit(id).unwrap().speed > Fixed::ZERO, "plain move is at impulse");
-        assert!(sim.warp_phases().is_empty(), "plain move has no warp phase");
+        assert!(sim.view().warp.is_empty(), "plain move has no warp phase");
         sim.step(&[Command { player: PlayerId(0), seq: 1,
             kind: CommandKind::Order(Order::MoveWarp { units: vec![id], to: goal, queue: false }),
         }]);
-        assert!(sim.warp_phases().is_empty(), "accelerating at impulse before warp entry");
-        let mut entered = false;
-        let mut exited = false;
+        assert!(sim.view().warp.is_empty(), "accelerating at impulse before warp entry");
+        let mut seen = Vec::new();
         for _ in 0..1500 {
             sim.step(&[]);
-            match sim.warp_phases().as_slice() {
-                [(_, true)] => entered = true,
-                [(_, false)] if entered => { exited = true; break; }
-                _ => {}
+            let view = sim.view();
+            match view.warp.as_slice() {
+                [row] => {
+                    assert_eq!(row.id, id);
+                    assert!(row.ramp_len > 0 && row.ramp_start <= view.tick);
+                    if seen.last() != Some(&row.phase) {
+                        seen.push(row.phase);
+                    }
+                    if row.phase == crate::view::WarpPhase::Leaving { break; }
+                }
+                [] => {}
+                rows => panic!("one craft, one row: {rows:?}"),
             }
         }
-        assert!(entered, "scripted move entered live warp");
-        assert!(exited, "scripted move exposed warp-out while slowing");
+        use crate::view::WarpPhase::{AtWarp, Entering, Leaving};
+        assert_eq!(seen, [Entering, AtWarp, Leaving], "scripted move: entry, warp, warp-out");
     }
 }
