@@ -1,8 +1,9 @@
-//! Combat: weapons (SIM-04), damage (SIM-05), point defence (SIM-06).
+//! Combat: weapons (SIM-04), damage (SIM-05), point defence (SIM-06), the dying phase (#1100).
 
 pub mod boarding;
 pub mod casualty;
 pub mod damage;
+pub mod dying;
 pub mod hit_roll;
 pub mod pd;
 pub mod targeting;
@@ -28,6 +29,8 @@ mod hit_roll_tests;
 mod crew_delay_tests;
 #[cfg(test)]
 mod beam_end_tests;
+#[cfg(test)]
+mod dying_tests;
 #[cfg(test)]
 mod weapons_tests;
 #[cfg(test)]

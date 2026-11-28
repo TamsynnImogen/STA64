@@ -336,7 +336,7 @@ fn a_whole_state_digest_with_non_default_alert_state_is_pinned() {
     assert_eq!(sim.digest(), PINNED, "{:#x}", sim.digest());
 }
 
-const PINNED: u64 = 0x2c52_cf6c_4e4c_2ee0;
+const PINNED: u64 = 0x295c_0acb_2551_6b3d;
 
 fn fake_game() -> Sim {
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };

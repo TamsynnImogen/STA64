@@ -280,8 +280,9 @@ fn a_beam_in_flight_is_in_the_digest_and_an_empty_list_is_not() {
     g.run(LIFE);
     assert_eq!(g.beams(), 0);
     let bytes = g.sim.snapshot();
-    assert_eq!(&bytes[bytes.len() - 2..], [1, 0], "the record: version 1, no rows");
-    let mut old = bytes[..bytes.len() - 2].to_vec();
+    // The beams record and the dying record after it (#1100): version 1, no rows, each.
+    assert_eq!(&bytes[bytes.len() - 4..], [1, 0, 1, 0], "the records: version 1, no rows");
+    let mut old = bytes[..bytes.len() - 4].to_vec();
     old[4..6].copy_from_slice(&crate::snapshot::PRE_BEAMS_FORMAT.to_le_bytes());
     let previous = Sim::from_snapshot(&old, Some(g.db.clone())).unwrap();
     assert_eq!(previous.digest(), g.sim.digest());
@@ -389,12 +390,15 @@ fn a_beam_row_with_an_unknown_weapon_is_corrupt_and_one_with_a_removed_unit_is_n
     assert!(!weapons.set_beams(Some(&g.db), vec![row(sta_core::ContentKey(60_000))]), "a weapon the content does not have");
     // Through a snapshot: the last record, forged with that key, is refused.
     let good = g.sim.snapshot();
+    // The beams record, then the empty dying record (#1100: version 1, no rows) closes the file.
     let record = postcard::to_allocvec(&(1u8, g.sim.weapons.beams_rec())).unwrap();
-    assert_eq!(&good[good.len() - record.len()..], &record[..], "the beams record is the last one");
+    let tail = record.len() + 2;
+    assert_eq!(&good[good.len() - tail..good.len() - 2], &record[..], "the beams record is the last but one");
     let mut forged_rows = g.sim.weapons.beams_rec();
     forged_rows[0].weapon = sta_core::ContentKey(60_000);
-    let mut forged = good[..good.len() - record.len()].to_vec();
+    let mut forged = good[..good.len() - tail].to_vec();
     forged.extend(postcard::to_allocvec(&(1u8, forged_rows)).unwrap());
+    forged.extend_from_slice(&[1, 0]);
     assert!(matches!(Sim::from_snapshot(&forged, Some(g.db.clone())), Err(crate::snapshot::SnapshotError::Corrupt(_))));
 }
 
