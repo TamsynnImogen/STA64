@@ -769,3 +769,30 @@ fn a_run_with_a_failed_mission_exits_one_even_when_other_scripts_exist() {
     let r = run(&["--install", &s(&root), "--out", &s(&w.join("out")), "--cache-dir", &s(&cdir), "--only", "fed1"]);
     assert_eq!(r.code, 0, "{:?} {}", r.out, r.err);
 }
+
+/// The folder check wants the resolved folder and says so when it gets another form of it: the
+/// mistake is refused when the folder is opened, on every system, not at the first write and only
+/// where a temp folder happens to lie behind a link.
+#[cfg(unix)]
+#[test]
+fn a_folder_that_is_not_in_its_resolved_form_is_refused_when_it_is_opened() {
+    let t = TempDir::new("safe-unresolved");
+    let (w, _) = ours_dir(&t);
+    fs::create_dir_all(w.join("real")).unwrap();
+    std::os::unix::fs::symlink(w.join("real"), w.join("via")).unwrap();
+    // the same folder twice: through the link, and resolved
+    let (through, resolved) = (w.join("via/out"), w.join("real/out"));
+    assert_eq!(resolve(&through).unwrap(), resolved);
+    let e = OutDir::inspect(&through, through.clone(), false).unwrap_err();
+    assert!(e.contains("is not its resolved form"), "{e}");
+    assert!(!resolved.exists(), "nothing was created");
+    // handed the resolved form, the same folder is usable, and a write goes through
+    let mut o = OutDir::inspect(&through, resolved.clone(), false).unwrap();
+    o.write("a.lua", b"one").unwrap();
+    o.finish().unwrap();
+    assert!(resolved.join("missions/a.lua").is_file());
+    // the read-only helper resolves for itself: an unresolved path is fine there
+    assert!(sta_mission_convert::output::edited_scripts(&through).is_empty());
+    fs::write(resolved.join("missions/a.lua"), b"changed").unwrap();
+    assert_eq!(sta_mission_convert::output::edited_scripts(&through), vec!["a.lua".to_owned()]);
+}
