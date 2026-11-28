@@ -10,7 +10,7 @@ use sta_sim::{EntityId, Vec3 as SimVec3};
 
 use super::Pointer;
 use super::keys::{Action, KeyBindings};
-use super::select::{AimState, Targetable, own_selection, target_seen, unit_under_where};
+use super::select::{AimState, Targetable, own_selection, pickable, unit_under_where};
 use crate::sim_link::{CommandQueue, ContentRes, OrderIssued, OrderKind, Selection, SimLink};
 
 /// Where each ship was last ordered to go, until it arrives or is stopped,
@@ -79,7 +79,7 @@ pub fn order(
     let view = link.curr();
     // Right-click on a resource or an enemy gives a context order; on
     // anything else it moves.
-    if let Some(order) = unit_under_where(cursor, ray, &units, |t| target_seen(view, local.as_deref().and_then(|l| l.0), t))
+    if let Some(order) = unit_under_where(cursor, ray, &units, |t| pickable(view, local.as_deref().and_then(|l| l.0), t))
         .and_then(|t| super::context::context_order(content.as_deref().map(|c| &*c.0), view, me, &own, t))
     {
         let kind = OrderKind::of(&order);
@@ -313,6 +313,7 @@ fn prune(view: &sta_sim::WorldView, targets: &mut OrderTargets, underway: &mut U
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::select::target_seen;
     use sta_sim::command::LocalRouter;
     use crate::render::units::SelectRadius;
     use crate::sim_link::SimEntity;
@@ -481,6 +482,40 @@ mod tests {
                 [CommandKind::Order(Order::Attack { target, .. })] => assert!(attack && *target == e),
                 [CommandKind::Order(Order::Move { .. })] => assert!(!attack),
                 other => panic!("front_seen={front_seen}: {other:?}"),
+            }
+        }
+    }
+
+    /// A right click on an enemy in its dying phase is what a click on the ground there would be (a
+    /// move), not an attack; the same enemy before its phase is attacked, so with the switch off (no unit
+    /// is ever dying) nothing changes. INTERIM: the original's rule is not established.
+    #[test]
+    fn right_click_on_a_dying_enemy_is_a_move_and_on_a_living_one_an_attack() {
+        use sta_sim::command::Command;
+        use sta_sim::{TickOutput, WorldSource, WorldView};
+        struct Frozen(std::sync::Arc<WorldView>);
+        impl WorldSource for Frozen {
+            fn step(&mut self, _: &[Command]) -> TickOutput {
+                TickOutput { view: self.0.clone(), events: vec![] }
+            }
+            fn view(&self) -> std::sync::Arc<WorldView> {
+                self.0.clone()
+            }
+        }
+        for dying in [false, true] {
+            let (mut app, [_, _, e]) = app();
+            let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+            if dying {
+                let u = view.units.iter_mut().find(|u| u.id == e).unwrap();
+                u.flags = u.flags | sta_sim::view::UnitFlags::DYING;
+            }
+            app.insert_resource(SimLink::new(Box::new(Frozen(std::sync::Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+            aim_at(&mut app, -500.0, 0.0);
+            let (cmds, _) = click(&mut app, false);
+            match &cmds[..] {
+                [CommandKind::Order(Order::Attack { target, .. })] => assert!(!dying && *target == e),
+                [CommandKind::Order(Order::Move { .. })] => assert!(dying),
+                other => panic!("dying={dying}: {other:?}"),
             }
         }
     }
