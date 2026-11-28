@@ -156,6 +156,25 @@ pub(crate) fn warp_leg(unit: &Entity, goal: Vec3) -> (Fixed, bool) {
 }
 
 impl Sim {
+    /// The view's warp rows (#1102 part 1), ascending id: derived from the
+    /// warp record and each craft's speed, never stored or hashed.
+    pub(crate) fn warp_rows(&self) -> Vec<crate::view::WarpRow> {
+        use crate::view::{WarpPhase, WarpRow};
+        self.approach_warp.to_rec().into_iter().filter_map(|(id, phase)| {
+            let u = self.units.get(id)?;
+            let leaving = phase == WARP_OUT;
+            let (len, done) = crate::kinematics::warp_ramp(&u.stats, u.speed, !leaving);
+            let (phase, started) = if leaving {
+                (WarpPhase::Leaving, done)
+            } else if u.speed < u.stats.warp_speed {
+                (WarpPhase::Entering, done)
+            } else {
+                (WarpPhase::AtWarp, len)
+            };
+            Some(WarpRow { id, phase, ramp_start: self.tick.saturating_sub(u64::from(started)), ramp_len: len })
+        }).collect()
+    }
+
     /// Set the course of every craft with an attack target and say how it
     /// steps this tick (ascending id). Runs before the movement step.
     pub(crate) fn steer_attackers(&mut self, gravity: &GravityWells) -> Vec<(EntityId, Plan)> {
