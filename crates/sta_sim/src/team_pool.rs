@@ -4,15 +4,15 @@
 //! Rules, read from the executables (static; nothing measured in game):
 //!
 //! - A unit's race is its definition's unless a script set it
-//!   ([`Sim::unit_race`]). What a unit builds takes its race: `Producer::FinishBuild`,
-//!   `ResearchStation::FinishBuild`, `MiningStation::BuildFreighter` and
-//!   `ConstructionRig::StartBuild` copy the producer's race. A build whose
+//!   ([`Sim::unit_race`]). What a unit builds takes its race: a producer, a research
+//!   station, a mining station building a freighter and a construction rig starting a
+//!   build all copy the producer's race (read from the executable, static). A build whose
 //!   definition already carries the builder's race needs no row, so only a
 //!   difference is recorded in [`crate::attrs::Attrs`]. A construction rig's
 //!   station takes the rig's race when the station completes (the original
 //!   copies it when the build starts).
 //! - A change of team never re-races a unit. A planet does take the new
-//!   team's race (`Planet::SetTeam`); the sim stores no planet race: a colony's
+//!   team's race (read from the executable, static); the sim stores no planet race: a colony's
 //!   growth and crew income read its owner's [`Sim::seat_race`] every tick
 //!   (SIM-30, `crate::colony`), so they follow a change of owner or seat race.
 //! - A seat's race ([`Sim::seat_race`]: the script's, else the setup's)
