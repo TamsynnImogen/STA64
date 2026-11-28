@@ -11,7 +11,7 @@ use sta_sim::command::Order;
 use crate::ui::hud::model::TargetMode;
 
 use super::orders::Aim;
-use super::select::{Targetable, own_selection, target_seen, unit_under_where};
+use super::select::{Targetable, own_selection, pickable, unit_under_where};
 use crate::sim_link::{ContentRes, Selection, SimLink};
 
 // The rule (the originals' group vote) lives in the sim crate, where the
@@ -151,7 +151,7 @@ pub fn cursor(
     // cursor stays the arrow: the selection is kept, inert, and the cursor reads it again afterwards.
     let cutscene = crate::ui::presentation::cutscene_running(cine);
     let own = if cutscene { Vec::new() } else { own_selection(&selection, &link) };
-    let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under_where(a.cursor, a.ray, &units, |t| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), t))).and_then(|t| {
+    let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under_where(a.cursor, a.ray, &units, |t| pickable(link.curr(), local.as_deref().and_then(|l| l.0), t))).and_then(|t| {
         context_order(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own, t)
     });
     // Stationary builders take no order from a right-click (a rally is set only by the armed Rally
