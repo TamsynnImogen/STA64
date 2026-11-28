@@ -38,8 +38,12 @@ fn field() -> Fixed {
     n(PLANET_RADIUS * MULTIPLIER)
 }
 fn footprint(hull: Fixed) -> Fixed {
-    field() + n(BUFFER) + hull
+    field() + n(BUFFER).max(hull)
 }
+/// The craft of the scene, whose hull is smaller than the buffer, and an authored one whose
+/// hull is larger.
+const SMALL: &str = "st_seer";
+const WIDE: &str = "st_wide";
 
 /// The approach scene's content with a planet class and a header that sets the field
 /// multiplier, the buffer and the cost (`cost`: the header's text for it, `None`: no cost key).
@@ -62,6 +66,10 @@ fn db(routing: bool, cost: Option<&str>) -> Arc<ContentDb> {
     for u in base.units() {
         b = b.unit(u.clone());
     }
+    let mut wide = base.units().find(|u| u.odf == SMALL).unwrap().clone();
+    wide.odf = WIDE.into();
+    wide.radius = n(2 * BUFFER);
+    b = b.unit(wide);
     let planet = UnitDef {
         raw: Arc::new(sta_odf::resolve("st_planet", &mut |_| Some("classLabel = \"planet\"\n".to_owned())).unwrap()),
         radius: n(PLANET_RADIUS),
@@ -81,8 +89,11 @@ fn game(db: &Arc<ContentDb>, planets: &[Vec3]) -> Sim {
 }
 
 fn craft(sim: &mut Sim, at: Vec3) -> EntityId {
+    craft_of(sim, SMALL, at)
+}
+fn craft_of(sim: &mut Sim, odf: &str, at: Vec3) -> EntityId {
     let db = Arc::clone(sim.content.as_ref().unwrap());
-    sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), at, AHEAD).unwrap()
+    sim.spawn_def(db.key(odf).unwrap(), PlayerId(1), at, AHEAD).unwrap()
 }
 
 fn warp_move(ids: &[EntityId], to: Vec3) -> Command {
@@ -182,6 +193,58 @@ fn a_warp_move_aimed_through_a_field_goes_round_it_at_warp_and_leaves_warp_once_
     assert!(f.at_warp > 10 * HZ, "{} ticks at warp", f.at_warp);
 }
 
+/// The footprint is the field grown by the buffer, or by the craft's own bounding radius where
+/// that is larger (STA64's own, INTERIM). A craft smaller than the buffer keeps the buffer's
+/// distance, its hull adding nothing; one wider than the buffer keeps its own hull's distance,
+/// which is what keeps it clear of the gate all the way round.
+#[test]
+fn the_footprint_is_the_buffer_or_the_hull_whichever_is_larger() {
+    let db = db(true, None);
+    let radius = |odf: &str| db.unit(db.key(odf).unwrap()).unwrap().radius;
+    assert!(radius(SMALL) < n(BUFFER) && radius(WIDE) > n(BUFFER));
+    let (planet, start, goal) = (v(0, 0), v(0, -3000), v(0, 3000));
+    let run = |odf: &str| {
+        let mut sim = game(&db, &[planet]);
+        let s = craft_of(&mut sim, odf, start);
+        fly(&mut sim, vec![warp_move(&[s], goal)], s, goal, &[planet])
+    };
+    // smaller than the buffer: the buffer's distance, less at most a planner cell (a cell is
+    // coarser than this hull, so the test cannot tell the hull's absence apart by distance; the
+    // footprint's radius itself is the function under test for the wide craft below)
+    let small = run(SMALL);
+    let nearest = small.nearest.unwrap();
+    assert!(small.arrived && small.leaves.len() == 1, "{small:?}");
+    assert!(nearest >= field() + n(BUFFER) - n(CELL), "nearest {nearest:?}");
+    // wider than the buffer: never where the gate would stop it (the field and its hull
+    // overlapping), so it leaves warp once only, before its goal
+    let wide = run(WIDE);
+    let nearest = wide.nearest.unwrap();
+    assert!(wide.arrived, "{wide:?}");
+    assert!(nearest >= field() + radius(WIDE), "the gate's reach is {:?}, it came to {nearest:?}", field() + radius(WIDE));
+    assert_eq!(wide.leaves.len(), 1, "stopped on its way round: {:?}", wide.leaves);
+    assert!(wide.passing.unwrap().x.abs() > small.passing.unwrap().x.abs(), "the wider craft takes the wider way");
+}
+
+/// INTERIM divergence, pinned as it is today: the planner is flat, the gate measures in space.
+/// A craft that flies far above a planet, where the gate would not stop it, is still routed
+/// round the planet's footprint on the map plane.
+#[test]
+fn a_craft_far_above_a_planet_is_routed_round_it_all_the_same() {
+    let db = db(true, None);
+    let planet = v(0, 0);
+    let above = |x: i32, z: i32| Vec3 { x: n(x), y: field() * n(3), z: n(z) };
+    let mut sim = game(&db, &[planet]);
+    let s = craft(&mut sim, above(0, -3000));
+    let goal = above(0, 3000);
+    let f = fly(&mut sim, vec![warp_move(&[s], goal)], s, goal, &[planet]);
+    assert!(f.arrived && f.leaves.len() == 1, "{f:?}");
+    // straight over the planet it would never be within the gate's reach in space
+    assert!(field() * n(3) > field() + hull(&db));
+    // and yet it goes round on the map plane, at the footprint's distance
+    let passing = f.passing.expect("it passes the planet");
+    assert!(passing.x.abs() >= footprint(hull(&db)) - n(CELL), "it passed at x {:?}", passing.x);
+}
+
 #[test]
 fn a_field_off_the_line_is_passed_on_the_nearer_side() {
     let db = db(true, None);
@@ -242,6 +305,47 @@ fn a_cost_low_enough_makes_the_way_through_the_cheaper_one() {
     // a cost at or below open space is no reason for a way round at all
     let free = one(&db(true, Some("DEFAULT_TERRAIN_VALUE")), &[planet], start, goal);
     assert!(free.nearest.unwrap() < field());
+}
+
+/// A field no dearer than open space is no layer at all, also when something else makes the
+/// craft plan: a cheap field must not draw the path into itself. Here a second planet's solid
+/// body lies on the line, so the craft plans, with a cheap field beside its way: the flight is
+/// the one of content whose fields cost exactly open space.
+#[test]
+fn a_cheap_field_does_not_draw_the_path_into_itself() {
+    // the first planet lies on the line (its body must be planned round); the second's field
+    // reaches the straight way round it
+    let planets = [v(0, -600), v(700, 600)];
+    let (start, goal) = (v(0, -3000), v(0, 3000));
+    let track = |cost: &str| {
+        let db = db(true, Some(cost));
+        let mut sim = game(&db, &planets);
+        let s = craft(&mut sim, start);
+        let first = warp_move(&[s], goal);
+        let mut out = Vec::new();
+        for i in 0..60 * HZ {
+            sim.step(if i == 0 { std::slice::from_ref(&first) } else { &[] });
+            out.push(sim.unit(s).unwrap().pos);
+        }
+        out
+    };
+    let equal = track("DEFAULT_TERRAIN_VALUE");
+    assert_eq!(track("DEFAULT_TERRAIN_VALUE / 2"), equal, "half the cost of open space");
+    assert_eq!(track("1"), equal, "almost free");
+    assert_eq!(track("0"), equal, "zero is cheap, not impassable");
+    assert!(distance(*equal.last().unwrap(), goal) < n(20), "and it arrives");
+}
+
+/// A cost below zero is the planner's "impassable": the field is never crossed, however long
+/// the way round, except the one the goal lies in.
+#[test]
+fn a_negative_cost_makes_the_fields_impassable_except_the_goals_own() {
+    let db = db(true, Some("-1"));
+    let (planet, start) = (v(150, 0), v(0, -3000));
+    let round = one(&db, &[planet], start, v(0, 3000));
+    assert!(round.arrived && round.nearest.unwrap() >= footprint(hull(&db)) - n(CELL), "{round:?}");
+    let into = one(&db, &[planet], start, v(150, -200));
+    assert!(into.arrived, "a goal inside the field is still reached: {into:?}");
 }
 
 #[test]

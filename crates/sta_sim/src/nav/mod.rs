@@ -40,10 +40,17 @@
 //!   blocked, so the craft goes round where that is cheaper and stays at warp. A field the
 //!   goal lies in does not count; the craft leaves warp at its edge by the gate. Read from the
 //!   executable, static; measured (a warp leg aimed through a field goes round it at warp).
-//!   STA64's own: the footprint is also grown by the craft's own bounding radius, because the
-//!   gate counts the hull (INTERIM: the measured distance has a remainder that is not
-//!   resolved). Black holes, nebulae and asteroid fields have no layer of their own in the
-//!   warp planner here (INTERIM).
+//!   STA64's own, INTERIM: the footprint is grown by the larger of the buffer and the craft's
+//!   own bounding radius. The measured craft kept the buffer's distance (its hull is smaller);
+//!   the gate counts the hull, so a craft wider than the buffer would otherwise be stopped
+//!   while going round. A cost at or below open space makes no layer at all (nothing to go
+//!   round, and the planner must not be drawn into a field); a cost below zero is the
+//!   planner's "impassable": such a field is never crossed, except the one the goal lies in
+//!   (INTERIM: what the original does with such a cost is not established). The planner is
+//!   flat, like the whole grid, while the gate measures in space: a craft far above or below
+//!   a planet is routed round it although the gate would not stop it (INTERIM divergence).
+//!   Black holes, nebulae and asteroid fields have no layer of their own in the warp planner
+//!   here (INTERIM).
 //!
 //! Every rule constant above is a [`PathingRules`](sta_content::PathingRules)
 //! field read from `RTS_CFG.h` (the stock values when absent);
@@ -450,10 +457,12 @@ impl Sim {
                 })
                 .fold(default_cost, u32::max);
             // `warp_routing`: a craft whose order asks for warp also plans round the planets'
-            // warp-suppression fields, each grown by the buffer and by its own hull (the gate
-            // counts the hull). A field the goal lies in does not count: the craft flies to it
-            // and leaves warp at its edge.
+            // warp-suppression fields, each grown by the buffer or, where that is larger, by
+            // its own hull (the gate counts the hull). A field the goal lies in does not count:
+            // the craft flies to it and leaves warp at its edge. Fields no dearer than open
+            // space are no layer at all.
             let wants_warp = !wells.planet_fields().is_empty()
+                && (field_cost == BLOCKED || field_cost > default_cost)
                 && u.kind == EntityKind::Craft
                 && u.stats.warp_speed > u.stats.max_speed
                 && warp_routing(db.as_deref(), u)
@@ -465,7 +474,7 @@ impl Sim {
                 wells
                     .planet_fields()
                     .iter()
-                    .map(|&(centre, radius)| (centre, radius + routing.buffer + hull))
+                    .map(|&(centre, radius)| (centre, radius + routing.buffer.max(hull)))
                     .filter(|&(centre, radius)| !within(goal, centre, radius))
                     .map(|(centre, radius)| Hazard { shape: Solid::Sphere { centre, radius }, cost: field_cost })
                     .collect()
@@ -486,11 +495,8 @@ impl Sim {
                     segment_near(p, goal, c, r + body)
                 }
             }) || fields.iter().any(|f| {
-                // only a field dearer than open space is worth a way round
-                (f.cost == BLOCKED || f.cost > default_cost) && {
-                    let (c, r) = circle(&f.shape);
-                    segment_near(p, goal, c, r)
-                }
+                let (c, r) = circle(&f.shape);
+                segment_near(p, goal, c, r)
             });
             if !blocked {
                 continue;

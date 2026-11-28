@@ -437,7 +437,9 @@ impl ApproachRules {
 ///
 /// INTERIM: what the original uses where the header sets neither key is not established.
 /// STA64's own defaults are [`WarpRoutingRules::DEFAULT_BUFFER`] and
-/// [`WarpRoutingRules::DEFAULT_COST`].
+/// [`WarpRoutingRules::DEFAULT_COST`]. A cost at or below that of open space (zero included)
+/// gives the fields no part in planning; a cost below zero is the planner's "impassable"
+/// (INTERIM: what the original does with either is not established).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WarpRoutingRules {
     /// World units added to a field's radius.
