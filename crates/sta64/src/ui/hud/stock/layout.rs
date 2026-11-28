@@ -109,9 +109,12 @@ fn canvas_of(cfg: &GuiLayout) -> Vec2 {
     if cfg.canvas.0 > 0 && cfg.canvas.1 > 0 {
         Vec2::new(cfg.canvas.0 as f32, cfg.canvas.1 as f32)
     } else {
-        Vec2::new(1600.0, 1200.0)
+        DEFAULT_CANVAS
     }
 }
+
+/// The stock sheet's canvas, in canvas units, when the cfg names none.
+pub const DEFAULT_CANVAS: Vec2 = Vec2::new(1600.0, 1200.0);
 
 /// `(scale, scale_x, hud)` of a canvas on a screen under `fit`.
 fn fit_scales(canvas: Vec2, screen: Vec2, fit: HudFit) -> (f32, f32, R) {
