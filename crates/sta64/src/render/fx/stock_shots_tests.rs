@@ -784,6 +784,35 @@ fn under_beam_damage_at_end_the_beam_is_drawn_while_the_sim_holds_it_and_not_aft
 }
 
 #[test]
+fn under_beam_damage_at_end_a_beam_the_sim_lost_is_drawn_on_to_its_range_while_the_miss_timer_runs_then_ends() {
+    let miss = ShotCfg { beam_miss_lifetime: Some(Fixed::from_f64(0.5)), normal_weapon_team_color: None };
+    // The last frame drawn and its end, for a beam the sim loses at tick 12.
+    let run = |cfg: ShotCfg| {
+        let setup = Setup::new(cfg).at_end(cfg).fire(4, "w_phaser", 0).held(4, 12);
+        let mut app = setup.app(Some(RenderProfile::Stock));
+        let (mut last, mut end) = (None, None);
+        for i in 0..60 {
+            app.update();
+            if let Some(s) = shots(&mut app).first() {
+                last = Some(i);
+                end = Some(s.geom);
+            }
+        }
+        (last.expect("drawn"), end)
+    };
+    // With a timer of fifteen ticks from the shot the beam runs on to the weapon's range, then ends: INTERIM, along the last aim line.
+    let (last, end) = run(miss);
+    assert!((17..=22).contains(&last), "drawn on to the end of the timer: last frame {last}");
+    let Some(Geom::Segment { b, .. }) = end else { panic!("{end:?}") };
+    assert!((b.length() - 1000.0).abs() < 25.0, "the end {b} is at the weapon's range from the muzzle");
+    // No timer: it ends within a few ticks of the sim's loss, as before.
+    assert!(run(ShotCfg::default()).0 <= 16);
+    // The switch off: the rows are not read and the beam lives its life (the other profiles are unchanged).
+    let off = Setup::new(miss).fire(4, "w_phaser", 0).held(4, 12);
+    assert!(last_drawn(&off, 60).is_some_and(|f| f >= 28));
+}
+
+#[test]
 fn under_beam_damage_at_end_the_sims_break_distance_decides_not_the_drawings_own_reading() {
     // The drawing's own cut ends a beam whose target is beyond twice the range (the authored range is 1000), measured from
     // the muzzle: with the switch off a target at 2100 gets no beam. With the switch on the sim decides: it holds the beam

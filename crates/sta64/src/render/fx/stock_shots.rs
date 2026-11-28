@@ -45,8 +45,11 @@
 //! - **Early ends** (read from the executable, static): the owner gone ends a beam at once (a shot in
 //!   flight flies on: the sim still delivers its hit); a
 //!   target lost while `BEAM_MISS_LIFETIME` (counted from the shot) still runs moves the end to
-//!   the weapon's range along the last direction until it has run; lost after that, the beam
-//!   ends at once; a target further than twice the range ends it at once (this replaces an
+//!   the weapon's range until it has run (INTERIM: that the end goes to full range for that time is
+//!   established, along which line is not: the last aim line is taken; a target that reappears
+//!   inside the time does not resume the beam); lost after that, the beam
+//!   ends at once (read from the executable, static; not measured; under `beam_damage_at_end` a beam
+//!   the sim loses is drawn the same way); a target further than twice the range ends it at once (this replaces an
 //!   earlier reading of the factor as the square root of two; #1068). A planet blocking the path is not tested (no such information in the view).
 //! - **Sim timing.** The sim applies a beam's damage on the fire tick (issue #1068); the original
 //!   applies it at the end of `lifeSpan`. The beam is drawn for the data's `lifeSpan` from the
@@ -704,25 +707,24 @@ pub(super) fn update_shots(
             // Under `beam_damage_at_end` the sim holds the beam until its life ends and drops it when it is lost
             // (shooter or target gone, the target phased, out of range): the drawing follows the sim, so the
             // beam drawn and the damage that lands agree (#1068). The view and the drawing's clock may differ by a
-            // couple of ticks at the ends of the life, so a beam is judged lost only between them. Every other beam
-            // is read as before.
+            // couple of ticks at the ends of the life, so a beam is judged lost only between them. A beam the sim
+            // lost is then drawn as any lost target (below): on to full range while the miss timer runs, then it
+            // ends. Every other beam is read as before.
             let at_end_life = ctx.content.as_ref().and_then(|c| c.0.weapon(s.weapon)).filter(|w| ctx.lands_at_end(w)).map(|w| w.duration as f32);
-            if let (Some(life), Target::Entity(id)) = (at_end_life, s.target)
-                && age >= BEAM_VIEW_SLACK
-                && age < life - BEAM_VIEW_SLACK
-                && !link.real_curr().beam_held(s.shooter, s.weapon, id)
-            {
-                cmds.entity(e).try_despawn();
-                continue;
-            }
+            let sim_lost = match (at_end_life, s.target) {
+                (Some(life), Target::Entity(id)) => age >= BEAM_VIEW_SLACK && age < life - BEAM_VIEW_SLACK && !link.real_curr().beam_held(s.shooter, s.weapon, id),
+                _ => false,
+            };
             // A target the shot itself killed on the fire tick is held where it was for the beam's life.
-            let lost = live.is_none() && !s.pinned;
+            let lost = sim_lost || (live.is_none() && !s.pinned);
             if let Some(b) = live {
                 s.last_body = Some(b);
             }
             let end = if lost {
-                // A target lost while the miss timer runs: the end goes to the range along the last direction;
-                // lost after it, or with no timer, the beam ends.
+                // A target lost while the miss timer runs: the end goes to the weapon's range; lost after it, or with
+                // no timer, the beam ends (read from the executable, static; not measured). INTERIM: that the end goes
+                // to full range for that time is established, along which line is not: the last aim line is taken. A
+                // target that reappears inside the time does not resume the beam (not established).
                 if !s.miss.is_some_and(|m| age < m) {
                     cmds.entity(e).try_despawn();
                     continue;

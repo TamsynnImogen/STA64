@@ -106,6 +106,8 @@ pub struct WarpRow {
 
 impl WorldView {
     /// Whether the sim holds a beam of `weapon` from `shooter` at `target` (its life has not ended and it is not lost).
+    /// Two beams of the same weapon from one shooter at the same target are not told apart (harmless: every condition
+    /// that loses one loses both).
     pub fn beam_held(&self, shooter: EntityId, weapon: ContentKey, target: EntityId) -> bool {
         let key = (shooter, weapon, target);
         let at = self.beam_rows.partition_point(|r| (r.shooter, r.weapon, r.target) < key);
