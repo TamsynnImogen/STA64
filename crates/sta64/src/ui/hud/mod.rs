@@ -1649,6 +1649,25 @@ mod target_tests {
         }
     }
 
+    /// Warp off (the mission switch the view carries): the armed move aimed from the minimap is the plain
+    /// move, not a warp move (#1102); with warp on it is the warp move, as above.
+    #[test]
+    fn an_armed_move_from_the_minimap_is_plain_when_warp_is_off() {
+        use bevy::picking::pointer::PointerButton::Secondary;
+        for (warp, want_warp) in [(true, true), (false, false)] {
+            let mut feed = a2_feed(&[1]);
+            Arc::make_mut(&mut feed.view).attrs.mission_switches.allow_warp = warp;
+            let mut app = minimap_app(feed, HudState { targeting: Some(TargetMode::Move), ..Default::default() });
+            minimap_click(&mut app, Secondary, true);
+            let queue = app.world().resource::<CommandQueue>().0.clone();
+            match queue.as_slice() {
+                [CommandKind::Order(Order::MoveWarp { .. })] => assert!(want_warp, "warp {warp}"),
+                [CommandKind::Order(Order::Move { .. })] => assert!(!want_warp, "warp {warp}"),
+                other => panic!("warp {warp}: {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn a_right_click_on_the_minimap_aims_the_armed_command_and_a_refused_one_stays_armed() {
         use bevy::picking::pointer::PointerButton::{Primary, Secondary};

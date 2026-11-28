@@ -30,6 +30,10 @@ use crate::app::GameSet;
 use crate::clock::AnimClock;
 
 #[cfg(test)]
+#[path = "sim_link_warp_tests.rs"]
+mod warp_tests;
+
+#[cfg(test)]
 #[path = "sim_link_production_tests.rs"]
 mod production_tests;
 

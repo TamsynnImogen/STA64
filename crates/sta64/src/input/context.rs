@@ -454,6 +454,19 @@ mod tests {
         app2.world_mut().run_system_once(cursor).unwrap();
         assert_eq!(app2.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_move");
         assert_eq!(kind_cursor(&cmds), Some("c_move"));
+        // Warp off (the content's own switch): no warp cursor and a plain move, even with Alt held.
+        let (mut app4, _) = app_as(1, A2);
+        app4.init_resource::<crate::ui::cursor::WantedCursor>();
+        let off = {
+            let db = (*app4.world().resource::<ContentRes>().0).clone();
+            Arc::new(db.clone().with_rules(db.rules().clone().with_warp(Some(false))))
+        };
+        app4.insert_resource(ContentRes(off));
+        app4.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
+        let cmds = right_click_at(&mut app4, 20000.0);
+        app4.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(app4.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_move", "{cmds:?}");
+        assert_eq!(kind_cursor(&cmds), Some("c_move"), "{cmds:?}");
         // A pointer whose ray misses the map plane: nothing to warp to.
         let (mut app3, _) = app_as(1, A2);
         app3.init_resource::<crate::ui::cursor::WantedCursor>();
