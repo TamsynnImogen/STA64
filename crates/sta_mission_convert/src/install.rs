@@ -249,6 +249,10 @@ pub struct Options {
     /// keeps it (see [`convert_install`]). Off by default: the command line clears first, which its
     /// console output pins. The game sets it.
     pub prepare_first: bool,
+    /// Tests: the converter version the cache keys are made with, instead of
+    /// [`crate::CONVERTER_VERSION`] (what a raised version would give: every entry misses and the
+    /// missions are converted again). `None` in every real run.
+    pub cache_version: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -276,6 +280,7 @@ pub struct Discovered {
     pub full: bool,
     engine: Option<Vtables>,
     engine_digest: Option<Vec<u8>>,
+    cache_version: Option<u32>,
     install_root: PathBuf,
 }
 
@@ -302,6 +307,7 @@ impl Install {
                     full,
                     engine: Some(engine),
                     engine_digest: engine_digest(&self.root),
+                    cache_version: opts.cache_version,
                     install_root: self.root.clone(),
                 })
             }
@@ -317,6 +323,7 @@ impl Install {
                     full,
                     engine: None,
                     engine_digest: None,
+                    cache_version: opts.cache_version,
                     install_root: self.root.clone(),
                 })
             }
@@ -510,14 +517,21 @@ impl Loaded {
 }
 
 /// The cache key of an Armada II mission: its two DLLs' names and bytes and the engine digest.
-fn a2_key(job: &convert::Job, digest: &[u8]) -> Option<(String, Loaded)> {
+fn key_builder(kind: &str, version: Option<u32>) -> KeyBuilder {
+    match version {
+        Some(v) => KeyBuilder::with_version(kind, v),
+        None => KeyBuilder::new(kind),
+    }
+}
+
+fn a2_key(job: &convert::Job, digest: &[u8], version: Option<u32>) -> Option<(String, Loaded)> {
     let dsl = read_or_none(&job.dsl)?;
     let drl = match &job.drl {
         Some(p) => Some(read_or_none(p)?),
         None => None,
     };
     let drl_base = job.drl.as_ref().map(|p| file_name(p));
-    let key = KeyBuilder::new("a2")
+    let key = key_builder("a2", version)
         .part(file_name(&job.dsl).as_bytes())
         .part(drl_base.as_deref().unwrap_or("").as_bytes())
         .part(&[u8::from(drl.is_some())])
@@ -533,9 +547,9 @@ fn a2_key(job: &convert::Job, digest: &[u8]) -> Option<(String, Loaded)> {
 }
 
 /// The cache key of an Armada I mission and the bytes read for it.
-fn a1_key(map: &str, dsl: &Path, drl: &Path) -> Option<(String, Loaded)> {
+fn a1_key(map: &str, dsl: &Path, drl: &Path, version: Option<u32>) -> Option<(String, Loaded)> {
     let (d, r) = (read_or_none(dsl)?, read_or_none(drl)?);
-    let key = KeyBuilder::new("a1")
+    let key = key_builder("a1", version)
         .part(map.as_bytes())
         .part(file_name(dsl).as_bytes())
         .part(file_name(drl).as_bytes())
@@ -548,7 +562,7 @@ fn a1_key(map: &str, dsl: &Path, drl: &Path) -> Option<(String, Loaded)> {
 /// The cache key of an Armada I mission: its map, the two DLLs' names and bytes (and the build
 /// identity, see [`crate::cache::BUILD_ID`]); `None` when a DLL cannot be read.
 pub fn a1_cache_key(map: &str, dsl: &Path, drl: &Path) -> Option<String> {
-    a1_key(map, dsl, drl).map(|(k, _)| k)
+    a1_key(map, dsl, drl, None).map(|(k, _)| k)
 }
 
 /// The console line of a converted Armada II mission.
@@ -720,10 +734,10 @@ fn convert_mission(
     let (ckey, mut loaded) = match &m.work {
         Work::A2(job) => cache
             .zip(d.engine_digest.as_ref())
-            .and_then(|(_, dg)| a2_key(job, dg))
+            .and_then(|(_, dg)| a2_key(job, dg, d.cache_version))
             .map_or((None, Loaded::default()), |(k, l)| (Some(k), l)),
         Work::A1(job) => cache
-            .and_then(|_| a1_key(&job.map, &job.dsl, &job.drl))
+            .and_then(|_| a1_key(&job.map, &job.dsl, &job.drl, d.cache_version))
             .map_or((None, Loaded::default()), |(k, l)| (Some(k), l)),
     };
     let entry = match lookup(cache, ckey.as_ref()) {
