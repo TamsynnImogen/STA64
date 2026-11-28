@@ -52,8 +52,8 @@ pub(in crate::ui::hud) enum LiveTint {
     Shield(EntityId),
 }
 
-// Armada I ShieldBar: the filled sprite blends from red at zero to green at full
-// strength (read from Armada.exe, static). Use the existing hull display for shieldless units.
+// Armada I shield bar: the filled sprite blends from red at zero to green at full
+// strength (read from the executable, static). Use the existing hull display for shieldless units.
 fn shield_tint(fraction: f32) -> Color {
     Color::srgb(1.0 - fraction, fraction, 0.0)
 }
@@ -217,8 +217,8 @@ fn single_card(
         commands.entity(root).with_child((node(r), Pickable::IGNORE, image, LiveTint::Race(single.id)));
     }
     pic(commands, "infoSingleNameTextBackground", "infoSingleNameTextBackgroundArea");
-    // Armada.exe's GUI colour lookup supplies black to StandardText for a
-    // missing *TextColor. The artwork under these captions is light.
+    // The native GUI colour lookup gives a caption with no *TextColor key black (read from the
+    // executable, static). The artwork under these captions is light.
     let colour = |key: &str| layout.colour(key).unwrap_or(Color::BLACK);
     if let Some(r) = key_rect(layout, origin, &["infoSingleNameTextInformationArea", "infoSingleNameTextArea"]) {
         text(commands, root, r, single.name.clone(), colour("infoSingleNameTextColor"), theme.micro_size, None);

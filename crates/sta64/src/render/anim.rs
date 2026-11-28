@@ -117,8 +117,8 @@ pub struct Caps {
 }
 
 /// Whether a shot of this weapon animates its owner: the weapon's ODF `animateOwner` (read
-/// from the executable, static: `Weapon::Simulate` plays the owner forward once per shot
-/// when it is set). A weapon with no ODF text behind it (native content, test content) has
+/// from the executable, static: a weapon plays its owner forward once per shot when it is
+/// set). A weapon with no ODF text behind it (native content, test content) has
 /// no such key to read, so its shots count.
 pub fn owner_animates(w: &sta_content::WeaponDef) -> bool {
     w.raw.class_label().is_none() || w.raw.i64("animateOwner").is_some_and(|v| v != 0)

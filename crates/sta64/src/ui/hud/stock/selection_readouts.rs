@@ -31,7 +31,7 @@ enum Field {
 
 impl Field {
     fn keys(self, builder: bool) -> (&'static str, &'static str, &'static str, Readout) {
-        // ShipDisplay uses a different set of rectangles for the yard card.
+        // The native info panel uses a different set of rectangles for the yard card.
         // Both modes use the same sprite identifiers and value sources (Armada II, static).
         match self {
             Self::Crew => {
@@ -95,7 +95,7 @@ pub(super) fn spawn(
 ) {
     let id = single.id;
     let builder = layout.info_uses_builder(single);
-    // Roots-hosted mods can use these ShipDisplay fields even with FleetOps presentation.
+    // Roots-hosted mods can use these info panel fields even with FleetOps presentation.
     for field in [Field::Crew, Field::Officers, Field::Energy] {
         let (value_key, icon_key, sprite, tip) = field.keys(builder);
         let marker = SelectionReadout(id, field);
