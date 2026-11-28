@@ -28,6 +28,7 @@ pub use readout::armada2_look;
 #[cfg(test)]
 mod gpu;
 pub use geometry::{GaugeStyle, ModelBounds};
+pub(crate) use geometry::project as project_bounds;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
