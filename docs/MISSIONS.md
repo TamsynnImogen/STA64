@@ -654,6 +654,8 @@ cargo run --release -p sta_mission_convert -- --install "<game root>"
 | Option | Meaning |
 |---|---|
 | `--install <game root>` | the install to read (required) |
+| `--mod <name>` | convert the compiled missions of this mod inside the install instead of the base game's (see below) |
+| `--engine <folder>` | Armada II: read the engine files in this folder instead of the install root |
 | `--out <folder>` | write here instead of the data directory's folder |
 | `--only <mission>` | convert one mission; may be given several times |
 | `--include-unmapped` | Armada I: also the DLL pairs no map names |
@@ -677,6 +679,27 @@ Two installs whose folders share a name in two places so keep two folders. A
 mod adds `+<slug of the mod>`. The rule lives in one place,
 `sta_core::install_key`, and the converter, the game's mount and the client
 all call it.
+
+**The missions of a mod.** Without `--mod` the tool converts the base game's
+own missions and never looks into a mod. With `--mod <name>` it converts the
+compiled missions (a `.dsl` and `.drl` pair each) of that mod instead: the
+ones the game's own mount of the install with that mod shows (ADR 0004 D6: the
+mod, its parent mods, and the base data unless a mod of the chain is
+standalone), each written under the stems of the maps that mount shows. So a
+child mod converts its parent's missions under the names its own maps give
+them. The output and the cache go to the folders of the key *with* the mod,
+and the game mounts a converted folder only for the install and the mod that
+is active, so a conversion made for one mod is never used for another or for
+the install without a mod. The argument is accepted wherever the mount accepts
+the mod and refused with the mount's reason otherwise. A mission DLL the mount
+finds inside an archive is reported as failed; only files are converted.
+
+An Armada II conversion names the engine's calls from the engine files
+(`Armada2.exe` with `armada2.map`) and refuses files that are not the ones it
+was written against. An install that hosts mods has no such pair at its root,
+so a mod's conversion needs `--engine <stock Armada II root>`: that folder is
+only read, and is guarded like the install. Without it the run stops and says
+so.
 
 **The cache.** With `--cache` the tool keeps each converted mission in
 `<user data dir>/convert-cache/<key>/` (`--cache-dir` names another folder)

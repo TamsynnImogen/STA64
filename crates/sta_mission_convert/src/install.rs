@@ -1,5 +1,6 @@
 //! Converting an install (LUA-15i): the orchestration the command line ([`crate::cli`]) and the
-//! game both use. One run is: look at the install ([`Install::open`]), open the output folder
+//! game both use. One run is: look at the install ([`Install::open`], or [`Install::open_mod`]
+//! for the missions of a mod inside it, #927), open the output folder
 //! ([`OutDir`], checked with [`resolve_output`]), then [`convert_install`], which clears what an
 //! earlier run wrote, discovers the missions of the install (Armada I or II), converts each one
 //! (through the [`Cache`] when given one), writes the result through the verified writer
@@ -17,6 +18,9 @@
 //! run.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use sta_vfs::{Source, Vfs};
 
 use crate::a1;
 use crate::cache::{Cache, Entry, KeyBuilder};
@@ -142,7 +146,7 @@ pub fn is_armada1(install: &Path) -> bool {
 pub fn resolve_output(given: &Path, install: &Install, env: &Env) -> std::result::Result<PathBuf, String> {
     let res = resolve(given)
         .map_err(|m| format!("output folder {} cannot be resolved: {m}", given.display()))?;
-    match refuse(&res, &[&install.root], env) {
+    match refuse(&res, &install.read_only_roots(), env) {
         Some(why) => Err(format!("output folder {} {why}", given.display())),
         None => Ok(res),
     }
@@ -152,7 +156,7 @@ pub fn resolve_output(given: &Path, install: &Install, env: &Env) -> std::result
 /// `out_res`: it may not contain it or lie inside it.
 pub fn open_cache(dir: &Path, out_res: &Path, install: &Install, env: &Env) -> std::result::Result<Cache, String> {
     let res = resolve(dir).map_err(|m| format!("cache folder {} cannot be resolved: {m}", dir.display()))?;
-    if let Some(why) = refuse(&res, &[&install.root], env) {
+    if let Some(why) = refuse(&res, &install.read_only_roots(), env) {
         return Err(format!("cache folder {} {why}", dir.display()));
     }
     if contains(out_res, &res) || contains(&res, out_res) {
@@ -172,14 +176,37 @@ pub enum Game {
     Armada2,
 }
 
-/// An install the converter can read missions from.
+/// An install the converter can read missions from: the base game's own ([`Install::open`]), or
+/// those of one mod inside it ([`Install::open_mod`]).
 #[derive(Debug, Clone)]
 pub struct Install {
     /// The resolved root.
     pub root: PathBuf,
     pub game: Game,
-    /// The base game's own missions folder (never a mod's, D6).
+    /// The base game's own missions folder (never a mod's, D6). Opened with a mod, the install's
+    /// data folder: that run finds its missions through the mount, not in one folder.
     pub missions_dir: PathBuf,
+    /// The mod this install was opened with, and the mount that resolves its files.
+    mounted: Option<Mounted>,
+    /// Where the Armada II engine files are read when not at `root` ([`Install::with_engine`]).
+    engine_root: Option<PathBuf>,
+}
+
+/// An install's mount with its active mod, kept from [`Install::open_mod`] to the discovery.
+#[derive(Debug, Clone)]
+struct Mounted {
+    name: String,
+    vfs: Arc<Vfs>,
+}
+
+/// Why an install cannot be opened with a mod ([`Install::open_mod`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModError {
+    /// `path` does not resolve to a folder.
+    NotAFolder { path: PathBuf },
+    /// The game's mount refuses `root` with the mod `name`; `reason` is the mount's own text
+    /// (no such mod, an install that has no mods folder, a parent cycle, ...).
+    Mount { path: PathBuf, root: PathBuf, name: String, reason: String },
 }
 
 /// Why a folder is not an install the converter can use.
@@ -229,8 +256,121 @@ impl Install {
             .or_else(|| child(&child(&install, "Data").unwrap_or_else(|| install.clone()), "missions"))
             .ok_or_else(|| InstallError::NoMissionsFolder { path: given.clone(), root: install.clone() })?;
         let game = if is_armada1(&install) { Game::Armada1 } else { Game::Armada2 };
-        Ok(Install { root: install, game, missions_dir: mdir })
+        Ok(Install { root: install, game, missions_dir: mdir, mounted: None, engine_root: None })
     }
+
+    /// Looks at `path` as the install hosting the mod `name` (#927, D6): the missions to convert
+    /// are the ones the game's own mount of that install with that mod shows
+    /// ([`Vfs::mount_install`]: the mod, its parent chain, and the base data unless a mod of the
+    /// chain is standalone). Accepted wherever that mount succeeds, refused with its reason
+    /// otherwise; there is no second rule for where a mod lives. The conversion is of the Armada
+    /// II kind (a `.dsl` and `.drl` pair per mission), and its output belongs to this install
+    /// with this mod only: key it with [`Install::active_mod`].
+    ///
+    /// An install that hosts mods has no engine files of the kind the conversion reads at its
+    /// root: name a stock Armada II root with [`Install::with_engine`].
+    pub fn open_mod(path: &Path, name: &str) -> std::result::Result<Install, ModError> {
+        let given = path.to_path_buf();
+        let root = match resolve(path) {
+            Ok(p) if p.is_dir() => p,
+            _ => return Err(ModError::NotAFolder { path: given }),
+        };
+        let refused = |reason: String| ModError::Mount { path: given.clone(), root: root.clone(), name: name.to_owned(), reason };
+        // an empty name would give the base install's key: never a mod
+        if name.trim().is_empty() {
+            return Err(refused("the mod's name is empty".to_owned()));
+        }
+        let vfs = Vfs::mount_install(&root, Some(name)).map_err(|e| refused(e.to_string()))?;
+        let missions_dir = child(&root, "Data").unwrap_or_else(|| root.clone());
+        let mounted = Some(Mounted { name: name.to_owned(), vfs: Arc::new(vfs) });
+        Ok(Install { root, game: Game::Armada2, missions_dir, mounted, engine_root: None })
+    }
+
+    /// The same install, reading the Armada II engine files (the executable and its map, which
+    /// name the calls of a mission) in the folder `path` instead of at its own root. That folder
+    /// is read only, like the install: no output or cache folder may lie in it. An Armada I
+    /// conversion reads no engine files and ignores this.
+    pub fn with_engine(mut self, path: &Path) -> std::result::Result<Install, InstallError> {
+        match resolve(path) {
+            Ok(p) if p.is_dir() => {
+                self.engine_root = Some(p);
+                Ok(self)
+            }
+            _ => Err(InstallError::NotAFolder { path: path.to_path_buf() }),
+        }
+    }
+
+    /// The mod this install was opened with ([`Install::open_mod`]), as the caller named it: the
+    /// second argument of the folder key ([`key`]) of everything converted from it.
+    pub fn active_mod(&self) -> Option<&str> {
+        self.mounted.as_ref().map(|m| m.name.as_str())
+    }
+
+    /// Where the Armada II engine files are read: the folder given to [`Install::with_engine`],
+    /// else the install's root.
+    pub fn engine_root(&self) -> &Path {
+        self.engine_root.as_deref().unwrap_or(&self.root)
+    }
+
+    /// The folders a run only reads, which nothing may be written into.
+    fn read_only_roots(&self) -> Vec<&Path> {
+        std::iter::once(self.root.as_path()).chain(self.engine_root.as_deref()).collect()
+    }
+}
+
+/// The missions of an install opened with a mod, as its mount resolves them: every
+/// `missions/**/<name>S.dsl` the mount shows, with the `<name>R.drl` it shows beside it, in path
+/// order; each is written under the stems of the maps the mount shows in `bzn/` that name it. So
+/// a child mod converts its parent's missions under the names its own maps give them, and a file
+/// one mod of the chain overrides is the overriding one.
+///
+/// A mission DLL the mount finds inside an archive is not converted (the conversion reads DLL
+/// files): it is listed and fails with that reason, after the others.
+///
+/// INTERIM: a mod that hides its parents' maps still converts its parents' mission DLLs (under
+/// their own names where no map it shows names them). Whether the original runs them: not
+/// measured.
+fn mount_missions(vfs: &Vfs, only: &[String]) -> Vec<Mission> {
+    let file = |virtual_path: &str| match vfs.resolve(virtual_path) {
+        Some((_, Source::Loose(p))) => Some(Ok(p.clone())),
+        Some((layer, _)) => Some(Err(format!(
+            "{virtual_path} is inside an archive of the layer {:?}: only a mission DLL that is a file is converted",
+            vfs.layers()[layer].name()
+        ))),
+        None => None,
+    };
+    let (mut pairs, mut packed) = (Vec::new(), Vec::new());
+    for dsl in vfs.list("missions") {
+        let Some(base) = dsl.strip_suffix("s.dsl") else { continue };
+        let name = base.rsplit('/').next().unwrap_or(base).to_owned();
+        let found = file(&dsl).map(|d| (d, file(&format!("{base}r.drl")).transpose()));
+        match found {
+            Some((Ok(d), Ok(r))) => pairs.push((d, r)),
+            Some((Err(why), _)) | Some((_, Err(why))) => packed.push((name, why)),
+            None => {}
+        }
+    }
+    let maps: Vec<(String, Vec<u8>)> = vfs
+        .list("bzn")
+        .into_iter()
+        .filter_map(|p| {
+            let stem = p.strip_prefix("bzn/")?.strip_suffix(".bzn").filter(|s| !s.contains('/'))?.to_owned();
+            let (layer, source) = vfs.resolve(&p)?;
+            Some((stem, vfs.read_from(layer, source).ok()?))
+        })
+        .collect();
+    let only_low: Vec<String> = only.iter().map(|x| py_lower(x)).collect();
+    let mut missions: Vec<Mission> = convert::plan_resolved(pairs, &maps, only)
+        .into_iter()
+        .map(|j| Mission { name: j.mission.clone(), targets: j.targets.clone(), work: Work::A2(j) })
+        .collect();
+    missions.extend(
+        packed
+            .into_iter()
+            .filter(|(name, _)| only_low.is_empty() || only_low.contains(name))
+            .map(|(name, why)| Mission { name, targets: Vec::new(), work: Work::Refused(why) }),
+    );
+    missions
 }
 
 // ------------------------------------------------------------------ discovery
@@ -259,6 +399,8 @@ pub struct Options {
 enum Work {
     A2(convert::Job),
     A1(a1::mission::Job),
+    /// Found, and not convertible for this reason: the mission fails with it.
+    Refused(String),
 }
 
 /// One mission of an install.
@@ -292,21 +434,26 @@ impl Install {
         let full = opts.only.is_empty();
         match self.game {
             Game::Armada2 => {
-                let mut roots = vec![self.missions_dir.clone()];
-                if let Some(b) = self.missions_dir.parent().and_then(|p| child(p, "bzn")) {
-                    roots.push(b);
-                }
-                let engine = load_engine(&roots, Some(&self.root)).map_err(|e| e.message)?;
-                let missions = convert::plan(&roots, &opts.only)
-                    .into_iter()
-                    .map(|j| Mission { name: j.mission.clone(), targets: j.targets.clone(), work: Work::A2(j) })
-                    .collect();
+                let engine = load_engine(&[], Some(self.engine_root())).map_err(|e| e.message)?;
+                let missions = match &self.mounted {
+                    Some(m) => mount_missions(&m.vfs, &opts.only),
+                    None => {
+                        let mut roots = vec![self.missions_dir.clone()];
+                        if let Some(b) = self.missions_dir.parent().and_then(|p| child(p, "bzn")) {
+                            roots.push(b);
+                        }
+                        convert::plan(&roots, &opts.only)
+                            .into_iter()
+                            .map(|j| Mission { name: j.mission.clone(), targets: j.targets.clone(), work: Work::A2(j) })
+                            .collect()
+                    }
+                };
                 Ok(Discovered {
                     game: self.game,
                     missions,
                     full,
                     engine: Some(engine),
-                    engine_digest: engine_digest(&self.root),
+                    engine_digest: engine_digest(self.engine_root()),
                     cache_version: opts.cache_version,
                     install_root: self.root.clone(),
                 })
@@ -565,6 +712,14 @@ pub fn a1_cache_key(map: &str, dsl: &Path, drl: &Path) -> Option<String> {
     a1_key(map, dsl, drl, None).map(|(k, _)| k)
 }
 
+/// The cache key of an Armada II mission as a run computes it: the two DLLs' names and bytes,
+/// the engine files in `engine_root` ([`Install::engine_root`]) and the build identity; `None`
+/// when a file cannot be read or that folder has no engine files.
+pub fn a2_cache_key(dsl: &Path, drl: Option<&Path>, engine_root: &Path) -> Option<String> {
+    let job = convert::Job { mission: String::new(), dsl: dsl.to_path_buf(), drl: drl.map(Path::to_path_buf), targets: Vec::new() };
+    a2_key(&job, &engine_digest(engine_root)?, None).map(|(k, _)| k)
+}
+
 /// The console line of a converted Armada II mission.
 fn a2_line(c: &convert::Converted) -> String {
     let r = &c.report;
@@ -736,6 +891,7 @@ fn convert_mission(
             .zip(d.engine_digest.as_ref())
             .and_then(|(_, dg)| a2_key(job, dg, d.cache_version))
             .map_or((None, Loaded::default()), |(k, l)| (Some(k), l)),
+        Work::Refused(_) => (None, Loaded::default()),
         Work::A1(job) => cache
             .and_then(|_| a1_key(&job.map, &job.dsl, &job.drl, d.cache_version))
             .map_or((None, Loaded::default()), |(k, l)| (Some(k), l)),
@@ -761,6 +917,10 @@ fn convert_mission(
                     // every other fault aborts the run; what was written stays
                     Err(e) => return Err(format!("{}: {}: {}", m.name, class_name(&e), e.message)),
                 }
+            }
+            Work::Refused(why) => {
+                fail(sink, r, &m.name, why.clone());
+                None
             }
             Work::A1(job) => {
                 // any fault of one mission fails that mission only

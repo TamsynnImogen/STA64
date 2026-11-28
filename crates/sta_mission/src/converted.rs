@@ -20,7 +20,8 @@ pub fn dir_in(data_dir: &Path, install_root: &Path, active_mod: Option<&str>) ->
 }
 
 /// `convert-cache/<key>` under the user data dir: the converter's cache for the base game of an
-/// install (the converter never runs for a mod, D6), next to `converted/<key>`.
+/// install, next to `converted/<key>`. (The command line keeps the cache of a mod's conversion,
+/// #927, under the key with the mod.)
 pub fn cache_dir_in(data_dir: &Path, install_root: &Path) -> PathBuf {
     data_dir.join("convert-cache").join(key(install_root, None))
 }
