@@ -2506,18 +2506,25 @@ mod tests {
         for def in db.units().filter(|d| !d.build.list.is_empty()) {
             let key = |k: &str| def.raw.bool(k) == Some(true);
             let builds = key("builder_ship") || key("builder_facility");
-            let expected: Vec<&str> = if key("research") {
+            let embryo = def.is_evolver();
+            // The other HUDs: an evolver (an embryo) shows Evolve alone; a class with the evolve key and a builder key
+            // keeps Build and gets Evolve beside it (INTERIM); research wins over the rest.
+            let expected: Vec<&str> = if key("research") && !embryo {
                 vec!["b_research"]
-            } else if key("evolve") && builds {
-                vec!["b_build", "b_evolve"]
-            } else if key("evolve") {
+            } else if embryo || (key("evolve") && !builds) {
                 vec!["b_evolve"]
+            } else if key("evolve") {
+                vec!["b_build", "b_evolve"]
             } else {
                 vec!["b_build"]
             };
             let f = feed(db.clone(), vec![unit(&db, 2, &def.odf, 1, 100.0, None)], &[2]);
             let got: Vec<String> = openers(&f).into_iter().flat_map(|(_, s)| s).collect();
             assert_eq!(got, expected, "{}", def.odf);
+            // The stock palette: ONE menu button by the measured precedence, Evolve before Research before Build.
+            let stock: Vec<String> = stock_grid(&f, Page::Top).into_iter().filter(|b| b.act == Act::OpenBuild).flat_map(|b| b.sprite_names).collect();
+            let stock_expected = if embryo || key("evolve") { "b_evolve" } else if key("research") { "b_research" } else { "b_build" };
+            assert_eq!(stock, [stock_expected], "{} (stock palette)", def.odf);
             research += usize::from(key("research") && def.planet_role.is_none());
             planet += usize::from(key("research") && def.planet_role.is_some());
             ship += usize::from(key("builder_ship") && !key("research"));
