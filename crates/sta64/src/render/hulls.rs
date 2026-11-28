@@ -62,14 +62,22 @@ pub const HULL_SAMPLE_MAX: usize = 256;
 /// through the part cache, where keeping the meshes' main-world data would cost every hull its full vertex and index
 /// buffers for the whole session.
 #[derive(Component, Clone, Debug, PartialEq)]
-pub struct HullSample(pub std::sync::Arc<[[f32; 3]]>);
+pub struct HullSample {
+    /// The sampled vertices.
+    pub points: std::sync::Arc<[[f32; 3]]>,
+    /// How many vertices the part has in all (at least `points.len()`): a unit's parts are weighted by these, so that
+    /// every vertex of the whole model is as likely as any other, however small the part.
+    pub full: usize,
+}
 
 /// The sample of `positions`: all of them when there are few, else an even stride through them.
-pub fn hull_sample(positions: &[[f32; 3]]) -> std::sync::Arc<[[f32; 3]]> {
-    if positions.len() <= HULL_SAMPLE_MAX {
-        return positions.into();
-    }
-    (0..HULL_SAMPLE_MAX).map(|i| positions[i * positions.len() / HULL_SAMPLE_MAX]).collect()
+pub fn hull_sample(positions: &[[f32; 3]]) -> HullSample {
+    let points = if positions.len() <= HULL_SAMPLE_MAX {
+        positions.into()
+    } else {
+        (0..HULL_SAMPLE_MAX).map(|i| positions[i * positions.len() / HULL_SAMPLE_MAX]).collect()
+    };
+    HullSample { points, full: positions.len() }
 }
 
 /// Marks a mesh part of a hull (set by `model_scene`), with what the material alone

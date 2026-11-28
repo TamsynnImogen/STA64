@@ -101,7 +101,7 @@ struct CachedPart {
     /// Set on a hull's parts (not skies), for the hull look (`render/hulls.rs`).
     hull: Option<crate::render::hulls::HullPart>,
     /// A few of a hull part's vertices, kept for the death sparks (the mesh itself cannot be read once rendered).
-    sample: Option<std::sync::Arc<[[f32; 3]]>>,
+    sample: Option<crate::render::hulls::HullSample>,
     /// The part belongs to a dilithium moon (its rock or its `glowdmoon` shell): `rock::MoonPart`.
     moon: Option<crate::render::rock::MoonKind>,
 }
@@ -629,7 +629,6 @@ fn spawn_mesh(
 
         let triangles = indices.len() / 3;
 
-        let sample = crate::render::hulls::hull_sample(&positions);
         let usage = if construction.is_some() {
             RenderAssetUsages::default()
         } else {
@@ -746,6 +745,8 @@ fn spawn_mesh(
             team_face: team && !crate::render::stock::hulls::is_borg_glow(&group.material),
         },
         );
+        // Read off the local mesh, before it is handed to the renderer; only a hull part's death sparks use it.
+        let sample = hull.and_then(|_| bevy_mesh.attribute(Mesh::ATTRIBUTE_POSITION)?.as_float3().map(crate::render::hulls::hull_sample));
         let part = CachedPart {
             mesh: ctx.meshes.add(bevy_mesh),
             material: ctx.materials.add(material),
@@ -754,7 +755,7 @@ fn spawn_mesh(
             triangles,
             rock,
             hull,
-            sample: hull.is_some().then_some(sample),
+            sample,
             moon,
         };
         if let Some(cache) = ctx.parts.as_mut() {
@@ -829,7 +830,7 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (u
     if let Some(h) = part.hull {
         e.insert(h);
         if let Some(sample) = &part.sample {
-            e.insert(crate::render::hulls::HullSample(sample.clone()));
+            e.insert(sample.clone());
         }
     }
     if let Some(maps) = maps {

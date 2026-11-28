@@ -196,15 +196,15 @@ fn missing_vertex_inputs(mesh: &Mesh) -> Option<Vec<&'static str>> {
 /// a build without safe mode (#1418).
 ///
 /// It reads only through the safe accessors and never touches a mesh whose data was handed to the renderer: those are
-/// skipped. So in a real play session it checks a mesh on the frames before the renderer takes it (a new effect mesh is
-/// usually visible, and so checked, in the frame it appears; a mesh shared by many entities is checked once); in the
-/// tests, which never extract, it checks every visible entity every frame. It can panic for no reason other than its
-/// own finding.
+/// skipped for good (it remembers only those). So in a real play session it checks a mesh on the frames before the
+/// renderer takes it (a new effect mesh is usually visible, and so checked, in the frame it appears); in the tests,
+/// which never extract, it checks every visible entity every frame, so a batch mesh refilled each frame is checked on
+/// each fill. It can panic for no reason other than its own finding.
 #[cfg(debug_assertions)]
-pub(crate) fn guard_stock_meshes(meshes: Option<Res<Assets<Mesh>>>, q: Query<(Entity, &Mesh3d, &Visibility), With<MeshMaterial3d<StockShotMaterial>>>, mut checked: Local<std::collections::HashSet<AssetId<Mesh>>>) {
+pub(crate) fn guard_stock_meshes(meshes: Option<Res<Assets<Mesh>>>, q: Query<(Entity, &Mesh3d, &Visibility), With<MeshMaterial3d<StockShotMaterial>>>, mut taken: Local<std::collections::HashSet<AssetId<Mesh>>>) {
     let Some(meshes) = meshes else { return };
     for (e, mesh, vis) in &q {
-        if *vis == Visibility::Hidden || checked.contains(&mesh.0.id()) {
+        if *vis == Visibility::Hidden || taken.contains(&mesh.0.id()) {
             continue;
         }
         let Some(m) = meshes.get(&mesh.0) else { continue };
@@ -212,7 +212,7 @@ pub(crate) fn guard_stock_meshes(meshes: Option<Res<Assets<Mesh>>>, q: Query<(En
         // first fill: looked at again.
         match m.try_attribute_option(Mesh::ATTRIBUTE_POSITION.id) {
             Err(_) => {
-                checked.insert(mesh.0.id());
+                taken.insert(mesh.0.id());
                 continue;
             }
             Ok(None) => continue,
@@ -221,7 +221,6 @@ pub(crate) fn guard_stock_meshes(meshes: Option<Res<Assets<Mesh>>>, q: Query<(En
         }
         let Some(missing) = missing_vertex_inputs(m) else { continue };
         assert!(missing.is_empty(), "entity {e:?} is drawn with the stock shot material but its mesh lacks {missing:?}: the pipeline would fail validation");
-        checked.insert(mesh.0.id());
     }
 }
 
@@ -364,6 +363,19 @@ mod tests {
         for _ in 0..3 {
             app.update();
         }
+    }
+
+    /// A mesh that passed is looked at again: a batch mesh is refilled every frame, and a fill that loses an attribute
+    /// is a defect on any frame, not only the first.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "lacks")]
+    fn the_guard_checks_a_mesh_again_after_it_passed() {
+        let mut app = guarded_app(quad(true));
+        app.update();
+        let id = app.world().resource::<Assets<Mesh>>().iter().next().map(|(id, _)| id).expect("the mesh");
+        app.world_mut().resource_mut::<Assets<Mesh>>().get_mut(id).unwrap().remove_attribute(Mesh::ATTRIBUTE_COLOR);
+        app.update();
     }
 
     #[cfg(debug_assertions)]

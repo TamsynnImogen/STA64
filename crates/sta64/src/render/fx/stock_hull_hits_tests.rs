@@ -5,7 +5,7 @@ use crate::app::configure_sets;
 use crate::render::fx::impacts::{self, ImpactFx, ImpactFxPlugin, SmokeEmitter, HIT_SPARKS};
 use crate::render::fx::stock_shots;
 use crate::render::sprites::SpriteTables;
-use crate::render::hulls::{HullPart, HullSample};
+use crate::render::hulls::HullPart;
 use crate::render::units::HullShare;
 use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink, SimLinkPlugin};
 use bevy::time::TimeUpdateStrategy;
@@ -113,7 +113,7 @@ fn model(app: &mut App, id: u32, nodes: &[(&str, Vec3)], hull: Option<(Vec3, Vec
     }
     if let Some((at, vertices)) = hull {
         // The client keeps its own sample of a hull part's vertices (the part's mesh is not readable once drawn).
-        app.world_mut().spawn((HullSample(vertices.into()), HullPart::default(), GlobalTransform::from_translation(at), ChildOf(root)));
+        app.world_mut().spawn((crate::render::hulls::hull_sample(&vertices), HullPart::default(), GlobalTransform::from_translation(at), ChildOf(root)));
     }
     app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(id), root);
 }
@@ -386,10 +386,33 @@ fn death_sparks_do_not_read_a_hull_mesh_the_renderer_has_taken() {
 fn a_hull_sample_is_all_the_vertices_when_few_and_an_even_stride_when_many() {
     use crate::render::hulls::{HULL_SAMPLE_MAX, hull_sample};
     let few: Vec<[f32; 3]> = (0..10).map(|i| [i as f32, 0.0, 0.0]).collect();
-    assert_eq!(&*hull_sample(&few), &few[..]);
+    assert_eq!((&*hull_sample(&few).points, hull_sample(&few).full), (&few[..], 10));
     let many: Vec<[f32; 3]> = (0..HULL_SAMPLE_MAX * 4).map(|i| [i as f32, 0.0, 0.0]).collect();
     let sample = hull_sample(&many);
-    assert_eq!(sample.len(), HULL_SAMPLE_MAX);
-    assert_eq!(sample[0], many[0]);
-    assert_eq!(sample[1][0], 4.0, "every fourth vertex");
+    assert_eq!(sample.points.len(), HULL_SAMPLE_MAX);
+    assert_eq!(sample.full, many.len(), "the part's whole vertex count is kept beside the sample");
+    assert_eq!(sample.points[0], many[0]);
+    assert_eq!(sample.points[1][0], 4.0, "every fourth vertex");
 }
+
+/// A unit's parts are weighted by their whole vertex counts, not by the sizes of their samples: a part of a hundred
+/// vertices beside one of three thousand gets about a thirtieth of the picks, as when every vertex of the model was
+/// equally likely (the sample cap must not make small parts over-represented).
+#[test]
+fn parts_are_picked_by_their_whole_vertex_counts_not_their_sample_sizes() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut world = World::new();
+    let root = world.spawn(GlobalTransform::default()).id();
+    let part = |world: &mut World, x: f32, count: usize| {
+        let vertices: Vec<[f32; 3]> = (0..count).map(|_| [x, 0.0, 0.0]).collect();
+        world.spawn((crate::render::hulls::hull_sample(&vertices), HullPart::default(), GlobalTransform::default(), ChildOf(root)));
+    };
+    part(&mut world, 1000.0, 3000);
+    part(&mut world, -1000.0, 100);
+    let picks = 3100;
+    let small = world
+        .run_system_once(move |h: HullVertices| (0..picks).filter(|i| h.pick(root, (*i as f32 + 0.5) / picks as f32).unwrap().x < 0.0).count())
+        .unwrap();
+    assert_eq!(small, 100, "one pick in thirty-one, not the 100 of 356 a sample-weighted choice gives");
+}
+
