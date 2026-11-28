@@ -1748,3 +1748,21 @@ fn gpu_the_atlas_is_drawn_in_its_cell_the_right_way_round_and_in_frame_order() {
         check("beyond the streak's tail", 75, 24, black);
     }
 }
+
+/// The debug guard runs in an ordinary stock-effect scene (#1418): a mesh without the vertex colour, drawn with the stock
+/// shot material in the scene of the stock shots, fails the scene (debug builds and tests).
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "lacks")]
+fn the_mesh_guard_runs_in_a_stock_effect_scene() {
+    let mut app = Setup::new(ShotCfg::default()).app(Some(RenderProfile::Stock));
+    app.add_plugins(AssetPlugin::default()).init_asset::<Mesh>().init_asset::<Image>().init_asset::<StockShotMaterial>();
+    let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0; 3]; 3])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 3])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0; 2]; 3]);
+    let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
+    let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params: ShotParams::default(), texture: Handle::default() });
+    app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material), Visibility::Inherited));
+    app.update();
+}

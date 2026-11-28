@@ -1147,6 +1147,9 @@ pub struct StockShotsPlugin;
 
 impl Plugin for StockShotsPlugin {
     fn build(&self, app: &mut App) {
+        // Debug builds and tests: every scene that draws a stock effect checks its meshes (#1418).
+        #[cfg(debug_assertions)]
+        app.add_systems(PostUpdate, crate::render::safe_mode::guard_stock_meshes);
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Shots);
         app.init_resource::<ShieldCapQueue>().init_resource::<super::stock_hull_hits::HullHitPoints>();
