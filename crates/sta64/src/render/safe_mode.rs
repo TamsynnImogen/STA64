@@ -155,6 +155,22 @@ fn count_frames(mut safe: ResMut<SafeMode>) {
     }
 }
 
+/// Marks that the mesh guard is registered on an app, so the plugins that all call [`register_mesh_guard`] add it once.
+#[derive(Resource)]
+struct MeshGuardInstalled;
+
+/// Register the debug mesh guard ([`guard_stock_meshes`]) on `app`: called by every plugin that attaches a mesh to the
+/// stock shot material (the shots, the explosions, the shield hits, the shields-down bands, the material plugin) and by the
+/// tests that add those systems without a plugin. Safe to call any number of times; does nothing in a release build.
+pub(crate) fn register_mesh_guard(app: &mut App) {
+    #[cfg(debug_assertions)]
+    if !app.world().contains_resource::<MeshGuardInstalled>() {
+        app.insert_resource(MeshGuardInstalled).add_systems(PostUpdate, guard_stock_meshes);
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = app;
+}
+
 /// The vertex attributes the stock shot material's fragment stage reads, by name, that `mesh` lacks.
 #[cfg(debug_assertions)]
 fn missing_vertex_inputs(mesh: &Mesh) -> Vec<&'static str> {
@@ -296,7 +312,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default())).add_plugins(SafeModePlugin).init_asset::<StockShotMaterial>().init_asset::<Mesh>().init_asset::<Image>();
         // The stock effects' own plugin registers the guard in a scene; here it is added by hand.
-        app.add_systems(PostUpdate, guard_stock_meshes);
+        register_mesh_guard(&mut app);
         let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params: Default::default(), texture: Handle::default() });
         let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
         app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material), Visibility::Inherited));

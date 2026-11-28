@@ -289,6 +289,7 @@ fn drawing_app() -> App {
             b"sprite_table\n@referenceWidth=64\n@referenceHeight=64\n@tmaterial=additive\natlas tex_atlas 0 0 32 32 @anim=flip4\n@animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n",
         ))));
     app.add_systems(Update, (update_explosions, animate_sprites, update_rings).chain());
+    crate::render::safe_mode::register_mesh_guard(&mut app);
     app
 }
 
@@ -300,7 +301,7 @@ fn drawing_app() -> App {
 fn the_cluster_is_spawned_animated_and_hidden_and_the_ring_is_tinted_and_ended() {
     let mut app = drawing_app();
     let image = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
-    let quad = app.world_mut().resource_mut::<Assets<Mesh>>().add(crate::render::sprites::unit_quad());
+    let quad = app.world_mut().resource_mut::<Assets<Mesh>>().add(cluster_quad());
     let nodes = vec![
         ClusterNode { sprite: "atlas".into(), offset: Vec3::new(1.0, 2.0, 3.0), size: Vec2::new(4.0, 6.0), colour: Vec3::new(1.0, 0.5, 0.25), billboard: true, texture: Some(image.clone()) },
         ClusterNode { sprite: "atlas".into(), offset: Vec3::new(-1.0, 0.0, 0.0), size: Vec2::new(4.0, 6.0), colour: Vec3::ONE, billboard: false, texture: Some(image.clone()) },
@@ -451,4 +452,46 @@ fn gpu_a_stock_explosion_draws_through_the_real_pipeline_without_a_render_error(
     }
     let frame = frames.lock().unwrap().first().cloned().expect("no capture").try_into_dynamic().unwrap().to_rgba8();
     assert!(frame.pixels().any(|p| p.0[0] > 8 || p.0[1] > 8 || p.0[2] > 8), "the explosion changed the frame");
+}
+
+/// #1418 reproduced as tests: the guard runs in the explosion drawing scene, and the two meshes of the defect, the
+/// cluster's plain unit quad and a ring without its colour, fail it.
+#[cfg(debug_assertions)]
+mod defect {
+    use super::*;
+
+    fn cluster_scene(quad: Mesh) -> App {
+        let mut app = drawing_app();
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
+        let quad = app.world_mut().resource_mut::<Assets<Mesh>>().add(quad);
+        let nodes = vec![ClusterNode { sprite: "atlas".into(), offset: Vec3::ZERO, size: Vec2::ONE, colour: Vec3::ONE, billboard: false, texture: Some(image) }];
+        let root = app.world_mut().spawn(Transform::IDENTITY).id();
+        let table = app.world().resource::<SpriteTables>().0.clone();
+        app.world_mut().run_system_once(move |mut cmds: Commands, mut mats: ResMut<Assets<StockShotMaterial>>| spawn_cluster(&mut cmds, root, &nodes, &quad, &table, &mut mats)).unwrap();
+        app
+    }
+
+    #[test]
+    fn the_real_cluster_quad_passes_the_guard() {
+        cluster_scene(cluster_quad()).update();
+    }
+
+    #[test]
+    #[should_panic(expected = "lacks")]
+    fn a_cluster_quad_without_the_colour_fails_the_explosion_scene() {
+        cluster_scene(crate::render::sprites::unit_quad()).update();
+    }
+
+    #[test]
+    #[should_panic(expected = "lacks")]
+    fn a_ring_without_the_colour_fails_the_explosion_scene() {
+        let mut app = drawing_app();
+        let mut ring = ring_mesh(6);
+        ring.remove_attribute(Mesh::ATTRIBUTE_COLOR);
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(ring);
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(Image::default());
+        let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params: ShotParams::default(), texture: image });
+        app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material), Visibility::Inherited));
+        app.update();
+    }
 }

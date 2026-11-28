@@ -570,6 +570,7 @@ pub struct StockShieldHitsPlugin;
 
 impl Plugin for StockShieldHitsPlugin {
     fn build(&self, app: &mut App) {
+        crate::render::safe_mode::register_mesh_guard(app);
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::ShieldHits);
         app.init_resource::<ShieldCapQueue>().init_resource::<BeamFractions>().init_resource::<CapLoadState>();

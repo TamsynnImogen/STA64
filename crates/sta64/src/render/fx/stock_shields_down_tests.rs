@@ -390,6 +390,7 @@ fn gpu_the_bands_add_in_their_own_cells_and_spin_on_the_game_clock() {
     app.insert_resource(SpriteTables(Arc::new(sheet_table())));
     app.insert_resource(AnimClock::new(crate::clock::ClockMode::Wall, 0));
     app.add_systems(Update, (attach_visuals, animate).chain());
+    crate::render::safe_mode::register_mesh_guard(&mut app);
 
     let eye = Vec3::new(0.0, 0.0, 64.0 / (std::f32::consts::FRAC_PI_8).tan());
     let mut target = Image::new_target_texture(128, 128, TextureFormat::Rgba8UnormSrgb, None);
