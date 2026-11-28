@@ -823,6 +823,10 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // cell and hides an Evolve that is on with it; Evolve takes the opener's cell when Build is off, else the
         // first free cell. Needs the install's button location keys and one frame of the original.
         evolve_extra = evolve_on && build_on && !research_on;
+        // INTERIM, two readings: a menu button whose own state is off (several builders selected, or an Evolve over
+        // several classes) is NOT DRAWN here (reading one: the original hides it). Reading two: the original draws it
+        // greyed and unusable. The read gives the state rule only (grade: read from the executable, static); whether
+        // an off button is hidden or greyed is not settled and needs a frame of the original.
         let caption = if research_on {
             Some("Research")
         } else if evolve_on && !build_on {
