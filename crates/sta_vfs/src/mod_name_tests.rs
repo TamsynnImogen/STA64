@@ -139,27 +139,58 @@ mod links {
     use std::os::unix::fs::symlink;
 
     #[test]
-    fn a_link_to_a_sibling_mod_is_followed_and_a_link_that_leaves_the_mods_folder_is_refused() {
+    fn a_link_to_a_sibling_mod_is_followed_as_a_parent_and_one_that_leaves_the_mods_folder_is_refused_as_a_parent() {
         let t = Tmp::new("links");
         t.write("Data/Mods/Real/info.ini", "[mod]\n");
         t.write("Data/Mods/Real/odf/r.odf", "real");
         symlink(t.0.join("Data/Mods/Real"), t.0.join("Data/Mods/Alias")).unwrap();
         symlink(t.0.join("outside"), t.0.join("Data/Mods/Escape")).unwrap();
+        t.write("Data/Mods/ViaAlias/info.ini", "[mod]\nParentMod=Alias\n");
         t.write("Data/Mods/Child/info.ini", "[mod]\nParentMod=Escape\n");
-        let v = Vfs::mount_install(&t.0, Some("Alias")).unwrap();
+        // A parent that is a link to a sibling mod is followed.
+        let v = Vfs::mount_install(&t.0, Some("ViaAlias")).unwrap();
         assert_eq!(v.read("odf/r.odf").map(|r| r.unwrap()), Some(b"real".to_vec()));
-        for name in ["Escape", "Child"] {
-            match Vfs::mount_install(&t.0, Some(name)) {
-                Err(VfsError::ModOutsideMods { name: n, asked_by, target }) => {
-                    assert_eq!(n, "Escape");
-                    assert!(target.ends_with("outside"), "{}", target.display());
-                    if name == "Child" {
-                        assert!(asked_by.contains("Child"), "{asked_by}");
-                    }
-                }
-                other => panic!("{name}: {:?}", other.map(|v| layers(&v).iter().map(|s| s.to_string()).collect::<Vec<_>>())),
+        // A parent entry that is a link leaving the mods folder is refused, naming the child that asked.
+        match Vfs::mount_install(&t.0, Some("Child")) {
+            Err(VfsError::ModOutsideMods { name, asked_by, target }) => {
+                assert_eq!(name, "Escape");
+                assert!(asked_by.contains("Child") && asked_by.contains("ParentMod"), "{asked_by}");
+                assert!(target.ends_with("outside"), "{}", target.display());
             }
+            other => panic!("{:?}", other.map(|v| layers(&v).iter().map(|s| s.to_string()).collect::<Vec<_>>())),
         }
+    }
+
+    #[test]
+    fn the_mod_the_player_names_may_be_a_link_to_a_folder_elsewhere() {
+        // A mod kept on another drive and linked in: the name is the player's own choice (D1).
+        let t = Tmp::new("named_link");
+        t.write("Data/odf/base.odf", "base");
+        symlink(t.0.join("outside"), t.0.join("Data/Mods/Linked")).unwrap();
+        let v = Vfs::mount_install(&t.0, Some("Linked")).unwrap();
+        assert_eq!(layers(&v), ["Linked", "Data"]);
+        assert_eq!(v.read("odf/secret.odf").map(|r| r.unwrap()), Some(b"outside".to_vec()));
+        assert!(mod_chain(&t.data(), "linked").is_ok());
+    }
+
+    #[test]
+    fn a_linked_mods_parent_is_looked_up_under_the_installs_mods_folder_not_next_to_the_target() {
+        let t = Tmp::new("linked_parent");
+        t.write("elsewhere/Linked/info.ini", "[mod]\nParentMod=Sib\n");
+        t.write("elsewhere/Sib/info.ini", "[mod]\n");
+        t.write("elsewhere/Sib/odf/s.odf", "next to the target");
+        symlink(t.0.join("elsewhere/Linked"), t.0.join("Data/Mods/Linked")).unwrap();
+        // `Sib` exists next to the link's target but not in the install's mods folder: not found.
+        assert!(matches!(Vfs::mount_install(&t.0, Some("Linked")), Err(VfsError::ModNotFound(n)) if n == "Sib"));
+        // Once it is in the mods folder it is the one mounted.
+        t.write("Data/Mods/Sib/info.ini", "[mod]\n");
+        t.write("Data/Mods/Sib/odf/s.odf", "in the mods folder");
+        let v = Vfs::mount_install(&t.0, Some("Linked")).unwrap();
+        assert_eq!(v.read("odf/s.odf").map(|r| r.unwrap()), Some(b"in the mods folder".to_vec()));
+        // A linked parent that leaves the mods folder is refused even when a linked mod asks for it.
+        symlink(t.0.join("elsewhere/Sib"), t.0.join("Data/Mods/Far")).unwrap();
+        t.write("elsewhere/Linked/info.ini", "[mod]\nParentMod=Far\n");
+        assert!(matches!(Vfs::mount_install(&t.0, Some("Linked")), Err(VfsError::ModOutsideMods { name, .. }) if name == "Far"));
     }
 
     #[test]
