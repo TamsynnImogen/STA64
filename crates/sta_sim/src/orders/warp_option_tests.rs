@@ -104,6 +104,18 @@ fn the_default_is_on_and_only_stock_armada_ii_content_with_warp_is_offered_the_o
     assert!(!off.allow_warp && !off.directors_cut);
 }
 
+/// The view carries the option, derived each tick, so a client can keep its offer honest: off only in a stock
+/// Armada II match that has it off, and never outside the profile the option counts for.
+#[test]
+fn the_view_shows_the_match_option_where_it_counts() {
+    for (profile, allow, shown_off) in [(Profile::Sta2Classic, true, false), (Profile::Sta2Classic, false, true), (Profile::Fo4, false, false), (Profile::Native, false, false)] {
+        let db = db(profile, true);
+        let sim = game(&db, allow);
+        assert_eq!(sim.view().attrs.match_warp_off, shown_off, "{profile:?} allow_warp {allow}");
+        assert_eq!(sim.view().attrs.match_warp_off, sim.match_warp_off());
+    }
+}
+
 #[test]
 fn with_the_option_off_a_warp_move_flies_at_impulse() {
     warps_only_with_the_option("a player's warp move", |_, s| vec![warp_move(s)]);
