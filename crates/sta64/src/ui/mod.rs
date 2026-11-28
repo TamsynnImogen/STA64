@@ -12,6 +12,7 @@ pub mod gui_sprites;
 pub mod hud;
 pub mod ingame_menu;
 pub mod pause_box;
+pub mod save_menu;
 pub mod i18n;
 pub mod notices;
 pub mod theme;
