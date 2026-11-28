@@ -211,7 +211,10 @@ impl Plugin for HudPlugin {
                         press.run_if(not(crate::ui::presentation::cutscene_running)),
                         status_gpu::press_queue,
                     ).chain().run_if(crate::editor::play_mode),
-                    place_on_click.run_if(crate::editor::play_mode).run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
+                    (
+                        armed_from_minimap.run_if(crate::editor::play_mode).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
+                        place_on_click.run_if(crate::editor::play_mode).run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
+                    ).chain(),
                     armed_cursor.run_if(resource_exists::<Aim>)
                         .run_if(not(crate::ui::presentation::cutscene_running))
                         .run_if(not(resource_exists::<crate::frontend::scene::MenuScene>))
@@ -593,7 +596,7 @@ fn issue_command(
 
 /// The click that places an armed build: the point on the ground under the
 /// pointer, at the builder's height.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn place_on_click(
     mut state: ResMut<HudState>,
     buttons: Option<Res<ButtonInput<MouseButton>>>,
@@ -609,15 +612,21 @@ fn place_on_click(
     bounds: Res<ghost::PlacementBounds>,
     placement: ghost::PlacementInputs,
     mut notices: MessageWriter<Notice>,
-    profile: Option<Res<crate::ui::profile::UiProfile>>,
-    strings: Option<Res<crate::ui::i18n::Strings>>,
+    (profile, strings, minimap): (
+        Option<Res<crate::ui::profile::UiProfile>>,
+        Option<Res<crate::ui::i18n::Strings>>,
+        Query<&bevy::ui::RelativeCursorPosition, With<crate::ui::radar::RadarSquare>>,
+    ),
 ) {
+    // A right press on the minimap's square is the command button there (it aims the armed command
+    // when released, `armed_from_minimap`), not STA64's cancel of the main view.
+    let on_minimap = minimap.iter().any(|r| r.cursor_over);
     if keys
         .as_ref()
         .is_some_and(|k| k.just_pressed(KeyCode::Escape))
         || buttons
             .as_ref()
-            .is_some_and(|b| b.just_pressed(MouseButton::Right))
+            .is_some_and(|b| b.just_pressed(MouseButton::Right) && !on_minimap)
     {
         state.placing = None;
         state.targeting = None;
@@ -636,16 +645,7 @@ fn place_on_click(
         }
         let Some(a) = aim.0 else { return };
         if let Some((orders, ids)) = order_at_aim(&feed, mode, a, &units, local.as_deref().and_then(|l| l.0)) {
-            if let Some(kind) = orders.first().and_then(OrderKind::of) {
-                issued.write(OrderIssued { units: ids.clone(), kind });
-            }
-            // A new order replaces the old destination line (a move sets its own).
-            clear_order_targets(&mut targets, &ids);
-            for order in orders {
-                record_move_target(&mut targets, &order);
-                queue.0.push(CommandKind::Order(order));
-            }
-            state.targeting = None;
+            issue_armed(&mut state, &mut queue, &mut issued, &mut targets, orders, ids);
         }
         return;
     }
@@ -665,15 +665,51 @@ fn place_on_click(
         return;
     };
     let Some(at) = ground_point(a.ray, b.pos.y.to_f32()) else { return };
-    if !ghost::affordable(&feed, &armed) {
-        let text = stock::a1::costs::refusal(&feed, profile.as_deref(), strings.as_deref(), armed.what)
+    place_build(&mut state, &feed, &armed, at, &bounds, &placement, &mut queue, &mut issued, &mut targets, &mut notices, profile.as_deref(), strings.as_deref());
+}
+
+/// Send the orders of an armed pick, forget the old destination lines and disarm (the one path of the main
+/// view's click and the minimap's).
+fn issue_armed(state: &mut HudState, queue: &mut CommandQueue, issued: &mut MessageWriter<OrderIssued>, targets: &mut OrderTargets, orders: Vec<Order>, ids: Vec<EntityId>) {
+    if let Some(kind) = orders.first().and_then(OrderKind::of) {
+        issued.write(OrderIssued { units: ids.clone(), kind });
+    }
+    // A new order replaces the old destination line (a move sets its own).
+    clear_order_targets(targets, &ids);
+    for order in orders {
+        record_move_target(targets, &order);
+        queue.0.push(CommandKind::Order(order));
+    }
+    state.targeting = None;
+}
+
+/// The armed build placed at `at` (the point on the ground at the builder's height): refused with a notice when it
+/// is not affordable or the site is refused (the placement stays armed), else sent. The one path of the main view's
+/// click and the minimap's.
+#[allow(clippy::too_many_arguments)]
+fn place_build(
+    state: &mut HudState,
+    feed: &HudFeed,
+    armed: &Armed,
+    at: SimVec3,
+    bounds: &ghost::PlacementBounds,
+    placement: &ghost::PlacementInputs,
+    queue: &mut CommandQueue,
+    issued: &mut MessageWriter<OrderIssued>,
+    targets: &mut OrderTargets,
+    notices: &mut MessageWriter<Notice>,
+    profile: Option<&crate::ui::profile::UiProfile>,
+    strings: Option<&crate::ui::i18n::Strings>,
+) {
+    if !ghost::affordable(feed, armed) {
+        let text = stock::a1::costs::refusal(feed, profile, strings, armed.what)
             .unwrap_or_else(|| tr("Cannot build: not enough resources"));
         notices.write(Notice::new(Severity::Warn, text));
         return;
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the
     // placement armed so the click can be tried again elsewhere.
-    let (site_at, order) = match placement.order(&feed, bounds.0.as_ref(), &armed, at) {
+    let (site_at, order) = match placement.order(feed, bounds.0.as_ref(), armed, at) {
         Ok(r) => r,
         Err(e) => {
             notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
@@ -688,6 +724,88 @@ fn place_on_click(
         kind: OrderKind::Build,
     });
     state.placing = None;
+}
+
+/// What an armed pick gives when the click is on the minimap at the map point `at` (x, z): the same decision as the
+/// main view's click on open ground, with no object (a click over a unit's blip gives the point, never the unit:
+/// read from the executable, static). So a command that needs an object (attack, mine, colonize, transport,
+/// capture, trade, an entity-aimed special weapon) is refused; a move is a warp move unless `plain` (Alt held, the
+/// queue modifier, Armada I content: `input::orders::minimap_plain`); a rally, a repair or decommission "anywhere",
+/// a point-aimed special weapon are the ground decision's. INTERIM: what the original gives for an armed attack or
+/// patrol on open ground is not established (STA64 has no ground attack order; patrol and guard are not armed modes),
+/// so those stay refused.
+pub(crate) fn minimap_target_order(feed: &HudFeed, mode: TargetMode, at: Vec2, plain: bool) -> Option<(Vec<Order>, Vec<EntityId>)> {
+    let heights: Vec<f32> = feed.own_selection().iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
+    let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
+    let point = SimVec3::from_f32([at.x, y, at.y]);
+    let (orders, ids) = target_order(feed, mode, None, Some(point))?;
+    if mode != TargetMode::Move || plain {
+        return Some((orders, ids));
+    }
+    let warped = orders
+        .into_iter()
+        .map(|o| match o {
+            Order::Move { units, to, queue, .. } => Order::MoveWarp { units, to, queue },
+            other => other,
+        })
+        .collect();
+    Some((warped, ids))
+}
+
+/// A right-click on the minimap's map (the command button there) with an armed pick or placement: the armed
+/// command is aimed at the map point through [`minimap_target_order`] (or, for a build, the placement rule at the
+/// point on the ground at the builder's height: ground only, read from the executable, static). A refused click
+/// keeps the command armed and does nothing, as in the main view. Only for Armada II content (read from that
+/// game's executable only; INTERIM: Armada I's minimap rule is not read, and Fleet Operations and Roots draw their
+/// minimap through the hook, so they keep refusing).
+#[allow(clippy::too_many_arguments)]
+fn armed_from_minimap(
+    mut clicks: MessageReader<crate::ui::radar::RadarClick>,
+    mut state: ResMut<HudState>,
+    feed: Res<HudFeed>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    bindings: Option<Res<crate::input::keys::KeyBindings>>,
+    mut queue: ResMut<CommandQueue>,
+    mut issued: MessageWriter<OrderIssued>,
+    mut targets: ResMut<OrderTargets>,
+    bounds: Res<ghost::PlacementBounds>,
+    placement: ghost::PlacementInputs,
+    mut notices: MessageWriter<Notice>,
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
+    strings: Option<Res<crate::ui::i18n::Strings>>,
+) {
+    let points: Vec<Vec2> = clicks
+        .read()
+        .filter(|c| c.button == bevy::picking::pointer::PointerButton::Secondary && c.inside_map)
+        .map(|c| c.at)
+        .collect();
+    let db = feed.content.as_deref();
+    if points.is_empty() || db.is_none_or(|d| d.profile() != sta_content::Profile::Sta2Classic) {
+        return;
+    }
+    let plain = match (keys.as_deref(), bindings.as_deref()) {
+        (Some(k), Some(b)) => crate::input::orders::minimap_plain(k, b, db),
+        _ => false,
+    };
+    for at in points {
+        if let Some(mode) = state.targeting {
+            if !target_mode_available(&feed, mode) {
+                state.targeting = None;
+                return;
+            }
+            if let Some((orders, ids)) = minimap_target_order(&feed, mode, at, plain) {
+                issue_armed(&mut state, &mut queue, &mut issued, &mut targets, orders, ids);
+            }
+        } else if let Some(armed) = state.placing.clone() {
+            if !commands::shared(&feed).build || model::builder(&feed).is_none_or(|u| u.id != armed.builder) {
+                state.placing = None;
+                return;
+            }
+            let Some(b) = feed.view.unit(armed.builder) else { return };
+            let ground = SimVec3::from_f32([at.x, b.pos.y.to_f32(), at.y]);
+            place_build(&mut state, &feed, &armed, ground, &bounds, &placement, &mut queue, &mut issued, &mut targets, &mut notices, profile.as_deref(), strings.as_deref());
+        }
+    }
 }
 
 /// The same picked unit, visibility gate and ground height used by a left click and its cursor.
@@ -1455,6 +1573,96 @@ mod target_tests {
             app.world_mut().run_system_once(place_on_click).unwrap();
             assert!(app.world().resource::<HudState>().targeting.is_none());
             assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        }
+    }
+
+    /// The feed of `feed()` under Armada II's profile (the minimap's armed rule is read for that game only).
+    fn a2_feed(selected: &[u32]) -> HudFeed {
+        let mut f = feed(selected);
+        let fake = f.content.as_ref().unwrap().clone();
+        let mut builder = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta2Classic).features(sta_content::Profile::Sta2Classic.features());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() { builder = builder.unit(unit.clone()); }
+        f.content = Some(Arc::new(builder.build().unwrap()));
+        f
+    }
+
+    fn minimap_app(feed: HudFeed, state: HudState) -> App {
+        let mut app = click_app(feed, state, 0.0);
+        app.add_message::<crate::ui::radar::RadarClick>()
+            .init_resource::<crate::input::keys::KeyBindings>()
+            .add_systems(Update, armed_from_minimap);
+        app
+    }
+
+    fn minimap_click(app: &mut App, button: bevy::picking::pointer::PointerButton, inside_map: bool) {
+        app.world_mut().write_message(crate::ui::radar::RadarClick { at: Vec2::new(300.0, 400.0), button, inside_map });
+        app.update();
+    }
+
+    /// Each armed command through the minimap: the ground decision of the main view with no object (read from the
+    /// executable, static). A move is a warp move, a rally and the point-aimed commands are the ground decision's;
+    /// every command that needs an object is refused and stays armed.
+    #[test]
+    fn armed_commands_from_the_minimap_follow_the_ground_decision_and_object_commands_stay_refused() {
+        let at = Vec2::new(300.0, 400.0);
+        let f = a2_feed(&[1]);
+        let (orders, _) = minimap_target_order(&f, TargetMode::Move, at, false).unwrap();
+        assert!(matches!(orders.as_slice(), [Order::MoveWarp { units, to, queue: false }] if units == &[EntityId(1)] && *to == SimVec3::from_f32([300.0, 0.0, 400.0])), "{orders:?}");
+        let (orders, _) = minimap_target_order(&f, TargetMode::Move, at, true).unwrap();
+        assert!(matches!(orders.as_slice(), [Order::Move { .. }]), "a plain move when Alt is held: {orders:?}");
+        let y = a2_feed(&[3]);
+        assert!(matches!(minimap_target_order(&y, TargetMode::Rally, at, false), Some((orders, _)) if matches!(orders.as_slice(), [Order::Rally { at: Target::Point(_), .. }])));
+        // Object commands: no click on the minimap names an object.
+        for (selected, mode) in [(&[1][..], TargetMode::Attack), (&[2], TargetMode::Mine), (&[1], TargetMode::Transport), (&[1], TargetMode::TransportAttack), (&[1], TargetMode::Colonize), (&[1], TargetMode::TradeSource), (&[1], TargetMode::TradeDestination)] {
+            assert!(minimap_target_order(&a2_feed(selected), mode, at, false).is_none(), "{mode:?} needs an object");
+        }
+    }
+
+    #[test]
+    fn a_right_click_on_the_minimap_aims_the_armed_command_and_a_refused_one_stays_armed() {
+        use bevy::picking::pointer::PointerButton::{Primary, Secondary};
+        let mut app = minimap_app(a2_feed(&[1]), HudState { targeting: Some(TargetMode::Move), ..Default::default() });
+        // Not the command button, or a point in a strip beside the map: nothing.
+        minimap_click(&mut app, Primary, true);
+        minimap_click(&mut app, Secondary, false);
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        assert_eq!(app.world().resource::<HudState>().targeting, Some(TargetMode::Move));
+        minimap_click(&mut app, Secondary, true);
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::MoveWarp { units, .. })] if units == &[EntityId(1)]));
+        assert!(app.world().resource::<HudState>().targeting.is_none(), "the command is spent");
+        // Alt held: the plain move.
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::Move);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
+        minimap_click(&mut app, Secondary, true);
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::Move { .. })]));
+        // An armed attack: the point names no object, so it is refused and stays armed.
+        let mut app = minimap_app(a2_feed(&[1]), HudState { targeting: Some(TargetMode::Attack), ..Default::default() });
+        minimap_click(&mut app, Secondary, true);
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        assert_eq!(app.world().resource::<HudState>().targeting, Some(TargetMode::Attack));
+        // A rally from a producer.
+        let mut app = minimap_app(a2_feed(&[3]), HudState { targeting: Some(TargetMode::Rally), ..Default::default() });
+        minimap_click(&mut app, Secondary, true);
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::Rally { builders, at: Target::Point(_) })] if builders == &[EntityId(3)]));
+        // Armada I and the other games' content keep refusing (INTERIM: their minimap rule is not read).
+        let mut app = minimap_app(feed(&[1]), HudState { targeting: Some(TargetMode::Move), ..Default::default() });
+        minimap_click(&mut app, Secondary, true);
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        assert_eq!(app.world().resource::<HudState>().targeting, Some(TargetMode::Move));
+    }
+
+    /// A right press over the minimap's square does not cancel the armed command (it is the command button there);
+    /// anywhere else it still does.
+    #[test]
+    fn a_right_press_over_the_minimap_keeps_the_armed_command() {
+        for (over, armed_after) in [(true, true), (false, false)] {
+            let mut app = click_app(a2_feed(&[1]), HudState { targeting: Some(TargetMode::Move), ..Default::default() }, 0.0);
+            app.world_mut().spawn((crate::ui::radar::RadarSquare, bevy::ui::RelativeCursorPosition { cursor_over: over, ..Default::default() }));
+            app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+            app.world_mut().run_system_once(place_on_click).unwrap();
+            assert_eq!(app.world().resource::<HudState>().targeting.is_some(), armed_after, "pointer over the minimap: {over}");
         }
     }
 
