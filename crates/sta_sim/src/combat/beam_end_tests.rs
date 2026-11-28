@@ -280,9 +280,10 @@ fn a_beam_in_flight_is_in_the_digest_and_an_empty_list_is_not() {
     g.run(LIFE);
     assert_eq!(g.beams(), 0);
     let bytes = g.sim.snapshot();
-    // The beams record and the dying record after it (#1100): version 1, no rows, each.
-    assert_eq!(&bytes[bytes.len() - 4..], [1, 0, 1, 0], "the records: version 1, no rows");
-    let mut old = bytes[..bytes.len() - 4].to_vec();
+    // The beams record, the dying record after it (#1100) and the warp ramp record after that
+    // (#1102): version 1, no rows, each.
+    assert_eq!(&bytes[bytes.len() - 6..], [1, 0, 1, 0, 1, 0], "the records: version 1, no rows");
+    let mut old = bytes[..bytes.len() - 6].to_vec();
     old[4..6].copy_from_slice(&crate::snapshot::PRE_BEAMS_FORMAT.to_le_bytes());
     let previous = Sim::from_snapshot(&old, Some(g.db.clone())).unwrap();
     assert_eq!(previous.digest(), g.sim.digest());
@@ -390,10 +391,11 @@ fn a_beam_row_with_an_unknown_weapon_is_corrupt_and_one_with_a_removed_unit_is_n
     assert!(!weapons.set_beams(Some(&g.db), vec![row(sta_core::ContentKey(60_000))]), "a weapon the content does not have");
     // Through a snapshot: the last record, forged with that key, is refused.
     let good = g.sim.snapshot();
-    // The beams record, then the empty dying record (#1100: version 1, no rows) closes the file.
+    // The beams record, then the empty dying record (#1100) and the empty warp ramp record
+    // (#1102), version 1 and no rows each, close the file.
     let record = postcard::to_allocvec(&(1u8, g.sim.weapons.beams_rec())).unwrap();
-    let tail = record.len() + 2;
-    assert_eq!(&good[good.len() - tail..good.len() - 2], &record[..], "the beams record is the last but one");
+    let tail = record.len() + 4;
+    assert_eq!(&good[good.len() - tail..good.len() - 4], &record[..], "the beams record is the last but two");
     let mut forged_rows = g.sim.weapons.beams_rec();
     forged_rows[0].weapon = sta_core::ContentKey(60_000);
     let mut forged = good[..good.len() - tail].to_vec();
