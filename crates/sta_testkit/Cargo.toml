@@ -1,0 +1,13 @@
+[package]
+name = "sta_testkit"
+description = "Test support for the install-gated tests: which install a test runs on, and a clean skip when there is none"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Dev-only: crates list it under `[dev-dependencies]`. It reads environment variables and mounts an
+# install read-only to check which game it is; it writes nothing and launches nothing.
+[dependencies]
+sta_vfs.workspace = true
+sta_content.workspace = true

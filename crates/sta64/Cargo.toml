@@ -37,6 +37,7 @@ perf-trace = ["bevy/trace", "bevy/debug"]
 winresource = "0.1.34"
 
 [dev-dependencies]
+sta_testkit.workspace = true
 naga = { version = "30.0.1", features = ["wgsl-in"] }
 png = "0.18"
 
