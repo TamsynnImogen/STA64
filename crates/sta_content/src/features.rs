@@ -163,11 +163,17 @@ pub struct Features {
     /// static). On for stock Armada II; off elsewhere (Fleet Operations and Armada I are not
     /// checked): a beam hits on the tick it fires.
     pub beam_damage_at_end: bool,
+    /// A craft whose engines go offline coasts on its heading with decaying speed instead of
+    /// stopping at once, neither turns nor moves under its own power, keeps its order and
+    /// carries it out when the engines return (`sta_sim::kinematics`, issue #1031; measured
+    /// on stock Armada II with engines switched off by a script). On for stock Armada II;
+    /// off elsewhere until checked: the craft stops where it is and loses its order.
+    pub engines_off_drift: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 43] {
+    pub(crate) fn bits(&self) -> [bool; 44] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -212,6 +218,7 @@ impl Features {
             self.crew_weapon_delay,
             self.shield_zero_hold,
             self.beam_damage_at_end,
+            self.engines_off_drift,
         ]
     }
 }

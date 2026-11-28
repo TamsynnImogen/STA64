@@ -308,10 +308,17 @@ impl Sim {
                 let Some(u) = self.units.get_mut(id) else {
                     return false;
                 };
+                // `engines_off_drift` (#1031, measured on stock Armada II): the craft does
+                // not stop at once and keeps its order; it coasts (`kinematics::coast`) and
+                // carries the order out when its engines return. It does not turn.
+                let drift = u.kind == crate::world::EntityKind::Craft
+                    && self.content.as_deref().is_some_and(|db| db.unit(u.def).map_or(db.features(), |d| db.unit_features(d)).engines_off_drift);
                 if !on {
-                    u.speed = Fixed::ZERO;
                     u.omega = Fixed::ZERO;
-                    u.target = None;
+                    if !drift {
+                        u.speed = Fixed::ZERO;
+                        u.target = None;
+                    }
                 }
                 u.flags = u.flags.with(UnitFlags::ENGINES_OFF, !on);
                 true

@@ -326,6 +326,37 @@ fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
     }
 }
 
+/// How fast a coasting craft loses speed (`engines_off_drift`): this share of its speed per
+/// second, as numerator and denominator. Measured, coarse (two repetitions), on stock
+/// Armada II. INTERIM for the exact curve: STA64 takes the share off every tick, which is
+/// roughly the exponential fall the measurement shows.
+pub(crate) const DRIFT_DECAY: (i32, i32) = (19, 100);
+
+/// Whether `u` coasts this tick: a craft whose engines are offline, that still has speed,
+/// under the feature switch `engines_off_drift` (the unit's, as `ContentDb::unit_features`
+/// resolves it). Measured with the engines switched off by a script; engines destroyed by
+/// damage set the same flag, and the movement code of the original tests the same
+/// condition either way (read from the executable, static), but that case was not staged.
+fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
+    u.kind == crate::world::EntityKind::Craft
+        && u.flags.contains(crate::view::UnitFlags::ENGINES_OFF)
+        && u.speed > Fixed::ZERO
+        && db.is_some_and(|db| db.unit(u.def).map_or(db.features(), |d| db.unit_features(d)).engines_off_drift)
+}
+
+/// One tick of coasting: straight on along the heading at the present speed, which then
+/// falls by [`DRIFT_DECAY`]. No turn and no power: the heading is left as it is (a spin a
+/// script gave an engines-off craft is `step_drifting_spin`'s, unchanged) and nothing steers
+/// towards the target, which the craft keeps for when its engines return.
+/// Not settled, STA64's own: a coasting craft is not held at the map's edge.
+fn coast(u: &mut Unit) {
+    let step = u.speed * dt();
+    u.pos.x = u.pos.x + u.heading.0 * step;
+    u.pos.z = u.pos.z + u.heading.1 * step;
+    let loss = u.speed * Fixed::from_int(DRIFT_DECAY.0) / Fixed::from_int(DRIFT_DECAY.1 * TICK_HZ as i32);
+    u.speed = (u.speed - loss).max(Fixed::ZERO);
+}
+
 impl Sim {
     /// Step every mobile unit under the content's movement model; units
     /// with an approach plan (ascending id) step under it.
@@ -340,7 +371,18 @@ impl Sim {
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
         self.step_drifting_spin();
         let db = self.content.as_deref();
-        for u in self.units.iter_mut().filter(|u| u.mobile()) {
+        for u in self.units.iter_mut().filter(|u| u.mobile() || drifts(db, u)) {
+            if !u.mobile() {
+                // Engines offline and still moving: it coasts, held by the same confinement
+                // as a craft under power.
+                let previous = u.pos;
+                coast(u);
+                if self.confinement.is_active() && u.pos != previous {
+                    let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
+                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));
+                }
+                continue;
+            }
             if self.specials.engines_held(u.id, self.tick) {
                 u.speed = Fixed::ZERO;
                 u.omega = Fixed::ZERO;
@@ -908,5 +950,7 @@ mod smooth {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod drift_tests;
 #[cfg(test)]
 pub(crate) mod a1_tests;
