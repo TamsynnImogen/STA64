@@ -791,7 +791,7 @@ fn armed_from_minimap(
     if points.is_empty() || !minimap_aims(&feed) {
         return;
     }
-    let plain = keys.as_deref().is_some_and(|k| crate::input::orders::minimap_plain(k, db));
+    let plain = keys.as_deref().is_some_and(|k| crate::input::orders::minimap_plain(k, db)) || !crate::sim_link::warp_allowed(&feed.view, db);
     for at in points {
         if let Some(mode) = state.targeting {
             if !target_mode_available(&feed, mode) {
@@ -1642,6 +1642,25 @@ mod target_tests {
         // Object commands: no click on the minimap names an object.
         for (selected, mode) in [(&[1][..], TargetMode::Attack), (&[2], TargetMode::Mine), (&[1], TargetMode::Transport), (&[1], TargetMode::TransportAttack), (&[1], TargetMode::Colonize), (&[1], TargetMode::TradeSource), (&[1], TargetMode::TradeDestination)] {
             assert!(minimap_target_order(&a2_feed(selected), mode, at, false).is_none(), "{mode:?} needs an object");
+        }
+    }
+
+    /// Warp off (the mission switch the view carries): the armed move aimed from the minimap is the plain
+    /// move, not a warp move (#1102); with warp on it is the warp move, as above.
+    #[test]
+    fn an_armed_move_from_the_minimap_is_plain_when_warp_is_off() {
+        use bevy::picking::pointer::PointerButton::Secondary;
+        for (warp, want_warp) in [(true, true), (false, false)] {
+            let mut feed = a2_feed(&[1]);
+            Arc::make_mut(&mut feed.view).attrs.mission_switches.allow_warp = warp;
+            let mut app = minimap_app(feed, HudState { targeting: Some(TargetMode::Move), ..Default::default() });
+            minimap_click(&mut app, Secondary, true);
+            let queue = app.world().resource::<CommandQueue>().0.clone();
+            match queue.as_slice() {
+                [CommandKind::Order(Order::MoveWarp { .. })] => assert!(want_warp, "warp {warp}"),
+                [CommandKind::Order(Order::Move { .. })] => assert!(!want_warp, "warp {warp}"),
+                other => panic!("warp {warp}: {other:?}"),
+            }
         }
     }
 

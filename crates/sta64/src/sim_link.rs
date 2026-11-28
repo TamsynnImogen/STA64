@@ -30,6 +30,10 @@ use crate::app::GameSet;
 use crate::clock::AnimClock;
 
 #[cfg(test)]
+#[path = "sim_link_warp_tests.rs"]
+mod warp_tests;
+
+#[cfg(test)]
 #[path = "sim_link_production_tests.rs"]
 mod production_tests;
 
@@ -673,6 +677,16 @@ fn is_dying(view: &WorldView, id: EntityId) -> bool {
 /// Remove from `ids` every unit the view flags as dying.
 fn prune_dying(view: &WorldView, ids: &mut Vec<EntityId>) {
     ids.retain(|id| !is_dying(view, *id));
+}
+
+/// Whether warp is on offer to the player: the mission switch the view carries, the content's own warp switch
+/// (`Rules::warp_enabled`) and the match option (`GameOptions::allow_warp`, shown by the view as
+/// `attrs.match_warp_off`, counted only under the profile that offers it) must all allow it: the same three
+/// conditions the sim ANDs into every warp decision (`Sim::warp_allowed`). STA64's own rule (#1102): with warp
+/// off the client gives no warp cursor and sends no warp move; the sim would not warp such a craft either, so
+/// this only keeps the offer honest. A view without content has warp.
+pub fn warp_allowed(view: &WorldView, content: Option<&ContentDb>) -> bool {
+    view.attrs.mission_switches.allow_warp && !view.attrs.match_warp_off && content.is_none_or(|db| db.rules().warp_enabled())
 }
 
 /// Follow replacement events in their emitted order, then validate the final
