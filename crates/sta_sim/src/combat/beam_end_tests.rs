@@ -17,7 +17,7 @@ use crate::{Sim, WorldSource};
 /// so exactly one beam is fired.
 const LIFE: u64 = 20;
 const RANGE: i32 = 400;
-const RELOAD: u32 = 100_000;
+const RELOAD: u64 = 100_000;
 
 fn v(x: i32, z: i32) -> Vec3 {
     Vec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::from_int(z) }
@@ -34,9 +34,9 @@ fn db(switch: bool, patch: impl Fn(&mut sta_content::Features, &mut WeaponDef)) 
         let mut w = w.clone();
         if w.odf == "fx_beam" {
             assert_eq!(w.kind, WeaponKind::Beam);
-            w.duration = LIFE as _;
+            w.duration = LIFE;
             w.range = Fixed::from_int(RANGE);
-            w.refire = RELOAD as _;
+            w.refire = RELOAD;
             patch(&mut features, &mut w);
         }
         beam.get_or_insert_with(Vec::new).push(w);

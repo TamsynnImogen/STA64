@@ -693,7 +693,7 @@ impl Weapons {
                         shooter: u.id,
                         weapon: w.key,
                         target: t.id,
-                        ends: tick.saturating_add(u64::from(w.duration)),
+                        ends: tick.saturating_add(w.duration),
                         damage,
                         range: w.range,
                     });
