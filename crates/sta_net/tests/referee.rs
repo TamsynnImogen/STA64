@@ -83,6 +83,7 @@ impl Controller for Scripted {
                 units: vec![mine[k % mine.len()]],
                 to: Vec3::from_f32([((k * 53) % 400) as f32 - 200.0, 0.0, ((k * 29) % 400) as f32 - 200.0]),
                 queue: false,
+                mode: None,
             }),
         });
         self.seq += 1;
@@ -277,6 +278,7 @@ impl Room {
                         units: vec![mine[k % mine.len()]],
                         to: Vec3::from_f32([((k * 37) % 500) as f32 - 250.0, 0.0, ((k * 91) % 500) as f32 - 250.0]),
                         queue: k.is_multiple_of(3),
+                        mode: None,
                     }),
                 });
             }

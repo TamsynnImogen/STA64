@@ -184,7 +184,7 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
             let (x, y, z) = a[1].vec();
             let to = to_vec3(x, y, z);
             match a[2].int() {
-                MOVE => e.order("FleetOrder", unit.id, |units| Order::Move { units, to, queue: false })?,
+                MOVE => e.order("FleetOrder", unit.id, |units| Order::Move { units, to, queue: false, mode: None })?,
                 MOVE_WARP => e.order("FleetOrder", unit.id, |units| Order::MoveWarp { units, to, queue: false })?,
                 _ => e.order("FleetOrder", unit.id, |units| Order::AttackPoint { units, at: to })?,
             }

@@ -18,7 +18,7 @@
 //! | shot timing | `initialShotDelayModifier` (signed; absent stays `None`), `ignoreShotDelayEffects`; `ordnance_defence` is the weapon's own class `ordnancedefenseweapon` |
 //! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`, `addCrew` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
 //! | `colonize` | ordnance class `ColonizerPod`: `partySize` (default 100), `orbitRange` (SIM-30) |
-//! | `base` (CON-54) | weapon: `hitChance` (+ rows), `stopToHitModifier`, `toHitStopModifier`, `impulseToHitModifier`, `toHitImpulseModifier`, `warpToHitModifier`, `toHitWarpModifier`, `slowToHitModifier`, `toHitSlowModifier`, `targetEnemyCraft`, `targetEnemyBuildings`, `targetAlliedCraft`, `targetAlliedBuildings`, `targetEnemyPlanets`, `targetEnemyPlanetsOnly`, `targetLocation`, `AItargetLocation`, `needTarget`, `beneficial`, `switchToAttack`, `cloakEnable`, `warpEnable`, `crewAffectsWeaponDelay`, `ignoreValidAsTarget`, `regularWeaponDelay`; ordnance: rows of `damageBase`, `damageVariance`, `damageThreshold`, `shieldCrewModifier`, `hullCrewModifier`, and `ignoreShield`, `forceInvalidateTarget`, `canAttackStations`, `specialValue`, `shieldDuration`, `omegaTurn`, `seekTime`, `shotAccel`, `detectRadius`, `travelTimeFraction` |
+//! | `base` (CON-54) | weapon: `hitChance` (+ rows), `stopToHitModifier`, `toHitStopModifier`, `impulseToHitModifier`, `toHitImpulseModifier`, `warpToHitModifier`, `toHitWarpModifier`, `slowToHitModifier`, `toHitSlowModifier`, `targetEnemyCraft`, `targetEnemyBuildings`, `targetAlliedCraft`, `targetAlliedBuildings`, `targetEnemyPlanets`, `targetEnemyPlanetsOnly`, `targetLocation`, `AItargetLocation`, `needTarget`, `beneficial`, `switchToAttack`, `cloakEnable`, `warpEnable`, `crewAffectsWeaponDelay`, `ignoreValidAsTarget`, `regularWeaponDelay`; ordnance: rows of `damageBase`, `damageVariance`, `damageThreshold`, `shieldCrewModifier`, `hullCrewModifier`, and `ignoreShield`, `forceInvalidateTarget`, `canAttackStations`, `specialValue`, `shieldDuration`, `omegaTurn`, `seekTime`, `lifeSpan` (torpedo classes only; seconds, the sim reads it under `ordnance_flight`), `shotAccel`, `detectRadius`, `travelTimeFraction` |
 //! | `look` | render only, not digested ([`ShotLook`]): ordnance `Sprite`, `spriteDuration`, `Radius`, `Length`, `lifeSpan` (every class), `travelTimeFraction` (beam classes, default 0.1), `flareSprite` / `flareRadiusMultiplier` (class `phaser`, defaults `pflare` / 1.4), `lightColor` with `lightFalloffStart` / `lightFalloffRange` (defaults 100 / 5) |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 //! | A1 specials | A1-provenance launch/ordnance classes and their class-specific keys, decoded in [`a1_special`]; launch `specialEnergyCost` precedes ordnance |
@@ -32,6 +32,11 @@ use crate::Warning;
 
 /// Ordnance classes that are drawn as a beam rather than flown.
 pub const BEAM_CLASSES: &[&str] = &["phaser", "utribeam", "unibeam", "pdlbeam", "holding_bm", "tractor_bm"];
+
+/// Ordnance classes of the torpedoes that fly under `ordnance_flight` (a seeking launch phase,
+/// then a straight run at the target; read from the executable, static). The plasma cannon and
+/// the chain pulsar share their control but have a flight of their own and are not covered.
+pub const TORPEDO_CLASSES: &[&str] = &["photontorpedo", "polerontorpedo", "shieldremovingtorpedo"];
 
 /// The ordnance class of a mining beam (freighters' and orbital stations').
 pub const MINING_BEAM_CLASS: &str = "minebm";
@@ -312,6 +317,10 @@ pub(crate) fn weapon_def_for_profile(name: &str, odf: &Odf, ordnance: Option<&Od
             WeaponKind::Beam => d.duration = o.ticks("lifespan"),
             _ => {
                 d.shot_speed = o.fixed("shotSpeed");
+                // A torpedo's life, read by the sim under `ordnance_flight` (the other classes' lives are read elsewhere or not at all).
+                if ord_class.as_deref().is_some_and(|c| TORPEDO_CLASSES.contains(&c)) {
+                    d.base.life_span = signed(&mut o, "lifeSpan");
+                }
                 // A mining beam (class `minebm`) is not one of the drawn beam classes above and stays a
                 // projectile kind, but its `lifeSpan` is how long each pulse lives: the orbital income of
                 // the sim and the drawn beam both read it (read from data; the kind is unchanged).

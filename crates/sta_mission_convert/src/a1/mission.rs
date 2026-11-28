@@ -582,6 +582,50 @@ pub fn find_missions(root: &Path, include_unmapped: bool) -> Result<Vec<(String,
     Ok(out)
 }
 
+/// One Armada I mission `main` converts: the map, and the rule and mission DLLs it runs.
+#[derive(Debug, Clone)]
+pub struct Job {
+    pub map: String,
+    pub dsl: PathBuf,
+    pub drl: PathBuf,
+}
+
+/// The loop of `main` without converting: the missions `find_missions` lists that `only` (maps,
+/// lower-cased) selects.
+pub fn plan(root: &Path, include_unmapped: bool, only: &[String]) -> Result<Vec<Job>> {
+    let only: Vec<String> = only.iter().map(|x| py_lower(x)).collect();
+    Ok(find_missions(root, include_unmapped)?
+        .into_iter()
+        .filter(|(map, _, _)| only.is_empty() || only.contains(map))
+        .map(|(map, dsl, drl)| Job { map, dsl, drl })
+        .collect())
+}
+
+/// Converts one planned mission: the Lua source and the report. Any fault fails that mission only
+/// (the Python's `except Exception`); `listing` gives the instruction listing of a DLL.
+pub fn convert_one(job: &Job, listing: &mut dyn FnMut(&Path) -> Result<Vec<Ins>>) -> Result<(String, Report)> {
+    convert_one_with(job, &mut |p| {
+        let pe = Pe::open(p)?;
+        let ins = listing(p)?;
+        Ok((pe, ins))
+    })
+}
+
+/// [`convert_one`] with the loading of a DLL in the caller's hands: `load` gives the image and the
+/// listing of the file at the path (the mission DLL first, then the rule DLL).
+pub fn convert_one_with(job: &Job, load: &mut crate::convert::LoadFn<'_>) -> Result<(String, Report)> {
+    let (spe, sins) = load(&job.dsl)?;
+    let sex = spe.exports()?;
+    let sname = job.dsl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let s = A1Dll::new(&sname, &spe, sins, sex, None)?;
+    let (rpe, rins) = load(&job.drl)?;
+    let rex = rpe.exports()?;
+    let rname = job.drl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let r = A1Dll::new(&rname, &rpe, rins, rex, None)?;
+    let (_, src, rep) = convert_dlls(&s, Some(&r), Some(&job.map))?;
+    Ok((src, rep))
+}
+
 /// What [`convert_install`] found.
 #[derive(Debug, Default)]
 pub struct InstallRun {
@@ -592,9 +636,8 @@ pub struct InstallRun {
     pub failed: Vec<(String, String)>,
 }
 
-/// The loop of `main`: every mission `find_missions` lists (`only` selects maps, lower-cased), one
-/// file per mission; any failure of one mission is recorded and the others go on. `listing` gives
-/// the instruction listing of a DLL (the Python runs `objdump`).
+/// The loop of `main`: [`plan`], then [`convert_one`] per mission, in memory; any failure of one
+/// mission is recorded and the others go on.
 pub fn convert_install(
     root: &Path,
     include_unmapped: bool,
@@ -602,30 +645,13 @@ pub fn convert_install(
     listing: &mut dyn FnMut(&Path) -> Result<Vec<Ins>>,
 ) -> Result<InstallRun> {
     let mut run = InstallRun::default();
-    let only: Vec<String> = only.iter().map(|x| py_lower(x)).collect();
-    for (map, dsl_path, drl_path) in find_missions(root, include_unmapped)? {
-        if !only.is_empty() && !only.contains(&map) {
-            continue;
-        }
-        let mut one = || -> Result<(String, String, Report)> {
-            let spe = Pe::open(&dsl_path)?;
-            let sins = listing(&dsl_path)?;
-            let sex = spe.exports()?;
-            let sname = dsl_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let s = A1Dll::new(&sname, &spe, sins, sex, None)?;
-            let rpe = Pe::open(&drl_path)?;
-            let rins = listing(&drl_path)?;
-            let rex = rpe.exports()?;
-            let rname = drl_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let r = A1Dll::new(&rname, &rpe, rins, rex, None)?;
-            convert_dlls(&s, Some(&r), Some(&map))
-        };
-        match one() {
-            Ok((_, src, rep)) => {
-                run.files.insert(format!("missions/{map}.lua"), src.into_bytes());
+    for job in plan(root, include_unmapped, only)? {
+        match convert_one(&job, listing) {
+            Ok((src, rep)) => {
+                run.files.insert(format!("missions/{}.lua", job.map), src.into_bytes());
                 run.reports.push(rep);
             }
-            Err(e) => run.failed.push((map, e.message)),
+            Err(e) => run.failed.push((job.map, e.message)),
         }
     }
     Ok(run)

@@ -272,6 +272,11 @@ pub(super) fn body(c: &mut Box_, t: &Theme, s: &Settings, info: &GraphicsInfo, w
                     checkbox(t, &tr("LCARS interface"), s.lcars_ui),
                     SettingToggle(SettingKey::LcarsUi),
                 ));
+                // The Armada II stock HUD's window (a performance option there): off shows its still picture.
+                col.spawn((
+                    checkbox(t, &tr("Cinematic window"), s.cinematic_window),
+                    SettingToggle(SettingKey::CinematicWindow),
+                ));
             });
         });
 

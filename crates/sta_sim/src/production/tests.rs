@@ -371,7 +371,7 @@ fn welding_rig_refuses_direct_queued_and_replacement_orders() {
     let stock = dilithium(&sim);
     for (seq, queue) in [false, true].into_iter().enumerate() {
         let out = sim.step(&[cmd(P0, seq as u32, CommandKind::Order(Order::Move {
-            units: vec![rig], to: v(1000, 900), queue,
+            units: vec![rig], to: v(1000, 900), queue, mode: None,
         }))]);
         assert!(out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
         assert_eq!(sim.unit(rig).unwrap().pos, at);
@@ -396,7 +396,7 @@ fn welding_holds_velocity_courses_and_collision_position_but_not_other_units() {
     unit.target = Some(v(1000, 1000));
     let other = spawn(&mut sim, "fx_cruiser", at);
     let out = sim.step(&[cmd(P0, 20, CommandKind::Order(Order::Move {
-        units: vec![rig, other], to: v(800, 800), queue: true,
+        units: vec![rig, other], to: v(800, 800), queue: true, mode: None,
     }))]);
     assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
     for _ in 0..90 {
@@ -419,7 +419,7 @@ fn stop_cancels_weld_without_refunding_and_releases_move_in_same_batch() {
     assert!(sim.production.is_welding(rig));
     let out = sim.step(&[
         cmd(P0, 30, CommandKind::Order(Order::Stop { units: vec![rig] })),
-        cmd(P0, 31, CommandKind::Order(Order::Move { units: vec![rig], to: v(700, 0), queue: false })),
+        cmd(P0, 31, CommandKind::Order(Order::Move { units: vec![rig], to: v(700, 0), queue: false, mode: None })),
     ]);
     assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
     assert!(out.events.iter().any(|e| matches!(e, SimEvent::Destroyed { id, .. } if *id == station)));
@@ -447,7 +447,7 @@ fn weld_lock_survives_snapshot_and_completion_releases_it_at_existing_tick() {
     assert!(!sim.production.is_welding(rig));
     assert!(!sim.view().unit(rig).unwrap().flags.contains(crate::view::UnitFlags::BUILDING));
     let out = sim.step(&[cmd(P0, 50, CommandKind::Order(Order::Move {
-        units: vec![rig], to: v(700, 0), queue: false,
+        units: vec![rig], to: v(700, 0), queue: false, mode: None,
     }))]);
     assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
     assert_ne!(sim.unit(rig).unwrap().pos, at);
@@ -459,7 +459,7 @@ fn destroying_unfinished_station_releases_constructor_lock() {
     assert!(sim.despawn(station, None));
     assert!(!sim.production.is_welding(rig));
     let out = sim.step(&[cmd(P0, 60, CommandKind::Order(Order::Move {
-        units: vec![rig], to: v(700, 0), queue: false,
+        units: vec![rig], to: v(700, 0), queue: false, mode: None,
     }))]);
     assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
 }
@@ -501,6 +501,7 @@ fn moving_a_rig_cancels_its_deploy_with_a_refund() {
         units: vec![rig],
         to: v(0, 300),
         queue: false,
+        mode: None,
     };
     sim.step(&[cmd(P0, 9, CommandKind::Order(o))]);
     assert_eq!(dilithium(&sim), Fixed::from_int(1500));
@@ -754,7 +755,7 @@ fn rig_parks_beside_its_site_and_neither_is_pushed() {
     assert_eq!(sim.unit(station).unwrap().pos, site);
     assert_eq!(sim.unit(station).unwrap().progress, None, "built");
     // Afterwards the rig leaves without touching the structure.
-    let to = Order::Move { units: vec![rig], to: v(0, 600), queue: false };
+    let to = Order::Move { units: vec![rig], to: v(0, 600), queue: false, mode: None };
     sim.step(&[cmd(P0, 9, CommandKind::Order(to))]);
     for i in 0..600 {
         sim.step(&[]);

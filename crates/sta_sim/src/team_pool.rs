@@ -4,15 +4,15 @@
 //! Rules, read from the executables (static; nothing measured in game):
 //!
 //! - A unit's race is its definition's unless a script set it
-//!   ([`Sim::unit_race`]). What a unit builds takes its race: `Producer::FinishBuild`,
-//!   `ResearchStation::FinishBuild`, `MiningStation::BuildFreighter` and
-//!   `ConstructionRig::StartBuild` copy the producer's race. A build whose
+//!   ([`Sim::unit_race`]). What a unit builds takes its race: a producer, a research
+//!   station, a mining station building a freighter and a construction rig starting a
+//!   build all copy the producer's race (read from the executable, static). A build whose
 //!   definition already carries the builder's race needs no row, so only a
 //!   difference is recorded in [`crate::attrs::Attrs`]. A construction rig's
 //!   station takes the rig's race when the station completes (the original
 //!   copies it when the build starts).
 //! - A change of team never re-races a unit. A planet does take the new
-//!   team's race (`Planet::SetTeam`); the sim stores no planet race: a colony's
+//!   team's race (read from the executable, static); the sim stores no planet race: a colony's
 //!   growth and crew income read its owner's [`Sim::seat_race`] every tick
 //!   (SIM-30, `crate::colony`), so they follow a change of owner or seat race.
 //! - A seat's race ([`Sim::seat_race`]: the script's, else the setup's)
@@ -105,12 +105,12 @@ fn add(a: Fixed, b: Fixed) -> Fixed {
     Fixed::from_bits(a.to_bits().saturating_add(b.to_bits()))
 }
 
-/// A float to an integer count as the original's `ftol` does (toward zero).
+/// A float to an integer count truncated toward zero, as the original does.
 fn trunc(v: Fixed) -> Fixed {
     Fixed::from_bits((v.to_bits() / (1 << 32)) << 32)
 }
 
-/// A2 `Team::AddCrew` (0x4974b0, read from the executable, static): over
+/// The A2 rule for adding crew to a team (read from the executable, static): over
 /// capacity a positive add is dropped and a negative one applied; otherwise
 /// the sum, clamped to capacity. No floor at 0.
 fn a2_add(pool: Fixed, x: Fixed, capacity: Fixed) -> Fixed {
@@ -135,8 +135,8 @@ pub fn crew_pool_after(op: TeamOp, pool: Fixed, x: Fixed, capacity: Fixed) -> Op
 }
 
 /// The officer count after an A1 officer [`TeamOp`] (`None` for another kind of op):
-/// `AddOfficers` is `min(used + ftol(x), max)`, `SetOfficers` `min(ftol(v), max)`;
-/// no floor (Armada I `Team` calls, read from the executable, static).
+/// an add gives `min(used + trunc(x), max)`, a set `min(trunc(v), max)`;
+/// no floor (Armada I team rules, read from the executable, static).
 pub fn officer_count_after(op: TeamOp, used: Fixed, x: Fixed, cap: Fixed) -> Option<Fixed> {
     Some(match op {
         TeamOp::OfficersAddA1 => add(used, trunc(x)).min(cap),

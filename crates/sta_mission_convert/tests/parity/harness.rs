@@ -176,6 +176,15 @@ fn check_versions(
     Ok(kind)
 }
 
+/// One child converter's part of the reference log: its command (paths scrubbed), the console
+/// lines it printed (stdout and stderr merged, in order) and its exit code.
+#[derive(Debug, Clone)]
+pub struct LogSection {
+    pub command: String,
+    pub lines: Vec<String>,
+    pub exit: Option<i32>,
+}
+
 /// One install's part of a reference.
 #[derive(Debug)]
 pub struct RefInstall {
@@ -456,6 +465,30 @@ impl RefInstall {
         fs::read(self.dir.join("listings").join(name)).ok()
     }
 
+    /// The reference's `log.txt` (the converters' console output, install and output paths
+    /// replaced by `<install>` and `<out>`), with `\r` removed.
+    pub fn log(&self) -> Option<String> {
+        let b = fs::read(self.dir.join("log.txt")).ok()?;
+        Some(String::from_utf8_lossy(&b).replace('\r', ""))
+    }
+
+    /// The log split by child: each section starts at a `$ <command>` line and ends at its
+    /// `[exit N]` line.
+    pub fn log_sections(&self) -> Vec<LogSection> {
+        let mut out: Vec<LogSection> = Vec::new();
+        for l in self.log().unwrap_or_default().lines() {
+            if let Some(c) = l.strip_prefix("$ ") {
+                out.push(LogSection { command: c.to_string(), lines: Vec::new(), exit: None });
+            } else if let Some(cur) = out.last_mut() {
+                match l.strip_prefix("[exit ").and_then(|x| x.strip_suffix(']')).and_then(|n| n.parse().ok()) {
+                    Some(n) if cur.exit.is_none() => cur.exit = Some(n),
+                    _ => cur.lines.push(l.to_string()),
+                }
+            }
+        }
+        out
+    }
+
     pub fn has_listings(&self) -> bool {
         self.dir.join("listings").is_dir()
     }
@@ -689,7 +722,7 @@ fn install_fingerprint(h: &mut Sha256, root: &Path) {
 /// The deterministic directory a self-generated reference lives in: under the system temp dir,
 /// keyed by the four tool hashes, the install paths and a fingerprint of their files, the
 /// objdump version and the harness layout.
-fn generated_dir(tools: &Path, installs: &[PathBuf]) -> Result<PathBuf, Refusal> {
+fn generated_dir(tools: &Path, installs: &[PathBuf], flavor: Flavor) -> Result<PathBuf, Refusal> {
     let mut h = Sha256::new();
     for t in TOOL_FILES {
         let b = fs::read(tools.join(t))
@@ -702,7 +735,11 @@ fn generated_dir(tools: &Path, installs: &[PathBuf]) -> Result<PathBuf, Refusal>
         install_fingerprint(&mut h, i);
     }
     h.update(OBJDUMP_VERSION);
-    h.update("layout-2");
+    h.update("layout-3");
+    h.update(match flavor {
+        Flavor::Mapped => "mapped",
+        Flavor::Unmapped => "unmapped",
+    });
     let key: String = h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
     Ok(std::env::temp_dir().join(format!("sta64-parity-ref-{key}")))
 }
@@ -790,7 +827,12 @@ fn current_uid(parent: &Path) -> Option<u32> {
 
 /// Run `convert_reference.py` for `installs` into a new private directory next to `dir` and
 /// return it.
-fn generate(tools: &Path, installs: &[PathBuf], dir: &Path) -> Result<PathBuf, Refusal> {
+fn generate(
+    tools: &Path,
+    installs: &[PathBuf],
+    dir: &Path,
+    flavor: Flavor,
+) -> Result<PathBuf, Refusal> {
     let work = unique_sibling(dir, "work");
     make_private_dir(&work)
         .map_err(|e| Refusal(format!("cannot create the reference directory: {e}")))?;
@@ -800,8 +842,11 @@ fn generate(tools: &Path, installs: &[PathBuf], dir: &Path) -> Result<PathBuf, R
     cmd.arg("-I")
         .arg(tools.join("convert_reference.py"))
         .arg("--out")
-        .arg(&work)
-        .arg("--objdump-listings");
+        .arg(&work);
+    match flavor {
+        Flavor::Mapped => cmd.arg("--objdump-listings"),
+        Flavor::Unmapped => cmd.arg("--include-unmapped"),
+    };
     for i in installs {
         cmd.arg("--install").arg(i);
     }
@@ -863,31 +908,56 @@ fn place(work: &Path, dir: &Path, tools: &Path, uid: Option<u32>) -> Result<(), 
     refuse("cannot move the generated reference into place")
 }
 
-fn obtain_uncached() -> Result<Option<Arc<Reference>>, Refusal> {
+/// Which reference: the default one (the mapped Armada I missions, with objdump listings), or
+/// the one written with `--include-unmapped` for Armada I only (no listings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavor {
+    Mapped,
+    Unmapped,
+}
+
+/// A stored reference made with `--include-unmapped` (Armada I), read only.
+pub const UNMAPPED_REFERENCE_VAR: &str = "STA64_TEST_LUA_REFERENCE_UNMAPPED";
+
+fn obtain_uncached(flavor: Flavor) -> Result<Option<Arc<Reference>>, Refusal> {
     let tools = repo_tools_dir();
-    if let Some(dir) = env_dir(REFERENCE_VAR)? {
+    let var = match flavor {
+        Flavor::Mapped => REFERENCE_VAR,
+        Flavor::Unmapped => UNMAPPED_REFERENCE_VAR,
+    };
+    let check = |r: Reference| -> Result<Arc<Reference>, Refusal> {
+        if flavor == Flavor::Unmapped && !r.installs().iter().all(RefInstall::include_unmapped) {
+            return refuse("the unmapped reference was not written with --include-unmapped");
+        }
+        Ok(Arc::new(r))
+    };
+    if let Some(dir) = env_dir(var)? {
         // A stored reference: any mismatch is a hard failure.
-        return Ok(Some(Arc::new(Reference::load(&dir, &tools, OBJDUMP_VERSION)?)));
+        return Ok(Some(check(Reference::load(&dir, &tools, OBJDUMP_VERSION)?)?));
     }
     let mut installs = Vec::new();
-    for v in [A2_VAR, A1_VAR] {
+    let vars: &[&str] = match flavor {
+        Flavor::Mapped => &[A2_VAR, A1_VAR],
+        Flavor::Unmapped => &[A1_VAR],
+    };
+    for v in vars {
         installs.extend(env_dir(v)?);
     }
     if installs.is_empty() {
         eprintln!(
-            "parity skipped: neither {REFERENCE_VAR} nor an install ({A2_VAR}, {A1_VAR}) is set"
+            "parity skipped: neither {var} nor an install ({A2_VAR}, {A1_VAR}) is set"
         );
         return Ok(None);
     }
     if tool_version("python3").is_none() {
-        eprintln!("parity skipped: {REFERENCE_VAR} is not set and python3 is not available");
+        eprintln!("parity skipped: {var} is not set and python3 is not available");
         return Ok(None);
     }
     match tool_version("objdump") {
         Some(v) if v.split_whitespace().last() == Some(OBJDUMP_VERSION) => {}
         _ => {
             eprintln!(
-                "parity skipped: {REFERENCE_VAR} is not set and objdump {OBJDUMP_VERSION} is not available"
+                "parity skipped: {var} is not set and objdump {OBJDUMP_VERSION} is not available"
             );
             return Ok(None);
         }
@@ -898,14 +968,14 @@ fn obtain_uncached() -> Result<Option<Arc<Reference>>, Refusal> {
         return refuse("the system temp directory lies inside an install or the repository: refused");
     }
     let uid = current_uid(&tmp);
-    let dir = generated_dir(&tools, &installs)?;
+    let dir = generated_dir(&tools, &installs, flavor)?;
     if !is_current(&dir, &tools, uid) {
         // Refuses a symlink or another user's directory before anything is generated.
         dir_state(&dir, uid)?;
-        let work = generate(&tools, &installs, &dir)?;
+        let work = generate(&tools, &installs, &dir, flavor)?;
         place(&work, &dir, &tools, uid)?;
     }
-    Ok(Some(Arc::new(Reference::load(&dir, &tools, OBJDUMP_VERSION)?)))
+    Ok(Some(check(Reference::load(&dir, &tools, OBJDUMP_VERSION)?)?))
 }
 
 /// Where the reference comes from, in this order:
@@ -935,7 +1005,22 @@ fn obtain_uncached() -> Result<Option<Arc<Reference>>, Refusal> {
 /// this module through `#[path]` computes its own, but finds the directory of the first.
 pub fn obtain() -> Result<Option<Arc<Reference>>, Refusal> {
     static CACHE: OnceLock<Result<Option<Arc<Reference>>, Refusal>> = OnceLock::new();
-    CACHE.get_or_init(obtain_uncached).clone()
+    CACHE.get_or_init(|| obtain_uncached(Flavor::Mapped)).clone()
+}
+
+/// The same for the reference written with `--include-unmapped` (Armada I only): from
+/// [`UNMAPPED_REFERENCE_VAR`] or generated from [`A1_VAR`] (skipped without it).
+pub fn obtain_unmapped() -> Result<Option<Arc<Reference>>, Refusal> {
+    static CACHE: OnceLock<Result<Option<Arc<Reference>>, Refusal>> = OnceLock::new();
+    CACHE.get_or_init(|| obtain_uncached(Flavor::Unmapped)).clone()
+}
+
+/// [`obtain_unmapped`] for a test: a refused reference panics, none skips.
+pub fn obtain_unmapped_or_skip() -> Option<Arc<Reference>> {
+    match obtain_unmapped() {
+        Ok(r) => r,
+        Err(e) => panic!("{e}"),
+    }
 }
 
 /// [`obtain`] for a test: a refused reference panics with the reason, no reference skips.

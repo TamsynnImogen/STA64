@@ -17,7 +17,8 @@
 //!   is the strongest hit; Refit's lightning (`down_ps`) is not ported. Only under the Remaster look
 //!   ([`Effect::ShieldHits`]): the Stock look draws `stock_shield_hits.rs`' cap instead, and nothing for
 //!   shields going down yet.
-//! - **Hull impact** (`Hit.hull > 0`): `HitSparks` (6) streaks from `Hit.at`.
+//! - **Hull impact** (`Hit.hull > 0`): `HitSparks` (6) streaks from `Hit.at`. Under the Stock look one node
+//!   particle instead (`stock_hull_hits.rs`, [`Effect::HullHits`]).
 //! - **Explosion** (`Destroyed`): the fireball and shock ring sized by the unit's
 //!   `SelectRadius` (last seen, the unit is gone from the view): the radius
 //!   at least `MinRadius` (25), growing over `Growth` of its 2.5 s, `BlastSparks` (14)
@@ -26,7 +27,8 @@
 //!   [`HullShare`] is under [`SMOKE_LIGHT`] (one stream) or [`SMOKE_HEAVY`]
 //!   (two); it detaches above the threshold, while cloaked, and with the root.
 //!   Puffs already out run their course. Refit has no such rule (stock's damage
-//!   vents come from the SOD's damage nodes); these thresholds are STA64's own.
+//!   vents come from the SOD's damage nodes); these thresholds are STA64's own. Under the Stock look
+//!   the smoke is off ([`Effect::DamageSmoke`], D-02).
 //!
 //! The chunks and the smoke stay plain spheres: Refit's chunks break the unit's own
 //! meshes (`chunks.rs`) and its smoke is the SOD emitters'.
@@ -35,7 +37,7 @@
 
 use bevy::prelude::*;
 use sta_content::WeaponKind;
-use sta_sim::{EntityId, SimEvent, TICK_HZ, Tick};
+use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 use std::collections::BTreeMap;
 
 use super::fire::{self, FireFrame, FireMaterial, RingFrame};
@@ -143,21 +145,24 @@ struct SeenUnit {
     heading: Vec3,
     radius: f32,
     faction: Faction,
+    /// Its definition, for the explosion it names (#1153).
+    def: Option<ContentKey>,
 }
 
 impl Default for SeenUnit {
     fn default() -> SeenUnit {
-        SeenUnit { pos: Vec3::ZERO, heading: Vec3::NEG_Z, radius: DEFAULT_RADIUS, faction: Faction::of_odf("") }
+        SeenUnit { pos: Vec3::ZERO, heading: Vec3::NEG_Z, radius: DEFAULT_RADIUS, faction: Faction::of_odf(""), def: None }
     }
 }
 
 #[derive(Resource, Default)]
-struct Seen(BTreeMap<EntityId, SeenUnit>);
+pub(super) struct Seen(BTreeMap<EntityId, SeenUnit>);
 
 pub struct ImpactFxPlugin;
 
 impl Plugin for ImpactFxPlugin {
     fn build(&self, app: &mut App) {
+        app.add_plugins((super::stock_explosions::StockExplosionsPlugin, super::stock_hull_hits::StockHullHitsPlugin));
         app.init_resource::<Seen>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_units)
             .add_systems(OnExit(crate::app::AppState::InGame), forget_units)
@@ -165,6 +170,8 @@ impl Plugin for ImpactFxPlugin {
             Update,
             (track, spawn_impacts, smoke_attach, emit_smoke, update_impacts, attach_visuals, apply_alpha, apply_shields, apply_fire, apply_quads)
                 .chain()
+                // The beams' hull ends of this frame (`HullHitPoints`) are written first.
+                .after(super::stock_shots::update_shots)
                 .in_set(GameSet::Interpolate)
                 .distributive_run_if(resource_exists::<SimLink>),
         );
@@ -252,12 +259,12 @@ fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<
         let radius = ents.as_ref().and_then(|m| m.0.get(&u.id)).and_then(|e| radii.get(*e).ok()).map_or(DEFAULT_RADIUS, |r| r.0);
         let heading = Vec3::new(u.heading.0.to_f32(), 0.0, -u.heading.1.to_f32()).normalize_or(Vec3::NEG_Z);
         let faction = content.as_ref().and_then(|c| c.0.unit(u.def)).map_or(Faction::of_odf(""), |d| Faction::of_odf(&d.odf));
-        seen.0.insert(u.id, SeenUnit { pos: to_bevy(u.pos.to_f32()), heading, radius, faction });
+        seen.0.insert(u.id, SeenUnit { pos: to_bevy(u.pos.to_f32()), heading, radius, faction, def: Some(u.def) });
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_impacts(
+pub(super) fn spawn_impacts(
     mut cmds: Commands,
     mut msgs: MessageReader<SimMsg>,
     clock: Res<AnimClock>,
@@ -266,12 +273,25 @@ fn spawn_impacts(
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
     fog: Option<Res<crate::render::fog::FogState>>,
+    mut explosions: Option<ResMut<super::stock_explosions::ExplosionQueue>>,
+    mut store: Option<ResMut<super::stock_flares::NodeParticles>>,
+    sprites: Option<Res<super::stock_shots::ShotSprites>>,
+    mut dying: ResMut<super::stock_hull_hits::DyingUnits>,
+    points: Option<Res<super::stock_hull_hits::HullHitPoints>>,
+    mut logged: Local<bool>,
 ) {
     let tick = clock.tick();
     let shell = refit_shield_shell(profile.as_deref(), effects.as_deref());
+    // #1153: under Stock the explosion of a unit whose definition resolves is `stock_explosions.rs`', and the hull hit
+    // is `stock_hull_hits.rs`' spark (Refit's streaks are not drawn then).
+    let stock = super::stock_explosions::stock_explosions(profile.as_deref(), effects.as_deref());
+    let stock_hits = super::stock_hull_hits::stock_hull_hits(profile.as_deref(), effects.as_deref());
     for SimMsg(ev) in msgs.read() {
         match ev {
-            SimEvent::Hit { target, weapon, facing, shield, hull, at, .. } => {
+            SimEvent::Dying { id, .. } => {
+                dying.0.insert(*id);
+            }
+            SimEvent::Hit { target, by, weapon, facing, shield, hull, at, .. } => {
                 // A unit the client does not draw (no record: `track`) gets no shield shell and no sparks.
                 let known = seen.0.get(target).copied();
                 if known.is_none() && fog.is_some() {
@@ -314,7 +334,18 @@ fn spawn_impacts(
                     b.seed = Vec3::splat(rand(*target, tick, 0, 20));
                     cmds.spawn((b, a, t));
                 }
-                if hull.to_f32() > 0.0 {
+                if hull.to_f32() > 0.0 && stock_hits {
+                    // A hit on a unit already dying draws none; the lethal hit itself does (`Dying` follows it).
+                    if !dying.0.contains(target)
+                        && let (Some(store), Some(sprites)) = (store.as_mut(), sprites.as_ref())
+                    {
+                        // Where the stock beam drawing says its end on the hull is; else the event's place (the target's
+                        // centre). INTERIM against the original's hit node.
+                        let spot = points.as_ref().and_then(|p| p.of(*by, *weapon, *target)).unwrap_or(at);
+                        let local = super::stock_flares::to_local(s.heading, spot - s.pos);
+                        super::stock_hull_hits::raise_hit_spark(&mut cmds, store, sprites, &mut logged, *target, s.radius, local, rand(*target, tick, 0, 70), clock.now() * TICK_HZ as f64);
+                    }
+                } else if hull.to_f32() > 0.0 {
                     let size = (s.radius * 0.14).max(4.0);
                     for i in 0..HIT_SPARKS {
                         cmds.spawn(spark(*target, tick, i, at, dir, size, s));
@@ -355,8 +386,16 @@ fn spawn_impacts(
                 ));
             }
             SimEvent::Destroyed { id, .. } => {
+                dying.0.remove(id);
                 let Some(s) = seen.0.remove(id) else { continue };
                 let p = s.pos;
+                if stock
+                    && let (Some(queue), Some(content), Some(def)) = (explosions.as_mut(), content.as_ref(), s.def)
+                    && let Some(req) = super::stock_explosions::request(&content.0, def, *id, p, s.heading, s.radius, clock.now() * TICK_HZ as f64)
+                {
+                    queue.0.push(req);
+                    continue;
+                }
                 let mk = |kind, idx, life, vel, colour| {
                     (
                         ImpactFx {
@@ -442,14 +481,18 @@ fn smoke_level(share: f32) -> u8 {
     }
 }
 
-/// Attach, retune and detach emitters as `HullShare` crosses the thresholds.
+/// Attach, retune and detach emitters as `HullShare` crosses the thresholds. Under the Stock look STA64's smoke is
+/// off (D-02: the original's damage look is the model's damage nodes): every emitter detaches and none is made.
 fn smoke_attach(
     mut cmds: Commands,
     clock: Res<AnimClock>,
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
     units: Query<(&SimEntity, &HullShare, Has<Cloaked>)>,
     mut emitters: Query<(Entity, &mut SmokeEmitter)>,
 ) {
-    let want: BTreeMap<EntityId, u8> = units.iter().map(|(u, h, cloaked)| (u.0, if cloaked { 0 } else { smoke_level(h.0) })).collect();
+    let on = super::stock_hull_hits::damage_smoke(profile.as_deref(), effects.as_deref());
+    let want: BTreeMap<EntityId, u8> = units.iter().map(|(u, h, cloaked)| (u.0, if cloaked || !on { 0 } else { smoke_level(h.0) })).collect();
     for (e, mut s) in &mut emitters {
         match want.get(&s.unit).copied().unwrap_or(0) {
             0 => cmds.entity(e).try_despawn(),

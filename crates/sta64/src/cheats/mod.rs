@@ -148,6 +148,7 @@ fn requests(
                     units: vec![u.id],
                     to,
                     queue: false,
+                    mode: None,
                 })
             })
             .collect(),

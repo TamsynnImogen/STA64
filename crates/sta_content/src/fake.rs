@@ -155,6 +155,44 @@ pub fn db() -> ContentDb {
         .expect("fake content is consistent")
 }
 
+/// Two formation files in the syntax of `AI/formations/*.frm` (CON-59), made up
+/// for tests: no game data. A line of five and a box of four, ids 0 and 1.
+/// The ship-type letters are invented.
+pub const FORMATION_FILES: [(&str, &str); 2] = [
+    (
+        "ai/formations/fx_line.frm",
+        "// made up for tests\n#include \"made_up.h\"\nchar formationName[16] = \"FxLine\";\nint m_formationID = 0;\nfloat m_shipRadius = .5;\n\
+         Row formationSpec[64] =\n{\n\
+         0,  0.0, 0.0,  0.0, 'A', 'B', '?', '-', '-', '-', '-',\n\
+         1,  1.0, 0.0, -1.0, 'B', 'A', '?', '-', '-', '-', '-',\n\
+         2, -1.0, 0.0, -1.0, 'B', 'A', '?', '-', '-', '-', '-',\n\
+         3,  2.0, 0.0, -2.0, 'B', 'A', '?', '-', '-', '-', '-',\n\
+         4, -2.0, 0.0, -2.0, 'B', 'A', '?', '-', '-', '-', '-',\n};\n",
+    ),
+    (
+        "ai/formations/fx_box.frm",
+        "char formationName[16] = \"FxBox\";\nint m_formationID = 1;\nfloat m_shipRadius = 0.25;\n\
+         Row formationSpec[64] =\n{\n\
+         0,  0.5, 0.0,  0.5, 'B', 'A', '?', '-', '-', '-', '-',\n\
+         1, -0.5, 0.0,  0.5, 'A', 'B', '?', '-', '-', '-', '-',\n\
+         2,  0.5, 0.0, -0.5, 'A', 'B', '?', '-', '-', '-', '-',\n\
+         3, -0.5, 0.0, -0.5, 'A', 'B', '?', '-', '-', '-', '-',\n};\n",
+    ),
+];
+
+/// The formations of [`FORMATION_FILES`].
+pub fn formations() -> crate::Formations {
+    let (formations, warnings) = crate::Formations::from_texts(FORMATION_FILES);
+    assert!(warnings.is_empty(), "the authored formations parse clean: {warnings:?}");
+    formations
+}
+
+/// [`db`] with [`formations`]. [`db`] itself ships none, so its pinned hash
+/// stays and SIM-02's kinds remain its fallback.
+pub fn db_with_formations() -> ContentDb {
+    db().with_formations(formations())
+}
+
 /// `fx_yard_launch` (SIM-16): a yard like `fx_yard`, building `fx_frigate`,
 /// with a launch hardpoint (`hp99`) 40 units ahead of its centre and a clear
 /// circle of 60. Not in [`db`], so its pinned hash stays; scenes that need it

@@ -680,6 +680,7 @@ mod through_the_sim {
                         units: vec![s],
                         to,
                         queue: false,
+                        mode: None,
                     }),
                 }]
             } else {
@@ -803,6 +804,7 @@ mod through_the_sim {
                     units: vec![s, other],
                     to: pt(0.0, 5000.0),
                     queue: false,
+                    mode: None,
                 }),
             }],
         );
@@ -857,6 +859,7 @@ mod through_the_sim {
                         units: vec![s],
                         to: *to,
                         queue: i > 0,
+                        mode: None,
                     }),
                 })
                 .collect();

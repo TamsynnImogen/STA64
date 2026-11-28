@@ -17,7 +17,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::ExitCondition;
 use sta_sim::command::LocalRouter;
 use sta_sim::{
-    EntityId, Fixed, PlayerId, TickOutput, UnitView, WorldSource, WorldView, view::UnitFlags,
+    EntityId, Fixed, PlayerId, TickOutput, UnitView, WorldSource, WorldView, view::{UnitFlags, WarpPhase, WarpRow},
 };
 use std::sync::{Arc, Mutex};
 
@@ -48,18 +48,16 @@ impl WorldSource for WarpSource {
         } else {
             0
         });
+        let phase = match self.stage {
+            1..=3 => Some(WarpPhase::AtWarp),
+            4 => Some(WarpPhase::Leaving),
+            _ => None,
+        };
+        next.warp_rows =phase.map(|phase| WarpRow { id: ID, phase, ramp_start: next.tick, ramp_len: 10, stretch: Fixed::from_int(3) }).into_iter().collect();
         self.view = Arc::new(next);
         TickOutput {
             view: self.view.clone(),
             events: Vec::new(),
-        }
-    }
-
-    fn warp_phases(&self) -> Vec<(EntityId, bool)> {
-        match self.stage {
-            1..=3 => vec![(ID, true)],
-            4 => vec![(ID, false)],
-            _ => Vec::new(),
         }
     }
 }

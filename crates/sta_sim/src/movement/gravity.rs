@@ -1,4 +1,4 @@
-//! Armada II warp suppression (cHoverCraftControlBase::mPreWarpCheck, 0x004b3b30).
+//! Armada II warp suppression (read from the executable, static).
 //! Both entry and cruise are checked at the current position. Gravity wells
 //! are passable at impulse, so they do not become obstacles for path planning.
 

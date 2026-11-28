@@ -28,6 +28,9 @@ struct RockParams {
     ext: vec4<f32>,       // xyz 1 / the mesh's extent per object axis; w the highlight's strength
     core: vec4<f32>,      // rgb the light inside the cracks (0: holes); w the cut's level
     spill: vec4<f32>,     // x the glow's scale; y the white at a crack's core, z the ravine's depth (0: flat), w the light's falloff up the walls
+    ghost_a: vec4<f32>,   // out of sight (#1146): rgb the lighting material's ambient; w 1 when the game's keys are given (0: the mesh tag's factor)
+    ghost_d: vec4<f32>,   // rgb its diffuse
+    ghost_s: vec4<f32>,   // rgb its specular
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: RockParams;
@@ -82,6 +85,16 @@ fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, gk: f32) -> vec3<f32> {
     sum += k.rim.rgb * pow(1.0 - saturate(dot(n, v)), k.shine.z);
     let gloss = dot(t.rgb, vec3<f32>(0.299, 0.587, 0.114)) * gk;
     return t.rgb * max(sum, vec3<f32>(0.0)) + spec * k.shine.x * gloss;
+}
+
+// The lighting of a copy out of sight: the game's own ghost lighting material in place of the scene's (the key's
+// direction only; no fill, no rim).
+fn shade_ghost(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec3<f32> {
+    let v = normalize(view.world_position - wp);
+    let l0 = -k.ddir0.xyz;
+    let sum = k.ghost_a.rgb + k.ghost_d.rgb * max(0.0, dot(n, l0));
+    let spec = k.ghost_s.rgb * glint(n, l0, v);
+    return t.rgb * sum + spec;
 }
 
 @fragment
@@ -148,7 +161,11 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let pf = mirror(p);
     let pw = (pf.x * row0 + pf.y * row1 + pf.z * row2) * inverseSqrt(s2);
     let n = normalize(normalize(i.world_normal) + pw);
-    var c = shade(n, wp, a, k.ext.w);
+    // A rock out of sight carries a mesh tag (the bits of an f32; 0: none, #1146): with the game's ghost lighting keys
+    // given it is lit by them, else its light is scaled by the tag's factor.
+    let tag = get_tag(i.instance_index);
+    let ghost_lit = tag != 0u && k.ghost_a.w > 0.5;
+    var c = select(shade(n, wp, a, k.ext.w), shade_ghost(n, wp, a), ghost_lit);
     c += k.glow.rgb * b.a * k.spill.x;
     var hot = saturate((b.a - k.core.w) / max(k.core.w, 1e-3));
     var lit = 1.0;
@@ -187,7 +204,5 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     var core = k.core.rgb * (1.0 + hot) + dot(k.core.rgb, vec3<f32>(0.333)) * hot * hot * k.spill.y;
     core = mix(wall, core, lit);
     c = mix(c, core, (1.0 - a.a) * inside);
-    // A rock out of sight carries the factor on its light as its mesh tag (the bits of the f32; 0: none, #1146).
-    let tag = get_tag(i.instance_index);
-    return vec4<f32>(c * select(1.0, bitcast<f32>(tag), tag != 0u), 1.0);
+    return vec4<f32>(c * select(1.0, bitcast<f32>(tag), tag != 0u && !ghost_lit), 1.0);
 }

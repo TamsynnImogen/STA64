@@ -154,6 +154,7 @@ fn a_ship_routes_round_an_installed_hazard_nebula() {
         units: vec![id],
         to,
         queue: false,
+        mode: None,
     });
     sim.step(&[Command {
         player: PlayerId(1),

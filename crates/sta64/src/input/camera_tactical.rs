@@ -1,10 +1,10 @@
 //! Armada II's player-controlled tactical view. The stock `toggle_tactical`
-//! action calls CameraManager::SwapCameras (0x004de380). It passes the current
-//! interest point to the tactical camera, then looks for the nearest visible
-//! entity within cfgTACTICAL_SNAP_DISTANCE (0x004de460). The overview camera
-//! takes back the tactical interest point when the player switches back.
+//! action passes the current interest point to the tactical camera, then looks
+//! for the nearest visible entity within cfgTACTICAL_SNAP_DISTANCE (read from the
+//! executable, static). The overview camera takes back the tactical interest
+//! point when the player switches back.
 //!
-//! The original ShotDirector can compose shots from several entities and tracks.
+//! The original shot director can compose shots from several entities and tracks.
 //! This camera follows one subject using the recovered viewing distance.
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
@@ -20,7 +20,7 @@ use crate::render::units::{LocalPlayer, to_bevy};
 use crate::sim_link::{ContentRes, SimLink};
 use crate::viewer::Orbit;
 
-// TacticalCamera::ResetToDefault, with the π/2 constant set by 0x004e4300.
+// The tactical camera's default pitch is this fraction of a right angle (read from the executable, static).
 const DEFAULT_PITCH: f32 = 0.275 * std::f32::consts::FRAC_PI_2;
 
 #[derive(Clone, Copy)]
@@ -56,6 +56,12 @@ impl TacticalView {
     pub(crate) fn request_toggle(&mut self) {
         self.toggle_requested = true;
     }
+
+    /// Whether a swap was requested since the last call (the tests' read of the request).
+    #[cfg(test)]
+    pub(crate) fn take_toggle_request(&mut self) -> bool {
+        std::mem::take(&mut self.toggle_requested)
+    }
 }
 
 pub(crate) fn overview_active(view: Option<Res<TacticalView>>) -> bool {
@@ -90,8 +96,8 @@ impl Shot {
     }
 
     fn pose(&self) -> Pose {
-        // TacticalCamera::UpdateCamera (0x004e4985) calls the yaw/pitch/zoom
-        // overload of GetCameraDescription (0x004e0770), which scales zoom by 100.
+        // The tactical camera's pose takes yaw, pitch and zoom, and scales zoom by 100
+        // (read from the executable, static).
         Pose {
             focus: self.focus,
             yaw: self.framing.yaw,

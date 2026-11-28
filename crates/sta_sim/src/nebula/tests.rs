@@ -189,7 +189,7 @@ fn damage_can_destroy() {
 fn top_speed_in(profile: Profile, odf: Option<&str>) -> (Fixed, Fixed) {
     let mut s = sim_with(odf.map(|o| vec![neb(o, v(2500, 1000), 2400)]).unwrap_or_default(), content_in(false, Some(profile)));
     let id = put(&mut s, "fx_cruiser", 1, v(500, 1000));
-    order(&mut s, 1, Order::Move { units: vec![id], to: v(4500, 1000), queue: false });
+    order(&mut s, 1, Order::Move { units: vec![id], to: v(4500, 1000), queue: false, mode: None });
     let mut top = Fixed::ZERO;
     for _ in 0..600 {
         s.step(&[]);

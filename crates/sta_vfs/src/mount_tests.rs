@@ -168,6 +168,163 @@ fn a_manifest_that_says_standalone_mounts_without_data() {
     assert_eq!(layers(&t.mount("Plain").unwrap()), ["Plain", "Data"]);
 }
 
+impl Tmp {
+    /// A mod folder holding only one authored package with these files (no loose files).
+    fn package(&self, folder: &str, file: &str, files: &[(&str, &str)]) {
+        use crate::sta_write::{Compression, Content, pack};
+        let entries = files.iter().map(|(k, v)| ((*k).to_owned(), Content::Data(v.as_bytes().to_vec()))).collect();
+        let bytes = pack(entries, Compression::Auto).unwrap();
+        let dir = self.0.join("Data/Mods").join(folder);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(file), bytes).unwrap();
+    }
+}
+
+// Issue #1220: a mod folder that holds only its `.sta` is a complete mod (CON-16, CON-18, D4, D6).
+
+#[test]
+fn parent_that_is_only_a_package_is_found() {
+    let t = Tmp::new("pkg_parent");
+    t.write("Data/odf/base_only.odf", "base");
+    t.package("Base", "base.sta", &[("info.ini", "[mod]\nName=Base\n"), ("odf/parent.odf", "parent")]);
+    t.write("Data/Mods/Child/info.ini", "[mod]\nParentMod=Base\n");
+    t.write("Data/Mods/Child/odf/child.odf", "child");
+    let v = t.mount("Child").unwrap();
+    assert_eq!(layers(&v), ["Child", "Base", "Data"]);
+    assert_eq!(text(&v, "odf/parent.odf").as_deref(), Some("parent"));
+    assert_eq!(text(&v, "odf/child.odf").as_deref(), Some("child"));
+    assert_eq!(text(&v, "odf/base_only.odf").as_deref(), Some("base"));
+}
+
+#[test]
+fn parent_folder_name_matches_in_any_case_for_a_package() {
+    let t = Tmp::new("pkg_case");
+    t.package("Base", "BASE.STA", &[("INFO.INI", "[mod]\n"), ("odf/parent.odf", "parent")]);
+    t.package("Child", "Child.sta", &[("info.ini", "[mod]\nParentMod=\"bASE\"\n")]);
+    let v = t.mount("child").unwrap();
+    // Layer names keep the spelling that named them, as for loose mods.
+    assert_eq!(layers(&v), ["child", "bASE", "Data"]);
+    assert_eq!(text(&v, "odf/parent.odf").as_deref(), Some("parent"));
+}
+
+#[test]
+fn child_wins_over_a_package_parent() {
+    let t = Tmp::new("pkg_order");
+    t.package("Base", "base.sta", &[("info.ini", "[mod]\n"), ("odf/shared.odf", "parent"), ("odf/only_parent.odf", "p")]);
+    t.write("Data/Mods/Child/info.ini", "[mod]\nParentMod=Base\n");
+    t.write("Data/Mods/Child/odf/shared.odf", "child");
+    let v = t.mount("Child").unwrap();
+    assert_eq!(text(&v, "odf/shared.odf").as_deref(), Some("child"));
+    assert_eq!(text(&v, "odf/only_parent.odf").as_deref(), Some("p"));
+    assert_eq!(v.resolve_all("odf/shared.odf").len(), 2);
+}
+
+#[test]
+fn grandparent_as_package_and_child_as_package() {
+    let t = Tmp::new("pkg_chain");
+    t.package("Low", "low.sta", &[("info.ini", "[mod]\n"), ("odf/shared.odf", "low"), ("odf/low.odf", "low only")]);
+    t.package("Mid", "mid.sta", &[("info.ini", "[mod]\nParentMod=Low\n"), ("odf/shared.odf", "mid")]);
+    t.package("Top", "top.sta", &[("info.ini", "[mod]\nParentMod=Mid\n"), ("odf/top.odf", "top")]);
+    let v = t.mount("Top").unwrap();
+    assert_eq!(layers(&v), ["Top", "Mid", "Low", "Data"]);
+    assert_eq!(text(&v, "odf/shared.odf").as_deref(), Some("mid"));
+    assert_eq!(text(&v, "odf/low.odf").as_deref(), Some("low only"));
+    assert_eq!(text(&v, "odf/top.odf").as_deref(), Some("top"));
+    // A loose child over a package grandparent through a loose middle mod.
+    t.write("Data/Mods/Loose/info.ini", "[mod]\nParentMod=Mid\n");
+    assert_eq!(layers(&t.mount("Loose").unwrap()), ["Loose", "Mid", "Low", "Data"]);
+}
+
+#[test]
+fn package_parent_flags_are_read_from_its_info_ini() {
+    let t = Tmp::new("pkg_flags");
+    t.write("Data/odf/base_only.odf", "base");
+    t.write("Data/bzn/base_map.bzn", "base map");
+    t.package("Lone", "lone.sta", &[("info.ini", "[mod]\nstandalone=1\n"), ("bzn/lone.bzn", "lone map")]);
+    t.write("Data/Mods/Child/info.ini", "[mod]\nParentMod=Lone\nignoreParentMaps=1\n");
+    let v = t.mount("Child").unwrap();
+    assert_eq!(layers(&v), ["Child", "Lone"], "no Data below a standalone package");
+    assert_eq!(text(&v, "odf/base_only.odf"), None);
+    assert!(v.list("bzn").is_empty(), "the child's ignoreParentMaps hides the package's maps");
+}
+
+#[test]
+fn loose_info_ini_beats_the_package_one() {
+    let t = Tmp::new("pkg_both");
+    t.write("Data/Mods/Root/info.ini", "[mod]\n");
+    t.write("Data/Mods/Other/info.ini", "[mod]\n");
+    t.package("Base", "base.sta", &[("info.ini", "[mod]\nParentMod=Other\n")]);
+    t.write("Data/Mods/Base/info.ini", "[mod]\nParentMod=Root\n");
+    t.write("Data/Mods/Child/info.ini", "[mod]\nParentMod=Base\n");
+    assert_eq!(layers(&t.mount("Child").unwrap()), ["Child", "Base", "Root", "Data"]);
+}
+
+#[test]
+fn missing_parent_of_a_package_is_reported_as_before() {
+    let t = Tmp::new("pkg_missing");
+    t.package("Child", "child.sta", &[("info.ini", "[mod]\nParentMod=Gone\n")]);
+    assert!(matches!(t.mount("Child"), Err(VfsError::ModNotFound(n)) if n == "Gone"));
+    let data = t.0.join("Data");
+    assert!(matches!(crate::mod_chain(&data, "Child"), Err(VfsError::ModNotFound(n)) if n == "Gone"));
+}
+
+#[test]
+fn damaged_packed_info_ini_is_an_error_not_a_silent_no_parent() {
+    let t = Tmp::new("pkg_damaged");
+    t.write("Data/Mods/Gone/info.ini", "[mod]\n");
+    t.package("Child", "child.sta", &[("info.ini", "[mod]\nParentMod=Gone\n"), ("odf/x.odf", "x")]);
+    let file = t.0.join("Data/Mods/Child/child.sta");
+    let mut bytes = fs::read(&file).unwrap();
+    let needle = b"ParentMod=Gone";
+    let at = bytes.windows(needle.len()).position(|w| w == needle).expect("entry stored plain");
+    bytes[at] ^= 0x01; // one flipped byte inside the entry: it still opens, its hash fails
+    fs::write(&file, bytes).unwrap();
+    assert!(matches!(t.mount("Child"), Err(VfsError::Sta { path, .. }) if path.ends_with("child.sta")));
+    let data = t.0.join("Data");
+    assert!(matches!(crate::mod_chain(&data, "Child"), Err(VfsError::Sta { .. })));
+    // A package without an info.ini entry stays "no info": the mod mounts over Data.
+    t.package("Plain", "plain.sta", &[("odf/y.odf", "y")]);
+    assert_eq!(layers(&t.mount("Plain").unwrap()), ["Plain", "Data"]);
+}
+
+#[test]
+fn several_packages_first_in_byte_order_with_an_info_ini_supplies_it() {
+    let t = Tmp::new("pkg_two");
+    t.write("Data/Mods/Root/info.ini", "[mod]\n");
+    t.write("Data/Mods/Other/info.ini", "[mod]\n");
+    // The mount's order is the byte order of the paths: "A.sta" comes before "b.sta".
+    t.package("Both", "b.sta", &[("info.ini", "[mod]\nParentMod=Other\n"), ("odf/pick.odf", "from b")]);
+    t.package("Both", "A.sta", &[("info.ini", "[mod]\nParentMod=Root\n"), ("odf/pick.odf", "from A")]);
+    let v = t.mount("Both").unwrap();
+    assert_eq!(layers(&v), ["Both", "Root", "Data"]);
+    assert_eq!(text(&v, "odf/pick.odf").as_deref(), Some("from A"), "the mount serves the same package");
+    // A package without an info.ini entry earlier in the order is passed over.
+    t.package("Skip", "A.sta", &[("odf/z.odf", "z")]);
+    t.package("Skip", "b.sta", &[("info.ini", "[mod]\nParentMod=Root\n")]);
+    assert_eq!(layers(&t.mount("Skip").unwrap()), ["Skip", "Root", "Data"]);
+}
+
+#[test]
+fn parent_cycle_through_packages_is_reported() {
+    let t = Tmp::new("pkg_cycle");
+    t.package("A", "a.sta", &[("info.ini", "[mod]\nParentMod=B\n")]);
+    t.package("B", "b.sta", &[("info.ini", "[mod]\nParentMod=A\n")]);
+    assert!(matches!(t.mount("A"), Err(VfsError::ParentCycle(_))));
+}
+
+#[test]
+fn mod_chain_and_load_order_agree_for_packages() {
+    let t = Tmp::new("pkg_order_agree");
+    t.package("Low", "low.sta", &[("info.ini", "[mod]\n")]);
+    t.package("Top", "top.sta", &[("info.ini", "[mod]\nParentMod=Low\n")]);
+    let data = t.0.join("Data");
+    let chain: Vec<String> = crate::mod_chain(&data, "Top").unwrap().into_iter().map(|(n, _)| n).collect();
+    let (mods, _) = crate::mods::list_mods(&data).unwrap();
+    let order = crate::order::resolve(&mods, "Top").unwrap();
+    assert_eq!(chain, ["Top", "Low"]);
+    assert_eq!(order.folders(), chain);
+}
+
 /// With STA64_TEST_INSTALL (a Roots install): every installed mod mounts by its own
 /// rules; a standalone one has no `Data` layer and no map or ODF of base Data leaks in.
 #[test]

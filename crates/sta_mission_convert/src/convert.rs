@@ -423,6 +423,16 @@ fn py_basename(p: &str) -> String {
     }
 }
 
+/// One map of [`map_stems`]: `stem` (lower case) is listed under every mission its bytes name.
+fn add_stems(out: &mut IndexMap<String, Vec<String>>, stem: &str, data: &[u8]) {
+    for m in dll_names(data) {
+        let stems = out.entry(py_lower(&m)).or_default();
+        if !stems.iter().any(|s| s == stem) {
+            stems.push(stem.to_owned());
+        }
+    }
+}
+
 fn walk_stems(dir: &Path, out: &mut IndexMap<String, Vec<String>>) {
     let (mut dirs, mut files) = list_dir(dir);
     dirs.sort_by(|a, b| a.0.cmp(&b.0)); // `dirs.sort()`
@@ -437,12 +447,7 @@ fn walk_stems(dir: &Path, out: &mut IndexMap<String, Vec<String>>) {
             let Ok(data) = std::fs::read(dir.join(f)) else { continue };
             let n = f.chars().count();
             let stem = py_lower(&f.chars().take(n - 4).collect::<String>());
-            for m in dll_names(&data) {
-                let stems = out.entry(py_lower(&m)).or_default();
-                if !stems.contains(&stem) {
-                    stems.push(stem.clone());
-                }
-            }
+            add_stems(out, &stem, &data);
         }
     }
     for (_, p, is_link) in dirs {
@@ -499,6 +504,110 @@ pub fn load_engine(installs: &[PathBuf], engine_root: Option<&Path>) -> Result<V
     Ok(engine)
 }
 
+/// One mission DLL `main` converts: its name, the files and the maps (stems) whose script it is.
+#[derive(Debug, Clone)]
+pub struct Job {
+    /// The mission name (the DLL's name without `S.dsl`).
+    pub mission: String,
+    pub dsl: PathBuf,
+    pub drl: Option<PathBuf>,
+    /// The file stems to write: one per map that runs the mission, or the mission's own
+    /// lower-case name.
+    pub targets: Vec<String>,
+}
+
+/// The loop of `main` over the install folders `roots` (the mission folders), without converting:
+/// the mission DLLs in the order the Python visits them (sorted by path, then per root) that
+/// `only` (compared in lower case) selects, each with the stems it is written under.
+pub fn plan(roots: &[PathBuf], only: &[String]) -> Vec<Job> {
+    let stems = map_stems(roots);
+    jobs(roots.iter().flat_map(|root| find_missions(root)), &stems, only)
+}
+
+/// [`plan`] over files the caller found itself (through a mount instead of in folders): `pairs`
+/// are the mission DLLs (`S.dsl`, `R.drl` or none) in the order to convert them, `maps` each
+/// map's stem (lower case) and bytes in the order the stems are to be listed.
+pub fn plan_resolved(pairs: Vec<(PathBuf, Option<PathBuf>)>, maps: &[(String, Vec<u8>)], only: &[String]) -> Vec<Job> {
+    let mut stems = IndexMap::new();
+    for (stem, data) in maps {
+        add_stems(&mut stems, stem, data);
+    }
+    jobs(pairs.into_iter(), &stems, only)
+}
+
+fn jobs(
+    pairs: impl Iterator<Item = (PathBuf, Option<PathBuf>)>,
+    stems: &IndexMap<String, Vec<String>>,
+    only: &[String],
+) -> Vec<Job> {
+    let only: Vec<String> = only.iter().map(|x| py_lower(x)).collect();
+    let mut jobs = Vec::new();
+    for (dsl, drl) in pairs {
+        let dsl_base = dsl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mission = mission_name(&dsl_base);
+        if !only.is_empty() && !only.contains(&py_lower(&mission)) {
+            continue;
+        }
+        let targets = match stems.get(&py_lower(&mission)).filter(|s| !s.is_empty()) {
+            Some(s) => s.clone(),
+            None => vec![py_lower(&mission)],
+        };
+        jobs.push(Job { mission, dsl, drl, targets });
+    }
+    jobs
+}
+
+/// What converting one mission gave: the file, or the failure `main` prints as `FAIL`.
+#[derive(Debug, Clone)]
+pub enum Outcome {
+    Converted(Converted),
+    /// `Unsupported` or a `DecodeError`: the mission is counted as failed, the run goes on.
+    Failed(String),
+}
+
+/// Converts one planned mission. `listing` gives the instruction listing of a DLL (the Python runs
+/// `objdump`); it is called after the file's image was read, as the Python's `Dsl` and `Drl`
+/// constructors do. Any fault that is not a failed mission is the Python's abort (an `Err`).
+pub fn convert_one(
+    job: &Job,
+    engine: &Vtables,
+    listing: &mut dyn FnMut(&Path) -> Result<Vec<Ins>>,
+) -> Result<Outcome> {
+    convert_one_with(job, engine, &mut |p| {
+        let pe = Pe::open(p)?;
+        let ins = listing(p)?;
+        Ok((pe, ins))
+    })
+}
+
+/// Loads a DLL: its image and its listing, from the file at the path.
+pub type LoadFn<'a> = dyn FnMut(&Path) -> Result<(Pe, Vec<Ins>)> + 'a;
+
+/// [`convert_one`] with the loading of a DLL in the caller's hands: `load` gives the image and the
+/// listing of the file at the path (so a caller that has the bytes already need not read the file
+/// again). It is called for the mission DLL first and for the rule DLL later, as the Python opens
+/// them.
+pub fn convert_one_with(job: &Job, engine: &Vtables, load: &mut LoadFn<'_>) -> Result<Outcome> {
+    let dsl_base = job.dsl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let drl_base: Option<String> =
+        job.drl.as_ref().map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    let result = (|| -> std::result::Result<Converted, Failure> {
+        let (pe, ins) = load(&job.dsl)?;
+        let mut open = || -> Result<(Pe, Vec<Ins>)> {
+            let p = job.drl.as_ref().expect("a rule DLL");
+            load(p)
+        };
+        let drl = drl_base.as_ref().map(|base| (base.as_str(), &mut open as &mut RuleSource<'_>));
+        convert(&pe, ins, &dsl_base, drl, engine)
+    })();
+    match result {
+        Ok(c) => Ok(Outcome::Converted(c)),
+        Err(Failure::Unsupported(m)) => Ok(Outcome::Failed(m)),
+        Err(Failure::Error(e)) if e.kind == ErrorKind::Decode => Ok(Outcome::Failed(e.message)),
+        Err(Failure::Error(e)) => Err(e),
+    }
+}
+
 /// What [`convert_install`] found.
 #[derive(Debug, Default)]
 pub struct InstallRun {
@@ -511,11 +620,8 @@ pub struct InstallRun {
     pub failed: Vec<(String, String)>,
 }
 
-/// The loop of `main` over the install folders `roots` (the mission folders): per mission DLL
-/// (sorted by path, then per root), [`convert`], and one file per map that runs the mission (or
-/// the mission's own lower-case name). `only` selects missions by name (compared in lower case).
-/// `listing` gives the instruction listing of a DLL (the Python runs `objdump`); it is called after
-/// the file's image was read, as the Python's `Dsl` and `Drl` constructors do.
+/// The loop of `main` over the install folders `roots` (the mission folders): [`plan`], then
+/// [`convert_one`] per mission, in memory.
 pub fn convert_install(
     roots: &[PathBuf],
     engine: &Vtables,
@@ -523,44 +629,15 @@ pub fn convert_install(
     listing: &mut dyn FnMut(&Path) -> Result<Vec<Ins>>,
 ) -> Result<InstallRun> {
     let mut run = InstallRun::default();
-    let stems = map_stems(roots);
-    let only: Vec<String> = only.iter().map(|x| py_lower(x)).collect();
-    for root in roots {
-        for (dsl_path, drl_path) in find_missions(root) {
-            let dsl_base = dsl_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let mission = mission_name(&dsl_base);
-            if !only.is_empty() && !only.contains(&py_lower(&mission)) {
-                continue;
-            }
-            let drl_base: Option<String> =
-                drl_path.as_ref().map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-            let result = (|| -> std::result::Result<Converted, Failure> {
-                let pe = Pe::open(&dsl_path)?;
-                let ins = listing(&dsl_path)?;
-                let mut open = || -> Result<(Pe, Vec<Ins>)> {
-                    let p = drl_path.as_ref().expect("a rule DLL");
-                    let rpe = Pe::open(p)?;
-                    let rins = listing(p)?;
-                    Ok((rpe, rins))
-                };
-                let drl = drl_base.as_ref().map(|base| (base.as_str(), &mut open as &mut RuleSource<'_>));
-                convert(&pe, ins, &dsl_base, drl, engine)
-            })();
-            match result {
-                Ok(c) => {
-                    let targets = match stems.get(&py_lower(&mission)).filter(|s| !s.is_empty()) {
-                        Some(s) => s.clone(),
-                        None => vec![py_lower(&mission)],
-                    };
-                    for stem in targets {
-                        run.files.insert(format!("{stem}.lua"), c.source.clone().into_bytes());
-                    }
-                    run.converted.push(c.report);
+    for job in plan(roots, only) {
+        match convert_one(&job, engine, listing)? {
+            Outcome::Converted(c) => {
+                for stem in &job.targets {
+                    run.files.insert(format!("{stem}.lua"), c.source.clone().into_bytes());
                 }
-                Err(Failure::Unsupported(m)) => run.failed.push((mission, m)),
-                Err(Failure::Error(e)) if e.kind == ErrorKind::Decode => run.failed.push((mission, e.message)),
-                Err(Failure::Error(e)) => return Err(e),
+                run.converted.push(c.report);
             }
+            Outcome::Failed(m) => run.failed.push((job.mission, m)),
         }
     }
     Ok(run)

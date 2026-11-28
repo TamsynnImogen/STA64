@@ -1117,6 +1117,46 @@ fn a_node_is_marked_in_the_frame_a_view_sees_it_and_not_while_none_does() {
     assert!(seen_changed > 15 && unseen_changed > 8 && entered == 1, "seen {seen_changed}, unseen {unseen_changed}, entered {entered}");
 }
 
+/// #1146 with #1269: a sprite node under a fog gate that hides it (the object never seen) is not marked, whatever its
+/// colour does meanwhile, and is marked in the frame it is seen again when its colour changed that frame: the gate's
+/// own `Visibility` toggle through `apply_gates` is what the parity mark sees.
+#[test]
+fn a_node_under_a_fog_gate_is_marked_only_in_frames_a_view_sees_it() {
+    use crate::render::fog::{FogGrid, FogState};
+    use crate::render::fog_objects::{RegionSights, SightGate, apply_gates};
+    let mut app = game_app(true);
+    app.init_resource::<Requeued>()
+        .init_resource::<RegionSights>()
+        .insert_resource(crate::render::units::LocalPlayer(Some(sta_sim::PlayerId(1))))
+        .add_systems(Last, collect_requeued)
+        .add_systems(Update, apply_gates.before(animate));
+    let gate = app.world_mut().spawn((SightGate { pos: Vec2::new(0.0, 0.0), radius: 50.0, region: None, ghost: 1.0 }, Visibility::Inherited)).id();
+    let node = spawn_node(&mut app, "blA", Some(gate));
+    let never = || FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
+    let (mut shown_marked, mut hidden_changed) = (0, 0);
+    for n in 0..40u32 {
+        // Never seen until frame 12, in sight from then on.
+        let grid = if n < 12 { never() } else { never().lifted(true, true) };
+        app.insert_resource(FogState { grid, updates: n + 1 });
+        app.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        let before = bits(app.world().get::<SpriteState>(node).unwrap().colour);
+        app.update();
+        let changed = bits(app.world().get::<SpriteState>(node).unwrap().colour) != before;
+        let seen = app.world().get::<ViewVisibility>(node).unwrap().get();
+        assert_eq!(seen, n >= 12, "frame {n}: the gate's visibility reaches the node's view visibility");
+        let marked = app.world().resource::<Requeued>().0.contains(&node);
+        // Frame 0: the spawn itself counts as a change of the node's material.
+        if n > 0 {
+            assert_eq!(marked, changed && seen, "frame {n}: changed {changed}, seen {seen}");
+        }
+        assert!(app.world().resource::<material::ParityMarks>().is_empty(), "frame {n}: marks left waiting");
+        shown_marked += usize::from(marked);
+        hidden_changed += usize::from(changed && !seen);
+    }
+    assert!(hidden_changed > 5, "the colour changed while the gate hid the node: {hidden_changed}");
+    assert!(shown_marked > 15, "and it is marked in the frames it is seen: {shown_marked}");
+}
+
 /// Runs the nodes listed in alternate frames only through Bevy's own visibility, mesh and material
 /// systems (no GPU). The mark must reach `EntitiesNeedingSpecialization` and `Mesh3d`'s change flag in
 /// exactly the frames the node was listed in, for a node a view sees, and never for one nothing sees. With
@@ -1218,4 +1258,43 @@ fn the_mark_lands_in_the_frame_it_is_listed_in_through_bevys_own_systems() {
 fn the_same_check_sees_a_mark_that_lands_a_frame_late() {
     let e = the_mark_lands_in_the_listed_frame(true).expect_err("the late mark must be seen");
     assert!(e.contains("listed"), "{e}");
+}
+
+/// #1146: a node with `SpriteStill` draws its animation at the time it stands at, the other nodes run on; when the
+/// component goes the node takes the clock's time again, and nothing is written for it while it stands.
+#[test]
+fn a_still_node_draws_its_animation_at_the_time_it_stands_at_and_resumes_with_the_clock() {
+    let mut app = game_app(true);
+    // A node whose sprite does not flip (a flipbook's uv is its look's, shared and live: declared).
+    let live = spawn_node(&mut app, "blA", None);
+    let still = spawn_node(&mut app, "blA", None);
+    let at = 0.25f32;
+    let t = table();
+    let frozen = match spr_anim::value(t.0.animation("pulse").unwrap(), at, spr_anim::LOOP) {
+        Some(Value::Colour(c)) => linear_bits(colour(c)),
+        other => panic!("the invented pulse gives a colour, not {other:?}"),
+    };
+    let frame = |app: &mut App| {
+        app.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        app.update();
+    };
+    frame(&mut app);
+    app.world_mut().entity_mut(still).insert(SpriteStill(at));
+    let mut live_seen = std::collections::BTreeSet::new();
+    for _ in 0..30 {
+        frame(&mut app);
+        assert_eq!(slot_of(&app, still), frozen, "the still node stands at its time");
+        live_seen.insert(slot_of(&app, live));
+    }
+    assert!(live_seen.len() > 3, "the live node animates meanwhile: {} colours", live_seen.len());
+    // Standing still costs nothing: no pass over the node, no write (`passes` counts full passes).
+    let passes = app.world().get::<SpriteKeys>(still).unwrap().passes;
+    for _ in 0..10 {
+        frame(&mut app);
+    }
+    assert_eq!(app.world().get::<SpriteKeys>(still).unwrap().passes, passes, "a still node is passed over");
+    // In sight again: the clock's time, the same as the node that never stopped.
+    app.world_mut().entity_mut(still).remove::<SpriteStill>();
+    frame(&mut app);
+    assert_eq!(slot_of(&app, still), slot_of(&app, live));
 }

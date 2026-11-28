@@ -8,6 +8,7 @@ pub mod camera_cinematic;
 pub(crate) mod camera_tactical;
 pub mod context;
 pub mod hover;
+pub mod hover_pick;
 pub mod keys;
 pub mod orders;
 pub mod select;

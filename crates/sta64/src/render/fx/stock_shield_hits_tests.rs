@@ -277,12 +277,27 @@ fn phaser(duration: i32) -> WeaponDef {
 }
 
 fn content(duration: i32) -> ContentDb {
+    content_with(duration, false)
+}
+
+/// [`content`] with the beam landing at the end of a thirty-tick life (`beam_damage_at_end`) when `at_end`.
+fn content_with(duration: i32, at_end: bool) -> ContentDb {
+    let mut features = sta_content::Features::default();
+    features.beam_damage_at_end = at_end;
+    let phaser = |d: i32| {
+        let mut w = phaser(d);
+        if at_end {
+            w.duration = 30;
+        }
+        w
+    };
     let mut ign = weapon("w_torp_ign", "photontorpedo", WeaponKind::Projectile, look("torpspr"));
     ign.base.ignore_shield = Some(true);
     let mut ign_beam = phaser(duration);
     ign_beam.odf = "w_phaser_ign".into();
     ign_beam.base.ignore_shield = Some(true);
     ContentBuilder::default()
+        .features(features)
         .weapon(phaser(duration))
         .weapon(ign_beam)
         .weapon(weapon("w_torp", "photontorpedo", WeaponKind::Projectile, look("torpspr")))
@@ -301,13 +316,23 @@ fn content(duration: i32) -> ContentDb {
 struct Shielded {
     inner: ScriptedSource,
     pool: [i32; 2],
+    /// Another pool for each facing (fore, aft, port, starboard) instead of `pool` on all four.
+    sides: Option<[[i32; 2]; 4]>,
+    /// The sim holds unit 1's beam at unit 2 in the views of these ticks (from, until, weapon).
+    held: Option<(u64, u64, ContentKey)>,
 }
 
 impl Shielded {
     fn patch(&self, view: Arc<WorldView>) -> Arc<WorldView> {
         let mut v = (*view).clone();
+        if let Some((from, until, weapon)) = self.held
+            && (from..until).contains(&v.tick)
+        {
+            v.beam_rows = vec![sta_sim::view::BeamRow { shooter: EntityId(1), weapon, target: EntityId(2), ends: until }];
+        }
         for u in v.units.iter_mut().filter(|u| u.id.0 >= 2) {
-            u.shields = [[Fixed::from_int(self.pool[0]), Fixed::from_int(self.pool[1])]; 4];
+            let pools = self.sides.unwrap_or([self.pool; 4]);
+            u.shields = pools.map(|p| [Fixed::from_int(p[0]), Fixed::from_int(p[1])]);
         }
         Arc::new(v)
     }
@@ -333,11 +358,21 @@ struct Scene {
     target_until: Option<u64>,
     /// `(tick, what)`: a shot at unit 2 or the hit it makes.
     events: Vec<(u64, String)>,
+    /// Per-facing pools for unit 2, when they differ.
+    sides: Option<[[i32; 2]; 4]>,
+    /// The ticks (from, until) whose views carry the beam as one the sim holds.
+    held: Option<(u64, u64)>,
 }
 
 impl Scene {
     fn new(duration: i32) -> Scene {
-        Scene { db: content(duration), pool: [30, 100], target_def: "t_target", target_until: None, events: Vec::new() }
+        Scene { db: content(duration), pool: [30, 100], target_def: "t_target", target_until: None, events: Vec::new(), sides: None, held: None }
+    }
+    /// The beam fired at tick 4 lands at the end of its thirty-tick life (`beam_damage_at_end`), which the sim holds it for.
+    fn at_end(mut self, duration: i32) -> Scene {
+        self.db = content_with(duration, true);
+        self.held = Some((4, 34));
+        self
     }
     fn fire(mut self, at: u64, weapon: &str) -> Self {
         let k = self.db.key(weapon).unwrap().0;
@@ -372,7 +407,7 @@ impl Scene {
             .add_plugins(SimLinkPlugin)
             .insert_resource(ContentRes(Arc::new(self.db.clone())))
             .insert_resource(SpriteTables(Arc::new(SpriteTable::parse(TABLE.as_bytes()))))
-            .insert_resource(SimLink::new(Box::new(Shielded { inner, pool: self.pool }), Box::new(LocalRouter::new()), PlayerId(0)));
+            .insert_resource(SimLink::new(Box::new(Shielded { inner, pool: self.pool, sides: self.sides, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())) }), Box::new(LocalRouter::new()), PlayerId(0)));
         if let Some(p) = profile {
             app.insert_resource(p);
         }
@@ -608,6 +643,25 @@ fn a_beam_the_shield_absorbed_makes_a_cap_even_if_it_emptied_the_shield_and_one_
 }
 
 #[test]
+fn under_beam_damage_at_end_the_cap_takes_the_level_of_the_side_it_lands_on_from_the_view_not_from_a_late_hit() {
+    // The shooter is aft of the target (the aft pool is the one that will take the hit), each side holds another level.
+    // The sim applies the beam's damage at the end of its life, thirty ticks on: at arrival the view shows the level
+    // before it, and the `Hit` that comes later (20 taken) must not be added to it nor matched to the cap.
+    let sides = [[100, 100], [25, 100], [90, 100], [80, 100]];
+    let mut scene = Scene::new(1).at_end(1).fire(4, "w_phaser").hit(34, "w_phaser", 20, 0);
+    scene.sides = Some(sides);
+    let (c, f, fr) = caps_and_flares(&scene);
+    assert_eq!((c, f), (1, 0), "one cap, no flare");
+    assert_eq!(fr, vec![0.25], "the aft pool as the view shows it at arrival");
+    // Without the switch the cap keeps today's level: the pool of the facing the hit names (here fore, whatever the
+    // geometry) plus what it took, from the record of the fire tick's hit (INTERIM).
+    let mut off = Scene::new(1).fire(4, "w_phaser").hit(4, "w_phaser", 20, 0);
+    off.sides = Some(sides);
+    let (_, _, fr) = caps_and_flares(&off);
+    assert_eq!(fr, vec![1.0], "the switch off: the old reading, unchanged");
+}
+
+#[test]
 fn beams_on_one_tick_and_pool_all_see_the_level_before_all_of_that_ticks_damage() {
     // Two beams in one tick took 20 and 10 from a pool that shows 30 of 100 afterwards: both were fired at a pool of 60.
     let scene = Scene::new(1).fire(4, "w_phaser").fire(4, "w_phaser").hit(4, "w_phaser", 20, 0).hit(4, "w_phaser", 10, 0);
@@ -663,10 +717,11 @@ fn the_remaster_look_still_spawns_its_shield_shell_and_no_stock_cap_and_stock_th
     // Without profile resources (today's windowless path) it is Refit's, too.
     assert_eq!(one_hit(None).0, 0);
     assert_eq!(one_hit(None).1, 1);
-    // Stock look: the cap, no Refit shell; everything else `impacts.rs` draws (the hull sparks) is unchanged.
+    // Stock look: the cap, no Refit shell; and none of Refit's hull streaks either (the stock spark is
+    // `stock_hull_hits.rs`', #1153).
     let (cap, shell, stock_spark) = one_hit(Some(RenderProfile::Stock));
     assert_eq!((cap, shell), (1, 0), "under Stock one cap and no Refit shell");
-    assert_eq!(stock_spark, spark, "the hull sparks are the same in both looks");
+    assert_eq!(stock_spark, 0, "no Refit hull streak under Stock");
 }
 
 #[test]
@@ -944,4 +999,11 @@ fn install_the_default_model_resolves_loads_and_every_vertex_lies_within_its_dat
     let table = sta_assets::load_sprite_table(&vfs);
     let (anim, _) = geo.flipbook.as_ref().expect("the cap names a flipbook");
     assert!(table.animation(anim).is_some(), "the flipbook {anim} is in no sprite table");
+}
+
+/// The cap's mesh carries the attributes the stock shot material reads (#1418).
+#[test]
+fn the_cap_mesh_carries_the_attributes_the_material_reads() {
+    let geo = cap_geometry(&authored_model()).unwrap();
+    assert!(crate::render::fx::stock_shots::missing_attributes(&geo.mesh).is_empty());
 }

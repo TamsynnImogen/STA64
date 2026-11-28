@@ -394,6 +394,7 @@ fn sync_bubbles(
     link: Res<SimLink>,
     palette: SelectionPalette,
     mut pulses: ResMut<Pulses>,
+    warp: crate::render::fx::warp_flash::WarpStretch,
     mut mats: ResMut<Assets<BubbleMaterial>>,
     units: Query<(Option<&ModelBounds>, Option<&SelectRadius>, Option<&MarkColour>, Option<&TeamColour>, Option<&HullShare>)>,
     mut existing: Query<(Entity, &Bubble, &MeshMaterial3d<BubbleMaterial>, &mut Mesh3d, &mut Transform)>,
@@ -420,7 +421,10 @@ fn sync_bubbles(
             });
             let l = look(selected, hovered, true, relation(view, link.player(), unit.owner), team, pulse(h, *phase));
             let bounds = bounds.copied().unwrap_or_else(|| ModelBounds::fallback(radius.map_or(super::DEFAULT_RADIUS, |r| r.0)));
-            let scale = inner_scale(shield_semi_axes(bounds), art.radius);
+            let mut scale = inner_scale(shield_semi_axes(bounds), art.radius);
+            // A craft in warp: the bubble stretches with the hull along its motion (read from the executable, static;
+            // INTERIM: the hull's uniform stretch).
+            scale.z *= warp.of_stock(id);
             if let Some(c) = l.inner {
                 want.insert((id, Pass::Inner), (root, scale, c));
             }

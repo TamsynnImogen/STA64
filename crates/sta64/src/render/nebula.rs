@@ -119,6 +119,11 @@ pub struct NebulaMaterial {
     /// The Key's shadow map, read when `params.shp.x` says there is one.
     #[texture(5)]
     pub shadow: Option<Handle<Image>>,
+    /// The light weight of each place of the envelope (R8, the envelope's own rectangle and size; 1 is 255): the
+    /// factor on the light the gas emits there. A nebula out of sight keeps its shape and is dimmed through this
+    /// (#1146, `gate_fields`). `None` (the fallback image is white) is 1 everywhere.
+    #[texture(6)]
+    pub light: Option<Handle<Image>>,
 }
 
 impl Material for NebulaMaterial {
@@ -182,6 +187,23 @@ pub struct NebulaField {
     lightning: Lightning,
     /// The wall clock at the last update, for the lightning's step.
     last: f32,
+    /// The clock the gas stands at while no nebula of the class is in sight (#1146): the flow, the core's pulse, the
+    /// ring's colours and the swirl are functions of the absolute time, so a still copy is drawn at this time and
+    /// they take the clock's again when one is in sight. `None` while any nebula of the class is. INTERIM, per
+    /// class and not per object: the field is one box and one material for the whole class, and its phases are
+    /// uniforms, so while one nebula of the class is in sight the out-of-sight ones of the same class animate with
+    /// it (a visible difference from the rule "an out-of-sight copy is still"). A per-nebula phase would need the
+    /// shader to know which nebula a sample belongs to (a change of the envelope's encoding and of `nebula.wesl`)
+    /// or a material per nebula, and a write per nebula per frame (#1237).
+    still: Option<f32>,
+    /// What the last write of the material's per-frame values was made from (camera, key light, steps, near), so a
+    /// field that stands still and sees the same view writes nothing (#1237).
+    view: Option<[f32; 12]>,
+}
+
+/// The time the gas is drawn at: the clock, or the moment it stopped (see [`NebulaField::still`]).
+fn gas_time(still: Option<f32>, now: f32) -> f32 {
+    still.unwrap_or(now)
 }
 
 /// A field whose box the low-resolution path stands in for (`nebula_lowres.rs`).
@@ -892,8 +914,9 @@ fn poll_noise(mut nv: ResMut<NoiseVolume>, mut images: ResMut<Assets<Image>>, mu
 /// A nebula of a class's field that the local player's side has never had in sight is not drawn
 /// (#1146; rule and grade: `render::fog_objects`). The field is one box for the whole class, so the
 /// nebula is cleared from the envelope the gas is marched through, and the lightning strikes among
-/// the nebulae drawn only. A nebula in sight, or remembered (out-of-sight looks are a later step),
-/// is as before. A centre that is no region of the map is always drawn, as is every nebula when there is
+/// the nebulae in sight only. A nebula in sight is as before; one seen before and out of sight keeps its shape
+/// (cover and reach as in sight) and its emitted light is scaled through the light weights texture (inferred
+/// half of the displayed brightness, interim; `fog_objects::ghost`). A centre that is no region of the map is always drawn, as is every nebula when there is
 /// no fog grid (the states then read as in sight). Runs only when the states changed or a field is new,
 /// and finds each centre's region once.
 fn gate_fields(
@@ -913,8 +936,8 @@ fn gate_fields(
             let found = f.centres.iter().map(|c| regions.find(sta_content::RegionKind::Nebula, c[0], -c[2], REGION_MATCH).map(|r| r.id)).collect();
             f.region = Some(found);
         }
-        // 1 in sight, the out-of-sight factor for a nebula seen before (a still, thinner copy; interim, see
-        // `fog_objects::ghost::NEBULA`), 0 never seen.
+        // 1 in sight, the out-of-sight factor (displayed, interim, see `fog_objects::ghost::NEBULA`) for a nebula
+        // seen before, 0 never seen.
         let shown: Vec<f32> = f
             .region
             .iter()
@@ -928,8 +951,18 @@ fn gate_fields(
         if shown == f.shown {
             continue;
         }
-        let Some(handle) = materials.get(&f.material).and_then(|m| m.envelope.clone()) else { continue };
-        let env = sta_surface::nebula::envelope_weighted(&f.recipe, f.radius, &f.centres, &shown);
+        // The envelope hides the never seen and is required; the weight texture only dims, so a material without
+        // one (a test, a stand-in) still has its never-seen nebulae hidden.
+        let Some((handle, light)) = materials.get(&f.material).and_then(|m| Some((m.envelope.clone()?, m.light.clone()))) else { continue };
+        // The shape: every nebula seen at all is in the envelope whole (cover and reach as in sight); only the
+        // never seen are left out. The light: a nebula out of sight is dimmed by the weight texture, which holds
+        // the linear factor of the displayed `shown` (see `fog_objects::ghost::nebula_gas_linear`).
+        let mask: Vec<bool> = shown.iter().map(|s| *s > 0.0).collect();
+        let weights: Vec<f32> = shown.iter().map(|s| if *s >= 1.0 { 1.0 } else { crate::render::fog_objects::ghost::nebula_gas_linear() }).collect();
+        let env = sta_surface::nebula::envelope_masked(&f.recipe, f.radius, &f.centres, &mask);
+        if let Some(mut img) = light.and_then(|l| images.get_mut(&l)) {
+            img.data = Some(sta_surface::nebula::light_weights(&f.recipe, f.radius, &f.centres, &mask, &weights));
+        }
         let Some(mut img) = images.get_mut(&handle) else { continue };
         img.data = Some(env.pixels);
         // The lightning strikes among the nebulae in sight only: a copy out of sight does not animate.
@@ -1024,11 +1057,25 @@ pub fn spawn_field(
         sh2: Vec4::ZERO,
         shp: Vec4::ZERO,
     };
+    // The light weights: 1 everywhere until `gate_fields` finds a nebula out of sight; kept in the main world too.
+    let mut light_img = Image::new(
+        Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        vec![255; (env.w * env.h) as usize],
+        TextureFormat::R8Unorm,
+        RenderAssetUsages::default(),
+    );
+    light_img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        ..ImageSamplerDescriptor::linear()
+    });
     let material = materials.add(NebulaMaterial {
         params,
         noise: noise.image.clone(),
         envelope: Some(images.add(env_img)),
         shadow: None,
+        light: Some(images.add(light_img)),
     });
     let centre = (lo + hi) * 0.5;
     let size = hi - lo;
@@ -1051,6 +1098,8 @@ pub fn spawn_field(
             lit: pos.to_vec(),
             lightning: Lightning::new(seed),
             last: -1.0,
+            still: None,
+            view: None,
         },
         Visibility::default(),
     )).id()
@@ -1105,6 +1154,27 @@ fn update(
             commands.entity(entity).remove::<(LowResGas, RenderLayers)>();
         }
         let f = &mut *f;
+        // A class with no nebula in sight is a still copy (#1146; rule: read from the executable, static for the
+        // tumble and the lights; whether the colour pulse and the gas flow stop is not established, so they stop
+        // too: interim).
+        let stopped = f.shown.iter().all(|s| *s < 1.0);
+        match (stopped, f.still) {
+            (true, None) => f.still = Some(t),
+            (false, Some(_)) => {
+                f.still = None;
+                // The lightning's step after the stop is the first one again.
+                f.last = -1.0;
+            }
+            _ => {}
+        }
+        // A field at rest that sees what it last wrote draws what it wrote: no write, no upload (#1237).
+        let view = [
+            cam.translation().x, cam.translation().y, cam.translation().z, fwd.x, fwd.y, fwd.z, key.x, key.y, key.z, near, steps as f32, 0.0,
+        ];
+        if f.still.is_some() && f.view == Some(view) && !shadow.as_ref().is_some_and(|s| s.is_changed()) {
+            continue;
+        }
+        f.view = f.still.map(|_| view);
         let Some(mut m) = materials.get_mut(&f.material) else { continue };
         if let Some(s) = shadow.as_deref()
             && m.shadow.as_ref() != Some(&s.image)
@@ -1122,7 +1192,8 @@ fn update(
         // Ships' shadows through the gas (RND-15).
         apply_shadow(p, shadow.as_deref());
         p.scat = Vec4::new(1.0 + g * g, 2.0 * g, steps as f32, 0.0);
-        p.flow.x = (t * r.flow_speed) % 100.0;
+        let gt = gas_time(f.still, t);
+        p.flow.x = (gt * r.flow_speed) % 100.0;
         // Edge-on dimming: a long path through a thin field adds up; dim it unless
         // the gas's own opacity already does.
         let rf = 2.8 * f.reach;
@@ -1130,13 +1201,14 @@ fn update(
         let s = if path > rf && r.opacity <= 0.0 { (rf / path).powf(r.edge_dim) } else { 1.0 };
         p.vert.w = s / f.reach;
         // Motion on the clock: the core's pulse, the ring's colours, the swirl's circles.
-        p.pulse.y = r.pulse_phase(t);
-        p.ring.w = r.ring_phase(t);
-        let [s1, s2] = r.swirl_phases(t);
+        p.pulse.y = r.pulse_phase(gt);
+        p.ring.w = r.ring_phase(gt);
+        let [s1, s2] = r.swirl_phases(gt);
         p.swirl.z = s1;
         p.swirl.w = s2;
-        // Lightning: the flashes now (none on the first frame or after a long gap).
-        if r.lightning > 0.0 {
+        // Lightning: the flashes now (none on the first frame or after a long gap). A still copy keeps the flashes
+        // it had and strikes no more.
+        if r.lightning > 0.0 && f.still.is_none() {
             let dt = if f.last >= 0.0 && t > f.last { t - f.last } else { 0.0 };
             f.last = t;
             let lit = std::mem::take(&mut f.lit);
@@ -1149,6 +1221,10 @@ fn update(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "nebula_ghost_gpu.rs"]
+mod ghost_gpu;
 
 #[cfg(test)]
 mod tests {
@@ -1172,7 +1248,9 @@ mod tests {
         app.add_plugins(MinimalPlugins).init_resource::<Assets<NebulaMaterial>>().init_resource::<Assets<Image>>();
         let image = Image::new(Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 }, TextureDimension::D2, env.pixels.clone(), TextureFormat::Rgba8Unorm, RenderAssetUsages::default());
         let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
-        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: Some(handle.clone()), shadow: None });
+        let light_image = Image::new(Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 }, TextureDimension::D2, vec![255; (env.w * env.h) as usize], TextureFormat::R8Unorm, RenderAssetUsages::default());
+        let light = app.world_mut().resource_mut::<Assets<Image>>().add(light_image);
+        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: Some(handle.clone()), shadow: None, light: Some(light.clone()) });
         let field = app
             .world_mut()
             .spawn(NebulaField {
@@ -1188,6 +1266,8 @@ mod tests {
                 lit: centres.clone(),
                 lightning: Lightning::new(1),
                 last: -1.0,
+                still: None,
+                view: None,
             })
             .id();
         app.insert_resource(FogRegions::of_map(&map))
@@ -1224,14 +1304,147 @@ mod tests {
         let ghost = crate::render::fog_objects::ghost::NEBULA;
         assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![0.0, ghost]);
         assert!(app.world().get::<NebulaField>(field).unwrap().lit.is_empty(), "no lightning in a copy out of sight");
-        let want = sta_surface::nebula::envelope_weighted(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[0.0, ghost]);
+        // The shape is the whole envelope of the nebulae seen (the same bytes as in sight for the second one's
+        // places: cover and reach unchanged, the first is still left out); the dimming is in the light weights.
+        let want = sta_surface::nebula::envelope_masked(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[false, true]);
         assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), want.pixels);
-        // Everything in sight again: the envelope is the full one.
+        let factor = crate::render::fog_objects::ghost::nebula_gas_linear();
+        let weights = sta_surface::nebula::light_weights(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[false, true], &[1.0, factor]);
+        let bytes = app.world().resource::<Assets<Image>>().get(&light).unwrap().data.clone().unwrap();
+        assert_eq!(bytes, weights);
+        assert!(bytes.iter().any(|b| *b < 255) && bytes.contains(&255), "the copy is dimmed where it is and nowhere else");
+        assert!((factor - 0.2176).abs() < 1e-3, "half of the displayed value is about 0.218 of the linear light: {factor}");
+        // Everything in sight again: the envelope is the full one and the weights are white.
         let all = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]).lifted(true, true);
         app.insert_resource(crate::render::fog::FogState { grid: all, updates: 3 });
         app.update();
         assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![1.0, 1.0]);
         assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), env.pixels);
+        assert!(app.world().resource::<Assets<Image>>().get(&light).unwrap().data.clone().unwrap().iter().all(|b| *b == 255));
+    }
+
+    /// Review L1: a material with no weight texture still has its never-seen nebulae cleared from the envelope.
+    #[test]
+    fn a_material_without_a_weight_texture_still_hides_the_never_seen() {
+        use crate::render::fog_objects::{FogRegions, RegionSights, update_region_sights};
+        use sta_content::{MapDef, Region, RegionKind, RegionShape};
+        let v = |x: i32, z: i32| sta_sim::Vec3 { x: sta_sim::Fixed::from_int(x), y: sta_sim::Fixed::ZERO, z: sta_sim::Fixed::from_int(z) };
+        let mut map = MapDef::empty();
+        map.regions.push(Region { kind: RegionKind::Nebula, odf: "n".into(), shape: RegionShape::Sphere { centre: v(0, 100), radius: sta_sim::Fixed::from_int(300) } });
+        let recipe = NebulaRecipe::parse("[Nebula]\nExtent=1.3\nHeight=3\n");
+        let centres = vec![[0.0, 0.0, -100.0]];
+        let env = sta_surface::nebula::envelope(&recipe, 300.0, &centres);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<NebulaMaterial>>().init_resource::<Assets<Image>>();
+        let image = Image::new(Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 }, TextureDimension::D2, env.pixels.clone(), TextureFormat::Rgba8Unorm, RenderAssetUsages::default());
+        let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: Some(handle.clone()), shadow: None, light: None });
+        app.world_mut().spawn(NebulaField {
+            material,
+            recipe: recipe.clone(),
+            reach: 390.0,
+            span: 1.0,
+            dome: 1.0,
+            centres: centres.clone(),
+            radius: 300.0,
+            shown: vec![1.0],
+            region: None,
+            lit: centres.clone(),
+            lightning: Lightning::new(1),
+            last: -1.0,
+            still: None,
+            view: None,
+        });
+        app.insert_resource(FogRegions::of_map(&map))
+            .init_resource::<RegionSights>()
+            .insert_resource(crate::render::units::LocalPlayer(Some(sta_sim::PlayerId(1))));
+        app.add_systems(Update, (update_region_sights, gate_fields).chain());
+        // A grid that has seen nothing: the nebula is never seen and is cleared from the envelope.
+        app.insert_resource(crate::render::fog::FogState { grid: crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]), updates: 1 });
+        app.update();
+        app.update();
+        let want = sta_surface::nebula::envelope_masked(&recipe, 300.0, &centres, &[false]);
+        assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), want.pixels);
+    }
+
+    /// #1146: the gas of a class with no nebula in sight stands at the time it stopped (flow, pulse, ring, swirl),
+    /// writes nothing while the view is the same, and takes the clock's time again when one is in sight; in sight
+    /// every value is the clock's, as before.
+    #[test]
+    fn the_gas_of_a_class_out_of_sight_stands_still_and_writes_nothing() {
+        let recipe = NebulaRecipe::parse("[Nebula]\nFlowSpeed=0.5\nPulseSpeed=0.5\nRingCycle=3\nSwirlPeriod=20\n");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<NebulaMaterial>>().init_resource::<crate::clock::AnimClock>();
+        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: None, shadow: None, light: None });
+        app.world_mut().spawn((Camera3d::default(), Camera::default(), Projection::Perspective(PerspectiveProjection::default()), GlobalTransform::default()));
+        let centres = vec![[0.0, 0.0, 0.0]];
+        let field = app
+            .world_mut()
+            .spawn((
+                NebulaField {
+                    material: material.clone(),
+                    recipe: recipe.clone(),
+                    reach: 390.0,
+                    span: 1.0,
+                    dome: 1.0,
+                    centres: centres.clone(),
+                    radius: 300.0,
+                    shown: vec![1.0],
+                    region: None,
+                    lit: centres,
+                    lightning: Lightning::new(1),
+                    last: -1.0,
+                    still: None,
+                    view: None,
+                },
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        app.add_systems(Update, update);
+        let step = |app: &mut App, dt: f64| {
+            app.world_mut().resource_mut::<crate::clock::AnimClock>().advance_idle(dt);
+            app.update();
+        };
+        let phases = |app: &App| {
+            let p = app.world().resource::<Assets<NebulaMaterial>>().get(&material).unwrap().params;
+            (p.flow.x, p.pulse.y, p.ring.w, p.swirl.z, p.swirl.w)
+        };
+        let at = |t: f32| (
+            (t * recipe.flow_speed) % 100.0,
+            recipe.pulse_phase(t),
+            recipe.ring_phase(t),
+            recipe.swirl_phases(t)[0],
+            recipe.swirl_phases(t)[1],
+        );
+        // In sight: the clock's time, as before.
+        step(&mut app, 1.0);
+        step(&mut app, 1.0);
+        assert_eq!(phases(&app), at(2.0), "in sight the phases are the clock's");
+        assert!(app.world().get::<NebulaField>(field).unwrap().still.is_none());
+        // Out of sight (seen before): the phases stand at the time of the first frame out of sight.
+        app.world_mut().get_mut::<NebulaField>(field).unwrap().shown = vec![crate::render::fog_objects::ghost::NEBULA];
+        step(&mut app, 1.0);
+        let stopped = phases(&app);
+        assert_eq!(stopped, at(3.0));
+        step(&mut app, 5.0);
+        step(&mut app, 5.0);
+        assert_eq!(phases(&app), stopped, "no phase advances out of sight");
+        // Same view, nothing to write: a marker left in the material stays.
+        let before = app.world().resource::<Assets<NebulaMaterial>>().get(&material).unwrap().params.eye;
+        app.world_mut().resource_mut::<Assets<NebulaMaterial>>().get_mut(&material).unwrap().params.eye = Vec4::splat(7.0);
+        step(&mut app, 1.0);
+        assert_eq!(app.world().resource::<Assets<NebulaMaterial>>().get(&material).unwrap().params.eye, Vec4::splat(7.0), "a still field with the same view writes nothing (was {before:?})");
+        // A moved camera is a new view: written, the phases still standing.
+        let cam = app.world_mut().query_filtered::<Entity, With<Camera3d>>().single(app.world()).unwrap();
+        app.world_mut().entity_mut(cam).insert(GlobalTransform::from(Transform::from_xyz(10.0, 20.0, 30.0)));
+        step(&mut app, 1.0);
+        assert_eq!(app.world().resource::<Assets<NebulaMaterial>>().get(&material).unwrap().params.eye.truncate(), Vec3::new(10.0, 20.0, 30.0));
+        assert_eq!(phases(&app), stopped);
+        // In sight again: the clock's time (the sprites' colour channels take absolute time too).
+        app.world_mut().get_mut::<NebulaField>(field).unwrap().shown = vec![1.0];
+        step(&mut app, 1.0);
+        let now = app.world().resource::<crate::clock::AnimClock>().wall() as f32;
+        assert_eq!(phases(&app), at(now));
     }
 
     /// The per-pair form the occlusion had before the discs were computed once.

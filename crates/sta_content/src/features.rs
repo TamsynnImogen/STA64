@@ -157,11 +157,51 @@ pub struct Features {
     pub crew_weapon_delay: bool,
     /// Stock Armada II: an empty shield pool waits `shieldDelay` after its last hit.
     pub shield_zero_hold: bool,
+    /// A beam applies its damage on the tick its life (`WeaponDef::duration`) ends, not on
+    /// the tick it fires, and loses it in the cases `sta_sim::combat::weapons` lists (issue
+    /// #1068; the timing is measured on stock Armada II and read from its executable,
+    /// static). On for stock Armada II; off elsewhere (Fleet Operations and Armada I are not
+    /// checked): a beam hits on the tick it fires.
+    pub beam_damage_at_end: bool,
+    /// A craft may enter or stay at warp only while its engines system has its share of hit
+    /// points and the tick's speed ceiling lies above its impulse speed
+    /// (`sta_sim::movement::approach`, issue #1102; read from the executable, static, not
+    /// measured). On for stock Armada II and Fleet Operations 4, the two profiles whose
+    /// executable the reading covers; off elsewhere until one is read or decided.
+    pub warp_gates: bool,
+    /// A craft or station whose hull reaches zero from hits stays in the world for a dying
+    /// phase and is removed when it ends, by the rules `sta_sim::combat::dying` lists (issue
+    /// #1100; measured on stock Armada II and read from its executable, static). On for stock
+    /// Armada II; off elsewhere (Armada I and Fleet Operations are not checked): such a unit
+    /// is removed on the tick its hull reaches zero.
+    pub dying_phase: bool,
+    /// A craft whose engines go offline coasts on its heading with decaying speed instead of
+    /// stopping at once, neither turns nor moves under its own power, keeps its order and
+    /// carries it out when the engines return (`sta_sim::kinematics`, issue #1031; measured
+    /// on stock Armada II with engines switched off by a script). On for stock Armada II;
+    /// off elsewhere until checked: the craft stops where it is and loses its order.
+    pub engines_off_drift: bool,
+    /// The shape of a craft's way into and out of warp (`sta_sim::kinematics`, issue #1102
+    /// part 2): no speed ramp. Entering, the craft holds the speed it had, is carried forward
+    /// by an extra shift over the later half of a short ramp and then flies at warp speed;
+    /// leaving is the mirror image. At warp it keeps steering with its normal controller and
+    /// follows a new warp order without dropping out. Measured on stock Armada II. On for
+    /// stock Armada II; off elsewhere until compared: speed ramps both ways, and a craft at
+    /// warp flies straight and brakes to turn.
+    pub warp_shape: bool,
+    /// A torpedo of the classes in `sta_sim::combat::weapons` flies as the original's does
+    /// (issue #1068): it has a life (`lifeSpan`) and vanishes without effect when it runs out,
+    /// flies straight on its heading and turns toward its target at a capped rate while its
+    /// `seekTime` runs, then heads for the target each tick, keeps flying straight when its
+    /// target is gone. Measured and read from the executable (static) on stock Armada II. On
+    /// for stock Armada II; off elsewhere until compared (the mod-family engines): a shot
+    /// homes on its target's current position every tick and has no life.
+    pub ordnance_flight: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 42] {
+    pub(crate) fn bits(&self) -> [bool; 48] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -205,6 +245,12 @@ impl Features {
             self.weapon_cloak_fire,
             self.crew_weapon_delay,
             self.shield_zero_hold,
+            self.beam_damage_at_end,
+            self.warp_gates,
+            self.dying_phase,
+            self.engines_off_drift,
+            self.warp_shape,
+            self.ordnance_flight,
         ]
     }
 }

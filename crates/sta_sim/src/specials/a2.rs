@@ -846,7 +846,7 @@ impl Sim {
                     *energy = (*energy - amount).max(Fixed::ZERO);
                 }
             }
-            // Type 10 dispatches through Craft::DamageHull.
+            // Type 10 takes the same hull-damage path as type 0 (read from the executable, static).
             0 | 10 if !self.specials.a2_invulnerable(id, self.tick) => {
                 let u = self.units.get_mut(id)?;
                 let floor = if u.flags.contains(UnitFlags::IMMORTAL) {

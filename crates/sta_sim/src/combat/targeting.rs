@@ -177,6 +177,7 @@ pub(crate) fn candidate(
     t.id != u.id
         && dip.is_enemy(u.owner, perceived)
         && t.hull[1] > Fixed::ZERO
+        && !t.flags.contains(UnitFlags::DYING)
         && !(seen.is_none() && t.flags.contains(UnitFlags::CLOAKED) && !dip.confirmed_ally(t.owner, u.owner))
         && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
         && !db.unit(t.def).is_some_and(|d| d.invalid_as_target)
@@ -210,7 +211,8 @@ impl Sim {
                 && !self.production.is_welding(u.id)
                 && !self.economy.is_mining(u.id)
                 && !u.flags.contains(UnitFlags::WEAPONS_OFF)
-                && !u.flags.contains(UnitFlags::CLOAKED);
+                && !u.flags.contains(UnitFlags::CLOAKED)
+                && !u.flags.contains(UnitFlags::DYING);
             if !idle || (f.assist_high_autonomy_only && self.autonomy.levels(u.id)[0] < 2) {
                 continue;
             }

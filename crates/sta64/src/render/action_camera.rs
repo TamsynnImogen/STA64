@@ -23,6 +23,9 @@
 //!   keeps its last pose.
 //! - The framing, a fixed oblique angle at a distance that fits the unit's selection radius, is
 //!   **not measured** either, and so is how the original moves the camera.
+//! - **Armada II's window does not use these rules** (they were taken for Armada I's): with Armada II content its
+//!   subject choice and framing are the shot director's ([`a2`], `render::shot_director`, read from the executable,
+//!   static, nothing measured). Everything else here (the camera pair, the picture, the layers, the gates) is shared.
 //! - Selection rings, hull and shield bars (the [`Overlay`] pieces), the strategic view's height bars (gizmos)
 //!   and the map grid (`render::map_grid`) are on [`OVERLAY_LAYER`], which only the main camera draws: seen in
 //!   one frame that the original's window has none of them.
@@ -35,6 +38,8 @@
 //!   own at the scene camera's place (the sky camera sits at the map camera's, so it must not draw
 //!   them). What the original's window does with the shroud and fog is **not established**; this
 //!   keeps today's picture (grade: not measured).
+
+pub mod a2;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -215,12 +220,21 @@ impl Plugin for ActionCameraPlugin {
             .init_resource::<ActionCandidates>()
             .init_resource::<ActionScene>()
             .init_resource::<FightLog>()
+            .init_resource::<a2::A2State>()
             .add_message::<SimMsg>()
             .add_systems(Startup, make_view)
             .add_systems(PostUpdate, grid_layer.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>))
             .add_systems(
                 PostUpdate,
-                (layer_overlays, (log_fights, gather.run_if(picture_wanted)).chain().run_if(resource_exists::<SimLink>), subject, sync_cameras)
+                (
+                    layer_overlays,
+                    (log_fights, gather.run_if(picture_wanted).run_if(not(a2::a2_active))).chain().run_if(resource_exists::<SimLink>),
+                    subject.run_if(not(a2::a2_active)),
+                    // Armada II's window: the shot director, only while its picture can be seen.
+                    (a2::track, a2::shots, a2::choose).chain().run_if(a2::a2_active).run_if(picture_wanted).run_if(resource_exists::<SimLink>),
+                    a2::forget.run_if(a2::a2_active),
+                    sync_cameras,
+                )
                     .chain()
                     .after(bevy::transform::TransformSystems::Propagate)
                     .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
@@ -353,6 +367,7 @@ fn sync_cameras(
     bench: Option<Res<ActionBench>>,
     menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
     movies: Option<Res<crate::media::Movies>>,
+    (content, a2_state): (Option<Res<ContentRes>>, Option<Res<a2::A2State>>),
 ) {
     // Only while the picture can be seen: a hidden match UI (loading, a cineractive) costs no passes.
     // Not drawn while the in-game menu is over it or a mission clip plays in the panel: nobody sees it.
@@ -388,7 +403,14 @@ fn sync_cameras(
         img.resize(bevy::render::render_resource::Extent3d { width: want.x, height: want.y, depth_or_array_layers: 1 });
     }
     let target = subject.0.and_then(|id| entities.as_ref()?.0.get(&id)).and_then(|&e| bodies.get(e).ok());
-    let mut pose = target.map(|(gt, radius)| frame(gt.translation(), radius.map_or(20.0, |r| r.0)));
+    // Armada II content: the shot director's pose (none until it has a shot: the camera keeps its last one);
+    // otherwise the Armada I window's fixed oblique frame.
+    let a2_on = content.is_some_and(|c| c.0.profile() == sta_content::Profile::Sta2Classic);
+    let mut pose = if a2_on {
+        a2_state.and_then(|s| s.pose)
+    } else {
+        target.map(|(gt, radius)| frame(gt.translation(), radius.map_or(20.0, |r| r.0)))
+    };
     if pose.is_none() && bench.is_some() {
         // Measurement only: look at the ground point the map camera looks at.
         let f = main_tf.forward().as_vec3();
@@ -472,6 +494,18 @@ mod tests {
     }
     fn cands(fight: &[u32], build: &[u32], idle: &[u32]) -> ActionCandidates {
         ActionCandidates { fight: ids(fight), build: ids(build), idle: ids(idle) }
+    }
+
+    /// The cameras and the candidate gathering run only while a picture can be seen: a hidden picture (the Armada II
+    /// "Cinematic window" off) costs no second render.
+    #[test]
+    fn a_hidden_picture_wants_no_cameras_and_a_visible_one_does() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let picture = world.spawn((ActionPicture, InheritedVisibility::VISIBLE)).id();
+        assert!(world.run_system_once(picture_wanted).unwrap());
+        world.entity_mut(picture).insert(InheritedVisibility::HIDDEN);
+        assert!(!world.run_system_once(picture_wanted).unwrap());
     }
 
     #[test]

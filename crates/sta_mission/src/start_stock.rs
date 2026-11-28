@@ -70,9 +70,24 @@ fn whole(v: f32) -> i32 {
 }
 
 /// The start values of the map `bzn` (`a2_fed01.bzn`) of `vfs`, one per seat in the table; empty when
-/// the map cannot be read or carries no table.
+/// the map carries no table or is not there. A map that is there and cannot be read is refused: see
+/// [`from_read`].
 pub fn read_start_stock(vfs: &Vfs, bzn: &str) -> StartStock {
-    let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return StartStock::default() };
+    from_read(bzn, vfs.read(&format!("bzn/{bzn}")))
+}
+
+/// [`read_start_stock`] of what reading the map gave. A map without a team table is not the same as a
+/// map that could not be read: the first takes the install header's start ([`StartStock::or_header`]),
+/// the second is refused, so nothing is granted and the runtime lists it once as an unsupported use.
+/// Granting the header's values there would give the seats a start the map may not say. A map that is
+/// not in the file system at all (`None`) is treated as before, like a map without a table: a host may
+/// run a mission on a map it built itself.
+pub fn from_read(bzn: &str, read: Option<std::io::Result<Vec<u8>>>) -> StartStock {
+    let bytes = match read {
+        Some(Ok(bytes)) => bytes,
+        Some(Err(e)) => return StartStock { seats: Vec::new(), refused: Some(format!("map {bzn} could not be read ({}): no start values", e.kind())) },
+        None => return StartStock::default(),
+    };
     match sta_bzn::team_table(&bytes) {
         sta_bzn::TeamTable::Found(t) => StartStock { seats: from_table(&t), refused: None },
         sta_bzn::TeamTable::Refused(runs) => StartStock { seats: Vec::new(), refused: Some(format!("map team table refused (block runs {runs:?}): no start values")) },
@@ -123,8 +138,8 @@ pub fn from_a1_table(table: &[sta_bzn::a1::A1TeamStart]) -> Vec<SeatStart> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StartStock {
     pub seats: Vec<SeatStart>,
-    /// The map holds table-shaped records that are not exactly one table of eight blocks: nothing was
-    /// granted, and the runtime lists this once as an unsupported use.
+    /// The map holds table-shaped records that are not exactly one table of eight blocks, or the map
+    /// could not be read at all: nothing was granted, and the runtime lists this once as an unsupported use.
     pub refused: Option<String>,
 }
 

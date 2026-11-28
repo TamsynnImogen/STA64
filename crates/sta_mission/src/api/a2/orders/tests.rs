@@ -129,9 +129,9 @@ fn goto_a_path_moves_through_its_points_in_order_as_the_owner() {
     assert_eq!(
         orders(&commands),
         vec![
-            (PlayerId(0), Order::Move { units: vec![a], to: at(10), queue: false }),
-            (PlayerId(0), Order::Move { units: vec![a], to: at(20), queue: true }),
-            (PlayerId(0), Order::Move { units: vec![a], to: at(30), queue: true }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(10), queue: false, mode: None }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(20), queue: true, mode: None }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(30), queue: true, mode: None }),
         ]
     );
 }
@@ -144,8 +144,8 @@ fn goto_an_object_moves_to_its_position_and_ignores_the_trailing_int() {
     assert_eq!(
         orders(&commands),
         vec![
-            (PlayerId(0), Order::Move { units: vec![a], to: at(100), queue: false }),
-            (PlayerId(0), Order::Move { units: vec![a], to: at(300), queue: false }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(100), queue: false, mode: None }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(300), queue: false, mode: None }),
         ]
     );
     assert!(rt.unsupported().is_empty());
@@ -160,8 +160,8 @@ fn goto_with_the_warp_flag_is_a_warp_move_on_the_first_leg() {
         orders(&commands),
         vec![
             (PlayerId(0), Order::MoveWarp { units: vec![a], to: at(10), queue: false }),
-            (PlayerId(0), Order::Move { units: vec![a], to: at(20), queue: true }),
-            (PlayerId(0), Order::Move { units: vec![a], to: at(30), queue: true }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(20), queue: true, mode: None }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(30), queue: true, mode: None }),
             (PlayerId(0), Order::MoveWarp { units: vec![a], to: at(100), queue: false }),
         ]
     );
@@ -547,7 +547,7 @@ fn command_calls_map_the_supported_commands_to_orders() {
         orders(&commands),
         vec![
             (PlayerId(0), Order::Attack { units: vec![a], target: b }),
-            (PlayerId(0), Order::Move { units: vec![a], to: at(100), queue: false }),
+            (PlayerId(0), Order::Move { units: vec![a], to: at(100), queue: false, mode: None }),
             (PlayerId(0), Order::Mine { units: vec![a], node: s.ids[2] }),
             (PlayerId(0), build),
         ]
@@ -686,7 +686,7 @@ fn a_move_fleet_moves_its_members_to_the_destination_and_warps_unless_told_not_t
         ]
     );
     let (_, commands) = run(&s, "f = A2.CreateNewMoveFleet(); f:TryToWarp(false); f:SetStayInFormationWhileMoving(true); f:SetFormation(2); f:AddShip(a); f:SetFleetDestination(Vector(500, 0, 0))");
-    assert_eq!(orders(&commands), vec![(PlayerId(0), Order::Move { units: vec![a], to: at(500), queue: false })]);
+    assert_eq!(orders(&commands), vec![(PlayerId(0), Order::Move { units: vec![a], to: at(500), queue: false, mode: None })]);
 }
 
 #[test]

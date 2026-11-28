@@ -63,7 +63,7 @@ fn a_moving_craft_fires_at_enemies_in_range_without_leaving_its_course() {
         let db = Arc::clone(sim.content.as_ref().unwrap());
         let s = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
         sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(250, 1000), AHEAD).unwrap();
-        let mv = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![s], to: v(0, 2000), queue: false }) };
+        let mv = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![s], to: v(0, 2000), queue: false, mode: None }) };
         assert_eq!(targets_of_shooter(&mut sim, vec![mv], 30 * 25), [EntityId(2)]);
         let at = sim.unit(s).unwrap().pos;
         assert!((at.z - Fixed::from_int(2000)).abs() < Fixed::ONE && at.x == Fixed::ZERO, "{:?}", at);
@@ -246,6 +246,15 @@ fn engagement_memory_is_digested_snapshotted_and_forgotten_after_a_second() {
         let u = sim.units.get_mut(id).unwrap();
         u.flags = u.flags.with(crate::view::UnitFlags::WEAPONS_OFF, true);
     }
+    // A beam fired before the weapons went off still lands when its life ends
+    // (`beam_damage_at_end`) and is remembered from then: let those end first.
+    for _ in 0..30 * 5 {
+        if sim.weapons.beams_in_flight() == 0 {
+            break;
+        }
+        WorldSource::step(&mut sim, &[]);
+    }
+    assert_eq!(sim.weapons.beams_in_flight(), 0);
     for _ in 0..31 {
         WorldSource::step(&mut sim, &[]);
     }
@@ -323,7 +332,7 @@ fn a_craft_that_may_not_attack_keeps_its_move_order_and_an_explicit_attack_order
     let db = Arc::clone(sim.content.as_ref().unwrap());
     let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let e = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(2), v(300, 0), AHEAD).unwrap();
-    let mv = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![c], to: v(0, 1500), queue: false }) };
+    let mv = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![c], to: v(0, 1500), queue: false, mode: None }) };
     WorldSource::step(&mut sim, &[mv]);
     for _ in 0..30 * 40 {
         WorldSource::step(&mut sim, &[]);
@@ -351,7 +360,7 @@ fn a_craft_with_only_tools_never_fires_idle_or_moving() {
     let db = Arc::clone(sim.content.as_ref().unwrap());
     let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let e = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, 200), AHEAD).unwrap();
-    let mv = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![c], to: v(0, 900), queue: false }) };
+    let mv = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![c], to: v(0, 900), queue: false, mode: None }) };
     let mut shots = 0;
     for i in 0..30 * 30 {
         let cmds = if i == 0 { vec![mv.clone()] } else { Vec::new() };

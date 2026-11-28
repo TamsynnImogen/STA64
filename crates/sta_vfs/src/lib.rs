@@ -42,6 +42,12 @@ pub enum VfsError {
     NoDataDir(PathBuf),
     #[error("mod {0:?} not found under Data/Mods")]
     ModNotFound(String),
+    /// A mod name that is not one folder name under `Data/Mods` (see [`single_folder_name`]).
+    #[error("mod name {name:?} {asked_by} is not a single folder name under Data/Mods (no path parts, `.`, `..`, separators or drive, no dot or space at the end)")]
+    BadModName { name: String, asked_by: String },
+    /// A parent mod folder that resolves to somewhere other than directly under `Data/Mods`.
+    #[error("mod {name:?} {asked_by} is a link to {target}, which is not a folder directly under Data/Mods; a parent mod must be in Data/Mods itself")]
+    ModOutsideMods { name: String, asked_by: String, target: PathBuf },
     #[error("ParentMod cycle: {0}")]
     ParentCycle(String),
     #[error("mod {name:?} needs STA64 {requirement}, this is {have}")]
@@ -408,16 +414,29 @@ fn walk_chain(data: &Path, name: &str, stop_at_standalone: bool) -> Result<Vec<C
     let mut chain: Vec<ChainMod> = Vec::new();
     let mut seen = HashSet::new();
     let mut current = Some(name.to_owned());
+    // Who asked for the name being looked up: the player's own choice for the first, the child mod's `info.ini`
+    // for a parent entry.
+    let mut asked_by = "(given as the mod to run, by the command line or a setting)".to_owned();
     while let Some(n) = current {
+        // A name is one folder name, checked before anything is joined onto the mods folder.
+        if !single_folder_name(&n) {
+            return Err(VfsError::BadModName { name: n, asked_by });
+        }
         if !seen.insert(n.to_ascii_lowercase()) {
             let names: Vec<_> = chain.iter().map(|m| m.name.as_str()).collect();
             return Err(VfsError::ParentCycle(format!("{} -> {n}", names.join(" -> "))));
         }
         let dir = find_child_ci(&mods, &n).ok_or_else(|| VfsError::ModNotFound(n.clone()))?;
-        let ini = find_child_ci(&dir, "info.ini")
-            .and_then(|p| fs::read(&p).ok())
-            .map(|b| mods::Ini::parse(&String::from_utf8_lossy(&b)))
-            .unwrap_or_default();
+        // STA64's own rule: the mod the player names directly may be a link to a folder anywhere (players keep a
+        // mod on another drive and link it in; D1), because the name is the player's own choice. A parent entry
+        // comes from a mod's own `info.ini`, so it must resolve directly under the install's mods folder, links
+        // included. A parent is always looked up under the mods folder of the install, never next to where a
+        // linked mod's target lies.
+        if !chain.is_empty() {
+            directly_under(&mods, &dir).map_err(|target| VfsError::ModOutsideMods { name: n.clone(), asked_by: asked_by.clone(), target })?;
+        }
+        asked_by = format!("(the ParentMod of mod {n:?})");
+        let ini = mod_info_bytes(&dir)?.map(|b| mods::Ini::parse(&String::from_utf8_lossy(&b))).unwrap_or_default();
         let parent = ini.get("mod", "ParentMod").map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned);
         // `standalone` in info.ini, or a manifest that says `kind = "standalone"` (D4).
         let manifest_standalone = manifest::manifest_text(&dir)
@@ -428,6 +447,40 @@ fn walk_chain(data: &Path, name: &str, stop_at_standalone: bool) -> Result<Vec<C
         current = if stop_at_standalone && standalone { None } else { parent };
     }
     Ok(chain)
+}
+
+/// The `info.ini` bytes of the mod folder `dir`: its loose `info.ini` (any
+/// case), else the one inside its first root `.sta` (path order, as
+/// [`Vfs::push_dir`] layers them) that carries one, so a mod that is only a
+/// package is a complete mod (CON-16, CON-18; loose files beat the archive,
+/// `docs/STA_ARCHIVE.md` "Mounting and load order" 3).
+///
+/// With several root `.sta` files, the first one in byte order of its path
+/// (the order the mount layers them in) that has an `info.ini` entry
+/// supplies it. A package that does not open is skipped here (the mount
+/// reports it); a package that HAS an `info.ini` entry which fails to read
+/// (for instance its hash) is an error naming the archive, because skipping
+/// it would silently drop the mod's `ParentMod`, `standalone` and
+/// `ignoreParentMaps`. (The mod listing only notes such a failure, as it must
+/// still list the other mods; a chain that is about to be mounted must not.)
+fn mod_info_bytes(dir: &Path) -> Result<Option<Vec<u8>>, VfsError> {
+    if let Some(bytes) = find_child_ci(dir, "info.ini").and_then(|p| fs::read(p).ok()) {
+        return Ok(Some(bytes));
+    }
+    let Ok(rd) = fs::read_dir(dir) else { return Ok(None) };
+    let mut stas: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("sta")))
+        .collect();
+    stas.sort();
+    for p in &stas {
+        let Ok(archive) = sta::StaArchive::open(p) else { continue };
+        if let Some(i) = archive.find("info.ini") {
+            return archive.read(i).map(Some).map_err(|source| VfsError::Sta { path: p.clone(), source });
+        }
+    }
+    Ok(None)
 }
 
 /// Extract `ParentMod` from the `[Mod]` section of an `info.ini`.
@@ -450,6 +503,36 @@ pub fn parent_mod(ini: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether `name` is exactly one folder name, the same on every platform: not empty, not `.` or `..`, no `/`
+/// or `\`, no NUL, no drive form (`C:` or `C:x`), and not ending in a dot or a space. A name that is more than
+/// that would let a join onto the mods folder reach another folder (`..`, `a/b`, an absolute path, a UNC path,
+/// a drive-relative path). Windows drops dots and spaces at the end of a name when it opens a path, so there a
+/// name of only dots (three or more) is the mods folder itself, which would mount every mod as one, and
+/// `Name.` is `Name`; the check is on the text, so the answer is the same on every system. (No folder can have
+/// such a name on Windows; elsewhere a mod folder that has one is not mounted under it.)
+/// STA64's own safety rule (ADR 0004 D4: a mod's data chain comes from its kind and `ParentMod`, which name
+/// folders in `Data/Mods`; D6: the mount follows the mod's own rules, and these are not a rule a mod can ask
+/// for). A well-formed mod folder name, spaces and letter case included, passes unchanged (D1).
+pub fn single_folder_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) || name.ends_with(['.', ' ']) {
+        return false;
+    }
+    let mut chars = name.chars();
+    let drive = matches!((chars.next(), chars.next()), (Some(c), Some(':')) if c.is_ascii_alphabetic());
+    !drive
+}
+
+/// `Ok` when `dir` (found under `mods`) resolves to a folder directly under the resolved `mods`; else the
+/// resolved path it leads to. Used for a PARENT entry only, which comes from a mod's own `info.ini`: it may be
+/// a link to a sibling mod, but a link that leaves the mods folder is refused, because nothing here can tell a
+/// link the player made from one a package unpacked. The mod the player names directly is not checked (a link
+/// to a folder elsewhere is the player's own set-up): STA64's own rule. A path that cannot be resolved is
+/// refused too.
+fn directly_under(mods: &Path, dir: &Path) -> Result<(), PathBuf> {
+    let (Ok(mods), Ok(real)) = (fs::canonicalize(mods), fs::canonicalize(dir)) else { return Err(dir.to_path_buf()) };
+    if real.parent() == Some(mods.as_path()) { Ok(()) } else { Err(real) }
 }
 
 fn find_child_ci(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -499,6 +582,9 @@ mod flat_a2_tests;
 
 #[cfg(test)]
 mod mount_tests;
+
+#[cfg(test)]
+mod mod_name_tests;
 
 #[cfg(test)]
 mod tests {

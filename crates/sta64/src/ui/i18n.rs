@@ -135,6 +135,13 @@ impl Strings {
         }
     }
 
+    #[cfg(test)]
+    /// The same table with `label.map` text authored by the test (`+ key {text}` lines).
+    pub fn with_labels(mut self, label_map: &str) -> Strings {
+        self.labels = LabelMap::parse(label_map);
+        self
+    }
+
     /// Resolve a native game key from the mounted `Dynamic_Localized_Strings.h`.
     /// An absent key is displayed literally, as in the game's string table.
     pub fn game_text<'a>(&'a self, key: &'a str) -> &'a str {
