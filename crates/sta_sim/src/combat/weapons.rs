@@ -418,6 +418,14 @@ impl Weapons {
         rows
     }
 
+    /// The flown shots as the view shows them, by shot id (derived, not state).
+    pub(crate) fn shot_rows(&self) -> Vec<crate::view::ShotRow> {
+        self.shots
+            .iter()
+            .filter_map(|s| s.flight.map(|f| crate::view::ShotRow { id: s.id, shooter: s.shooter, weapon: s.weapon, target: s.target, pos: s.pos, heading: f.heading }))
+            .collect()
+    }
+
     pub(crate) fn set_crew_delay(&mut self, mut rows: Vec<(EntityId, Fixed)>) {
         rows.sort_by_key(|r| r.0);
         rows.dedup_by_key(|r| r.0);
