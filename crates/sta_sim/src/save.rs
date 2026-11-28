@@ -353,6 +353,11 @@ fn cross_check(sim: &Sim, seats: &[SeatRec], options: &GameOptions) -> Result<()
     if options.directors_cut != sim.directors_cut {
         return bad("the Director's Cut option differs");
     }
+    // the option as it counts for this content (it is ignored outside its profile)
+    let warp_off = !options.allow_warp && sim.content.as_deref().is_some_and(GameOptions::warp_option_counts);
+    if warp_off != sim.match_warp_off {
+        return bad("the warp option differs");
+    }
     Ok(())
 }
 

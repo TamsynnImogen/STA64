@@ -85,8 +85,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 56 appends the warp ramps of `warp_shape` (#1102); 50 to 54 still load, with no
 /// ramp: a craft at warp is at warp, one leaving it has no shift left. (55 is neither written
 /// nor read: the number is reserved.)
+/// Format 58 appends the match option "warp allowed" (#1102); 50 to 56 still load, with warp
+/// allowed. (57 is neither written nor read: the number is reserved.)
 /// Earlier formats are refused.
-pub const FORMAT_VERSION: u16 = 56;
+pub const FORMAT_VERSION: u16 = 58;
 /// The last format without the Director's Cut flag (still loads). Fixed history, not renumbered.
 #[doc(hidden)]
 pub const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
@@ -102,6 +104,9 @@ pub const PRE_DYING_FORMAT: u16 = 53;
 /// The last format without the warp ramp record (still loads).
 #[doc(hidden)]
 pub const PRE_WARP_RAMP_FORMAT: u16 = 54;
+/// The last format without the warp option (still loads).
+#[doc(hidden)]
+pub const PRE_WARP_OPTION_FORMAT: u16 = 56;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -151,7 +156,7 @@ fn check_header(bytes: &[u8]) -> Result<(u16, u64), SnapshotError> {
         return Err(SnapshotError::BadMagic);
     }
     let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | PRE_DYING_FORMAT | PRE_WARP_RAMP_FORMAT | FORMAT_VERSION) {
+    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | PRE_DYING_FORMAT | PRE_WARP_RAMP_FORMAT | PRE_WARP_OPTION_FORMAT | FORMAT_VERSION) {
         return Err(SnapshotError::FormatVersion { found });
     }
     let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -592,6 +597,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&BeamsRec { version: 1, rows: self.weapons.beams_rec() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&DyingRec { version: 1, rows: self.dying.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&WarpRampRec { version: 1, rows: self.approach_warp.ramps_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&!self.match_warp_off).expect("snapshot serialises"));
         out
     }
 
@@ -719,6 +725,15 @@ impl Sim {
             if record.version != 1 { return Err(SnapshotError::Corrupt("unknown warp ramp record version".into())); }
             (record.rows, rest)
         };
+        // Formats 50 to 56 carry no warp option (#1102): warp was allowed in every match.
+        let (allow_warp, rest): (bool, _) = if format <= PRE_WARP_OPTION_FORMAT {
+            (true, rest)
+        } else {
+            postcard::take_from_bytes(rest).map_err(corrupt_postcard)?
+        };
+        if !allow_warp && !content.as_deref().is_some_and(crate::setup::GameOptions::warp_option_counts) {
+            return Err(SnapshotError::Corrupt("the warp option is off for content it does not count for".into()));
+        }
         if directors_cut && !content.as_ref().is_some_and(|db| db.profile() == sta_content::Profile::Sta1Classic) {
             return Err(SnapshotError::Corrupt("Director's Cut requires Armada I content".into()));
         }
@@ -914,6 +929,7 @@ impl Sim {
             ai_seats: b.ai_seats,
             content,
             directors_cut,
+            match_warp_off: !allow_warp,
             starts: b.starts,
             regions: b.regions,
             bounds,
