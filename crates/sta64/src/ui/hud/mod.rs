@@ -163,6 +163,7 @@ impl Plugin for HudPlugin {
             .init_resource::<HudPointer>()
             .init_resource::<crate::ui::cursor::WantedCursor>()
             .init_resource::<crate::input::hover::HoveredUnit>()
+            .init_resource::<crate::input::hover_pick::Sticky>()
             .init_resource::<stock::StockState>()
             .init_resource::<stock::buttons::ShowMore>()
             .init_resource::<status::StatusFeed>()
