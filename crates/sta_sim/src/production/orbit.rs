@@ -16,7 +16,7 @@
 //!   or exploration. Build admission additionally rejects footprint overlap
 //!   with objects other than the attachment planet (STA64 placement rule).
 //!
-//! Orbiting (SIM-65, `PlanetMiningBase::Simulate`): from the tick it is
+//! Orbiting (SIM-65, read from the executable, static): from the tick it is
 //! finished, a station's bearing from its planet's centre advances by `2 pi /
 //! orbitTime` radians per second, in the sense that turns the bearing's
 //! `(sin a, cos a)` from +Z toward +X, on the circle of radius + [`ALTITUDE`]
@@ -30,8 +30,8 @@
 //! the next one is a function of it, the planet and the content, so the step
 //! keeps no state of its own.
 //!
-//! Evidence: read from the executable, static (`CanPlaceHere`,
-//! `GetRealBuildPosition`, `mClickedOnAPlanet`, `GetOrbitalPosition`); the
+//! Evidence: read from the executable, static (the placement test, the build
+//! position and the orbital position); the
 //! ODF keys are read from data in A2 Stock and STA2 Classic (Fleet Operations
 //! and Roots have no orbital station ODFs). Not measured on the bench: which
 //! side of the station faces the planet. The orbiting itself (`orbitTime`

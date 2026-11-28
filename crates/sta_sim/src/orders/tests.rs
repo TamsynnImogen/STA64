@@ -382,7 +382,7 @@ fn switch_edits_store_apply_and_survive_a_snapshot() {
     let loaded = Sim::from_snapshot(&sim.snapshot(), Some(db)).unwrap();
     assert_eq!(loaded.switches(s), sim.switches(s));
     assert_eq!(loaded.digest(), sim.digest());
-    // A change of owner clears the special-forces flag (`Craft::SetTeam`).
+    // A change of owner clears the special-forces flag.
     run(&mut sim, vec![edit(9, Edit::Team(s, PlayerId(2)))], 1);
     assert!(!sim.switches(s).unwrap().special_forces && sim.switches(s).unwrap().hidden);
     // Players may not edit.
