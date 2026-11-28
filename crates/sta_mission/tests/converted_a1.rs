@@ -36,7 +36,8 @@ fn convert(install: &str, only: Option<&str>, tag: &str, unmapped: bool) -> (sup
     (conv, cov)
 }
 
-/// `  fed1 (Federation1): rules 34, action 33+0p/33, condition 34+0p/34, ...`
+/// The converter's report line for a mission, of the shape
+/// `  <map> (<mission>): rules <n>, <role> <complete>+<partial>p/<total>, ...`.
 fn coverage(report: &str) -> Coverage {
     let mut out = Coverage::new();
     for line in report.lines() {
@@ -88,9 +89,10 @@ fn a1_campaign_decode_coverage_does_not_regress() {
     assert_eq!(sum.get("init").map(|s| s.2), Some(cov.len() as u32), "one init function for every mission");
 }
 
-/// The DLL pairs no `.bzn` names are cut campaign content: neither the maps, nor `mshell.set`
-/// (the campaign list), nor the objective texts reach them (measured, see the LUA-14 follow-up).
-/// `--include-unmapped` converts them anyway under their DLL's name; the default does not.
+/// Rule STA64 follows: a DLL pair that no map of the install names is not converted by default;
+/// the converter's "include unmapped" option converts it anyway, under its DLL's name. The test
+/// tolerates an install that has no such pair, and for one that has, at most one function per
+/// role that does not decode completely.
 #[test]
 fn unmapped_a1_dll_pairs_convert_only_on_request() {
     let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {

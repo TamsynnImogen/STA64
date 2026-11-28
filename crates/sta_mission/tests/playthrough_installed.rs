@@ -53,8 +53,8 @@ fn dump(p: &Playthrough) -> String {
         .join("\n")
 }
 
-/// Armada I, Federation 1 "Premonitions": build a starbase and a mining station, destroy the
-/// Dominion, then the Borg that follow the Premonition through the gate; the Enterprise survives.
+/// An Armada I campaign mission played to a win by its plan: the briefings come in their order,
+/// control is released before the first objective is shown, and the script raises no error.
 #[test]
 fn a1_federation_1_is_won_by_a_competent_player() {
     let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
@@ -64,7 +64,7 @@ fn a1_federation_1_is_won_by_a_competent_player() {
     let p = play_mission(&install, "fed1", "a1_fed1.lua", 30 * 60 * 40);
     let log = dump(&p);
     assert!(p.outcome.is_some_and(|o| o.won), "not won:\n{log}");
-    // Briefings in order: the opening's, the Dominion attack's, the Premonition's.
+    // The mission's three briefings, in their order.
     let briefings: Vec<_> = p.of("briefing").map(|e| e.what.to_ascii_lowercase()).collect();
     let want = ["f1ob1.txt", "f1ob2.txt", "f1ob3.txt"];
     let mut at = 0;
@@ -81,9 +81,9 @@ fn a1_federation_1_is_won_by_a_competent_player() {
     assert!(p.of("error").next().is_none(), "script errors:\n{log}");
 }
 
-/// Armada I, Federation 2: the later waves belong to a seat that was eliminated when the first
-/// wave died; their orders must still reach the sim (the enemy acts), and the mission's end rule
-/// must be able to hold once the last ships are dead (the win).
+/// A second Armada I campaign mission. Rule under test: orders for the units of a seat that has
+/// been eliminated still reach the sim (units of that seat first seen after the elimination act),
+/// and the mission's end rule can still hold afterwards (the win).
 #[test]
 fn a1_federation_2_waves_act_and_the_mission_is_won() {
     let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
@@ -107,9 +107,9 @@ fn a1_federation_2_waves_act_and_the_mission_is_won() {
     assert!(p.outcome.is_some_and(|o| o.won), "not won:\n{log}");
 }
 
-/// The lose condition of the same mission: the Enterprise is lost.
+/// The lose condition of the first of those missions, reached by its losing plan.
 #[test]
-fn a1_federation_1_is_lost_when_the_enterprise_is_destroyed() {
+fn a1_federation_1_is_lost_by_its_losing_plan() {
     let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
@@ -121,9 +121,9 @@ fn a1_federation_1_is_lost_when_the_enterprise_is_destroyed() {
 
 /// Armada II, the first mission of the first story campaign (STA64's campaign slot `federation`,
 /// its first entry; which map that is comes from the install). Its opening sets the relation
-/// between the player's team and the team that owns the intro's props in both directions
-/// (SIM-63). With the relation honoured, nothing of the player's seat is destroyed in the opening
-/// (before the fix those props destroyed several of the player's ships inside the intro).
+/// between the player's team and another team in both directions (SIM-63). Rule under test: with
+/// the relation honoured, nothing of the player's seat is destroyed while the opening runs, and
+/// the opening does not end the mission.
 #[test]
 fn a2_first_story_mission_opening_destroys_none_of_the_players_ships() {
     let Ok(install) = std::env::var("STA64_TEST_A2_STOCK_INSTALL") else {
