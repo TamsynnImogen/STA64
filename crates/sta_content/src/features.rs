@@ -163,11 +163,17 @@ pub struct Features {
     /// static). On for stock Armada II; off elsewhere (Fleet Operations and Armada I are not
     /// checked): a beam hits on the tick it fires.
     pub beam_damage_at_end: bool,
+    /// A craft may enter or stay at warp only while its engines system has its share of hit
+    /// points and the tick's speed ceiling lies above its impulse speed
+    /// (`sta_sim::movement::approach`, issue #1102; read from the executable, static, not
+    /// measured). On for stock Armada II and Fleet Operations 4, the two profiles whose
+    /// executable the reading covers; off elsewhere until one is read or decided.
+    pub warp_gates: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 43] {
+    pub(crate) fn bits(&self) -> [bool; 44] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -212,6 +218,7 @@ impl Features {
             self.crew_weapon_delay,
             self.shield_zero_hold,
             self.beam_damage_at_end,
+            self.warp_gates,
         ]
     }
 }
