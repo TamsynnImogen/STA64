@@ -43,7 +43,7 @@ mod).
 |---|---|
 | Combat | `weapon_damage_controls`, `fire_arcs`, `turrets`, `team_change_weapons`, `weapon_shot_timing`, `start_fire_hold`, `weapon_hit_roll`, `weapon_target_damage`, `weapon_target_masks`, `weapon_cloak_fire`, `crew_weapon_delay`, `beam_damage_at_end`, `dying_phase` |
 | Defence | `directional_shields`, `point_defense_cycles`, `pd_energy`, `pd_debt_timer`, `energy_systems`, `shield_zero_hold`, `crew_loss_on_hit` |
-| Behaviour | `attack_buffer_roots`, `attack_combat_speed`, `attack_opportunity_fire`, `builder_hold_fire`, `target_score`, `idle_assist`, `assist_high_autonomy_only`, `assist_on_ally_fire`, `transport_attack_by_weld`, `warp_gates` |
+| Behaviour | `attack_buffer_roots`, `attack_combat_speed`, `attack_opportunity_fire`, `builder_hold_fire`, `target_score`, `idle_assist`, `assist_high_autonomy_only`, `assist_on_ally_fire`, `transport_attack_by_weld`, `warp_gates`, `engines_off_drift` |
 | Economy | `extra_resources`, `officer_capacity`, `pay_on_queue` |
 | Production | `multi_yard_builds`, `construction_rigs`, `upgrade_pods`, `hybrid_yards`, `station_rotation` |
 | Fleet | `breeders`, `collective_xp`, `squadrons`, `wreckage`, `craft_identity` |

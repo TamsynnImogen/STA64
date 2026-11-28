@@ -406,9 +406,10 @@ pub struct Options {
     /// keeps it (see [`convert_install`]). Off by default: the command line clears first, which its
     /// console output pins. The game sets it.
     pub prepare_first: bool,
-    /// Tests: the converter version the cache keys are made with, instead of
-    /// [`crate::CONVERTER_VERSION`] (what a raised version would give: every entry misses and the
-    /// missions are converted again). `None` in every real run.
+    /// Tests only, hidden from the documentation: the converter version the cache keys are made
+    /// with, instead of [`crate::CONVERTER_VERSION`] (what a raised version would give: every
+    /// entry misses and the missions are converted again). `None` in every real run.
+    #[doc(hidden)]
     pub cache_version: Option<u32>,
 }
 

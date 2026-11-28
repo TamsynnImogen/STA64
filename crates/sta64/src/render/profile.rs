@@ -106,6 +106,13 @@ pub enum Effect {
     /// Refit fireball, ring, blast sparks and debris are not drawn for a unit whose definition resolves; the hull
     /// sparks, the smoke and the shield shell keep their own rules.
     Explosions,
+    /// What a weapon hit on a bare hull and a dying hull draw (#1153): one node-particle spark at the hit, and sparks
+    /// during the dying phase (`fx/stock_hull_hits.rs`). Finer than [`Effect::Impacts`]: under Stock the Refit hull-hit
+    /// streaks are not drawn.
+    HullHits,
+    /// STA64's own hull-damage smoke (`fx/impacts.rs`). Its thresholds are STA64's own; the original's damage look
+    /// is the model's damage nodes, which STA64 already draws (D-02): registering a stock implementation switches it off under the Stock look; Refit keeps it.
+    DamageSmoke,
 }
 
 /// What stays in the repository under Refit: each effect, its package, and the
@@ -126,6 +133,10 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::ShieldHits, "RND-10", &[]),
     // The Refit look of an explosion is `Effect::Impacts`' fireball and ring (`fx/fire.wesl`); `Explosions` adds the stock one.
     (Effect::Explosions, "RND-10", &[]),
+    // The Refit look of a hull hit is `Effect::Impacts`' streaks; `HullHits` adds the stock spark.
+    (Effect::HullHits, "RND-10", &[]),
+    // The damage smoke is Refit-only (STA64's own): the stock implementation is none.
+    (Effect::DamageSmoke, "RND-10", &[]),
 ];
 
 /// Original, profile-independent presentation shaders. These are available

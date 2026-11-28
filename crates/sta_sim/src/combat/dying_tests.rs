@@ -9,7 +9,7 @@ use sta_content::{ContentDb, WeaponKind};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 
 use super::dying::{
-    phase_ticks, Dying, Row, DYING_DRIFT_DECAY, DYING_HIT_STEP_TICKS, DYING_LATE_TICKS, DYING_MOVING_SPEED,
+    phase_ticks, Dying, Row, DYING_HIT_STEP_TICKS, DYING_LATE_TICKS, DYING_MOVING_SPEED,
     DYING_MOVING_TICKS, DYING_STANDING_TICKS,
 };
 use crate::command::{Command, CommandKind, Edit, Order};
@@ -198,7 +198,7 @@ fn a_unit_faster_than_the_threshold_takes_the_long_phase_and_drifts_on_its_headi
         assert_eq!(u.heading, last.heading, "no turn");
         assert_eq!(u.pos.x, last.pos.x, "on its heading (+z)");
         assert_eq!(u.pos.z, last.pos.z + last.heading.1 * last.speed / hz);
-        assert_eq!(u.speed, last.speed - last.speed * DYING_DRIFT_DECAY / hz);
+        assert_eq!(u.speed, last.speed - last.speed * crate::kinematics::DRIFT_DECAY / hz);
         assert!(u.speed > Fixed::ZERO && u.speed < last.speed);
         last = u;
     }

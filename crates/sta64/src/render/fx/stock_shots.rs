@@ -239,7 +239,8 @@ impl ShotSprites {
             .weapons()
             .flat_map(|w| [w.look.sprite.as_deref(), w.look.flare.as_ref().map(|f| f.sprite.as_str())])
             .flatten()
-            .chain(std::iter::once(stock_flares::IMPACT_SPRITE));
+            .chain(std::iter::once(stock_flares::IMPACT_SPRITE))
+            .chain(stock_flares::SPARK_FAMILY);
         for name in names {
             let key = name.to_ascii_lowercase();
             if map.contains_key(&key) {
@@ -420,7 +421,17 @@ impl StockShot {
     pub(super) fn beam_end_now(&self) -> Vec3 {
         self.shield_end
     }
+
+    /// Where a beam ends on the hull of its target whatever the shields show: the chosen hardpoint, the centre where
+    /// the model has none, a planet's sphere towards the muzzle. `None` before the target has been seen.
+    pub(super) fn hull_end(&self) -> Option<Vec3> {
+        self.last_body.as_ref().map(|b| beam_end(self.muzzle, b, true))
+    }
 }
+
+/// Ticks of slack between the sim's view and the drawing's clock when the drawing asks whether the sim still holds
+/// a beam (`beam_damage_at_end`, #1068): STA64's own, so a beam is not dropped at the first or last tick of its life.
+const BEAM_VIEW_SLACK: f32 = 2.0;
 
 /// The nodes and bodies of the render side, for the systems of this module.
 #[derive(SystemParam)]
@@ -486,6 +497,13 @@ impl StockShots<'_, '_> {
     pub(super) fn stock_path(&self, def: &WeaponDef) -> Option<ShotPath> {
         let tables = self.tables.as_deref()?;
         stock_spec(self.look(), def, &tables.0).map(|s| s.path)
+    }
+
+    /// A beam of `def` under `beam_damage_at_end` (#1068): the sim keeps it in flight and applies its damage when
+    /// its life ends (`sta_sim::combat::weapons::lands_at_end`). `false` under every other profile and for every
+    /// other weapon: the drawing then reads the beam as it always did.
+    pub(super) fn lands_at_end(&self, def: &WeaponDef) -> bool {
+        self.content.as_ref().is_some_and(|c| sta_sim::combat::weapons::lands_at_end(c.0.features(), def))
     }
 
     /// Whether the stock shield hit (`Effect::ShieldHits`) is the one drawing.
@@ -626,13 +644,19 @@ pub(super) fn update_shots(
     mut store: ResMut<NodeParticles>,
     mut caps: ResMut<ShieldCapQueue>,
     fractions: Res<BeamFractions>,
+    mut points: ResMut<super::stock_hull_hits::HullHitPoints>,
     mut q: Query<(Entity, &mut StockShot)>,
 ) {
     let alpha = clock.alpha();
     let now_ticks = clock.now() * TICK_HZ as f64;
+    points.0.clear();
+    let mut hull_hits = Vec::new();
     // The earliest matching shot in flight has arrived.
     for ev in msgs.read().map(|m| &m.0) {
-        if let SimEvent::Hit { target, by, weapon, .. } = ev {
+        if let SimEvent::Hit { target, by, weapon, hull, .. } = ev {
+            if hull.to_f32() > 0.0 {
+                hull_hits.push((*by, *weapon, *target));
+            }
             let hit = q.iter().filter(|(_, s)| s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target)).min_by_key(|(_, s)| s.fired).map(|(e, _)| e);
             if let Some(e) = hit {
                 cmds.entity(e).try_despawn();
@@ -677,6 +701,20 @@ pub(super) fn update_shots(
                 Target::Point(p) => Some(Body::point(to_bevy(p.to_f32()))),
                 _ => None,
             };
+            // Under `beam_damage_at_end` the sim holds the beam until its life ends and drops it when it is lost
+            // (shooter or target gone, the target phased, out of range): the drawing follows the sim, so the
+            // beam drawn and the damage that lands agree (#1068). The view and the drawing's clock may differ by a
+            // couple of ticks at the ends of the life, so a beam is judged lost only between them. Every other beam
+            // is read as before.
+            let at_end_life = ctx.content.as_ref().and_then(|c| c.0.weapon(s.weapon)).filter(|w| ctx.lands_at_end(w)).map(|w| w.duration as f32);
+            if let (Some(life), Target::Entity(id)) = (at_end_life, s.target)
+                && age >= BEAM_VIEW_SLACK
+                && age < life - BEAM_VIEW_SLACK
+                && !link.real_curr().beam_held(s.shooter, s.weapon, id)
+            {
+                cmds.entity(e).try_despawn();
+                continue;
+            }
             // A target the shot itself killed on the fire tick is held where it was for the beam's life.
             let lost = live.is_none() && !s.pinned;
             if let Some(b) = live {
@@ -694,7 +732,8 @@ pub(super) fn update_shots(
                 let body = s.last_body.clone().expect("a live or held body");
                 // Further than twice the range: ends at once (read from the executable, static; the factor
                 // replaces an earlier reading of the square root of two).
-                if s.range > 0.0 && start.distance_squared(body.centre) > 4.0 * s.range * s.range {
+                // (Under `beam_damage_at_end` the sim's own break distance decides, above.)
+                if at_end_life.is_none() && s.range > 0.0 && start.distance_squared(body.centre) > 4.0 * s.range * s.range {
                     cmds.entity(e).try_despawn();
                     continue;
                 }
@@ -712,11 +751,13 @@ pub(super) fn update_shots(
                 s.arrived = true;
                 let spec = s.impact_flare.take();
                 if let (Target::Entity(id), Some(body)) = (s.target, s.last_body.as_ref()) {
-                    // The beam's own `Hit` says whether the shield absorbed it. The sim applies a beam's damage on the fire
-                    // tick, so a beam that emptied the shield finds it down at arrival; in the original its damage lands at the
-                    // end of its life and the shield is still up: an absorbed beam makes a cap, not the impact flare (INTERIM,
-                    // until #1068). No record (no `Hit` delivered): the view decides, as before.
-                    let absorbed = !body.planet && !s.ignore_shield && ctx.shield_hits_stock() && fractions.before(s.shooter, s.weapon, id, s.fired).is_some();
+                    // Under `beam_damage_at_end` the sim has not applied the beam's damage yet, so the view's shield state at
+                    // arrival is the state the original draws it on: the view decides (#1068).
+                    // Otherwise (INTERIM): the beam's own `Hit` says whether the shield absorbed it. The sim applies a beam's
+                    // damage on the fire tick, so a beam that emptied the shield finds it down at arrival; in the original its
+                    // damage lands at the end of its life and the shield is still up: an absorbed beam makes a cap, not the
+                    // impact flare. No record (no `Hit` delivered): the view decides, as before.
+                    let absorbed = at_end_life.is_none() && !body.planet && !s.ignore_shield && ctx.shield_hits_stock() && fractions.before(s.shooter, s.weapon, id, s.fired).is_some();
                     if !absorbed && stock_flares::hull_hit(body, s.ignore_shield) {
                         if let Some(spec) = spec {
                             let flare = Flare {
@@ -779,6 +820,17 @@ pub(super) fn update_shots(
             if !ctx.ground_in_sight(head) {
                 s.geom = Geom::None;
             }
+        }
+    }
+    // Where each beam's hull hit struck: its end on the hull (the hull-hit spark is drawn there, `stock_hull_hits`).
+    for (by, weapon, target) in hull_hits {
+        let end = q
+            .iter()
+            .filter(|(_, s)| s.path == ShotPath::Ribbon && s.shooter == by && s.weapon == weapon && s.target == Target::Entity(target))
+            .max_by_key(|(_, s)| s.fired)
+            .and_then(|(_, s)| s.hull_end());
+        if let Some(end) = end {
+            points.0.push((by, weapon, target, end));
         }
     }
 }
@@ -994,7 +1046,7 @@ impl Plugin for StockShotsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Shots);
-        app.init_resource::<ShieldCapQueue>();
+        app.init_resource::<ShieldCapQueue>().init_resource::<super::stock_hull_hits::HullHitPoints>();
         app.init_resource::<ShotSprites>().init_resource::<ShotBatches>().init_resource::<NodeParticles>();
         app.add_systems(
             Update,

@@ -56,6 +56,8 @@ mod guard;
 mod guard_tests;
 #[cfg(test)]
 mod warp_gate_tests;
+#[cfg(test)]
+mod warp_switch_tests;
 
 use serde::{Deserialize, Serialize};
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
