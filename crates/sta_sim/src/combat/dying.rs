@@ -105,15 +105,13 @@ impl Dying {
     }
 
     /// The rows a snapshot taken at the end of a step holds (`tick` is the next tick):
-    /// ascending, each of a craft or station flagged `DYING` at zero hull, none ended before
-    /// `tick`. `None` otherwise.
+    /// ascending, each of a craft or station flagged `DYING`, none ended before `tick`.
+    /// `None` otherwise. (Its hull is not tested: a bench `Heal` may refill a dying unit.)
     pub(crate) fn from_rows(rows: Vec<(EntityId, Row)>, tick: Tick, units: &Entities) -> Option<Dying> {
         let valid = rows.iter().all(|(id, r)| {
             r.ends >= tick
                 && units.get(*id).is_some_and(|u| {
-                    matches!(u.kind, EntityKind::Craft | EntityKind::Station)
-                        && u.flags.contains(UnitFlags::DYING)
-                        && u.hull[0] <= Fixed::ZERO
+                    matches!(u.kind, EntityKind::Craft | EntityKind::Station) && u.flags.contains(UnitFlags::DYING)
                 })
         });
         valid.then(|| Table::from_rows(rows)).flatten().map(|rows| Dying { rows })
