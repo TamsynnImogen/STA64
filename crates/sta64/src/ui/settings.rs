@@ -14,6 +14,8 @@
 //! - `hud_layout = centred | stretched`, how the stock-look HUD sits on a window that is not its sheet's aspect
 //!   (ADR 0008 H7; case-insensitive, `centered` accepted; unknown or missing: centred);
 //! - `player_name` and `relay`, the multiplayer name and relay address last used (UI-11);
+//! - `stock_folder`, a stock Armada II folder whose engine files a mod's mission conversion reads when the
+//!   install's own root has none (set by hand; no picker; empty or absent: none);
 //! - `intro = true | false` ([`IntroSettings`]);
 //! - `version = 1`.
 //!
@@ -150,6 +152,10 @@ impl Stored {
                     s.settings.relay = value.chars().filter(|c| !c.is_control()).take(80).collect();
                     true
                 }
+                "stock_folder" => {
+                    s.settings.stock_folder = value.chars().filter(|c| !c.is_control()).take(400).collect();
+                    true
+                }
                 "window_size" => crate::frontend::screens::WindowSize::from_key(value)
                     .map(|size| s.settings.window_size = size).is_some(),
                 "hud_layout" => crate::ui::hud::stock::layout::HudFit::from_key(value)
@@ -224,6 +230,9 @@ impl Stored {
         }
         if !st.relay.is_empty() {
             let _ = writeln!(t, "relay = {}", st.relay);
+        }
+        if !st.stock_folder.is_empty() {
+            let _ = writeln!(t, "stock_folder = {}", st.stock_folder);
         }
         t += &self.bindings.to_text();
         t
@@ -760,6 +769,7 @@ mod tests {
         s.settings.window_size = WindowSize::R1920x1080;
         s.settings.master = 12.5;
         s.settings.lcars_ui = true;
+        s.settings.stock_folder = "/stock/folder with spaces".into();
         s.intro = false;
         let (back, w) = Stored::parse(&s.to_text());
         assert!(w.is_empty(), "{w:?}");
