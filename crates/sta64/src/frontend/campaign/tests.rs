@@ -805,12 +805,17 @@ fn bmp_of(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
 /// A folder with the shell pictures (the single-player one a PNG, the mission list's a BMP) and a
 /// stock profile choice; `art`: whether it carries the pictures at all.
 fn authored_mount(tag: &str, art: bool) -> PathBuf {
+    authored_mount_for(tag, art, "armada2")
+}
+
+/// [`authored_mount`] with the profile the mount asks for.
+fn authored_mount_for(tag: &str, art: bool, ui_profile: &str) -> PathBuf {
     let dir = temp_dir(tag);
-    std::fs::write(dir.join("info.ini"), "[Mod]\nUiProfile=armada2\n").unwrap();
+    std::fs::write(dir.join("info.ini"), format!("[Mod]\nUiProfile={ui_profile}\n")).unwrap();
     if art {
         // The paths are the code's own constants, so the test cannot drift from them.
-        let single = dir.join(format!("{}.png", super::shell_art::SINGLE_PLAYER));
-        let list = dir.join(format!("{}.bmp", super::shell_art::MISSION_LIST));
+        let single = dir.join(format!("{}.png", super::shell_art::STOCK_A2_SINGLE_PLAYER_PICTURE));
+        let list = dir.join(format!("{}.bmp", super::shell_art::STOCK_A2_MISSION_LIST_PICTURE));
         std::fs::create_dir_all(single.parent().unwrap()).unwrap();
         std::fs::create_dir_all(list.parent().unwrap()).unwrap();
         image::RgbaImage::from_pixel(8, 6, image::Rgba([SINGLE_RGB[0], SINGLE_RGB[1], SINGLE_RGB[2], 255])).save(single).unwrap();
@@ -882,6 +887,35 @@ fn campaign_select_and_the_mission_list_draw_the_shell_picture_under_a_stock_pro
         }
     }
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// The gate, per profile: the profile the pictures were read for draws them; the mod family draws them as an interim
+/// (not read for that profile: it follows the stock reading; a later reading changes this on purpose); the first game's
+/// stock profile and STA64's own look do not.
+#[test]
+fn the_shell_pictures_are_drawn_under_the_read_profile_and_as_an_interim_the_mod_family_and_not_under_the_first_game_or_the_own_look() {
+    use crate::ui::profile::UiProfile;
+    assert!(super::shell_art::drawn_under(Some(&UiProfile::Armada2)));
+    assert!(super::shell_art::drawn_under(Some(&UiProfile::FleetOps)), "the mod family: INTERIM");
+    assert!(!super::shell_art::drawn_under(Some(&UiProfile::Armada1)));
+    assert!(!super::shell_art::drawn_under(Some(&UiProfile::Lcars)));
+    assert!(!super::shell_art::drawn_under(None));
+    for (tag, profile, drawn) in [("shell-gate-a2", "armada2", true), ("shell-gate-fo", "fleetops", true), ("shell-gate-a1", "armada1", false)] {
+        let dir = authored_mount_for(tag, true, profile);
+        for (screen, want) in [(Screen::SinglePlayer, SINGLE_RGB), (Screen::Missions, LIST_RGB)] {
+            let mut cs = fixture(true, None);
+            cs.campaign = Some("federation".into());
+            let mut app = art_app(&dir, false, cs, (1920, 1080));
+            go(&mut app, screen);
+            let got = backdrops(&mut app);
+            if drawn {
+                assert_eq!(got, vec![(screen, want)], "{profile} {screen:?}");
+            } else {
+                assert!(got.is_empty(), "{profile} {screen:?}: keeps what it had");
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[test]
