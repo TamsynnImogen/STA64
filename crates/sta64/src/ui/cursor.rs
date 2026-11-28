@@ -698,7 +698,7 @@ mod tests {
     /// are whatever the install says.
     #[test]
     fn real_install_if_available() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
         let root = found.root_string();
         let m = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();

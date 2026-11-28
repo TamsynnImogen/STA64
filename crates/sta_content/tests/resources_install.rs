@@ -19,7 +19,6 @@ use sta_content::resources::{self, SLOTS};
 use sta_content::{ContentDb, Fixed, OdfIndex, Profile, Races};
 use sta_vfs::Vfs;
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
 const ROOTS: &str = "Star Trek Armada II Fleet Operations Roots";
 
 struct Install {
@@ -31,29 +30,28 @@ struct Install {
 }
 
 fn installs() -> Vec<Install> {
-    let h = Path::new(HEROIC);
     let plain = |label, dir: &str, names| Install {
         label,
-        root: h.join(dir),
+        root: sta_testkit::game_root(dir),
         modname: None,
         names,
     };
     vec![
         Install {
             label: "FO4",
-            root: h.join(ROOTS),
+            root: sta_testkit::game_root(ROOTS),
             modname: Some("Fleet Ops 4.0"),
             names: ["Dilithium", "Tritanium", "Collective Connections", "Supply"],
         },
         Install {
             label: "STA2 Classic",
-            root: h.join(ROOTS),
+            root: sta_testkit::game_root(ROOTS),
             modname: Some("STA2 Classic Mod"),
             names: ["Dilithium", "Latinum", "Metal", "Bio-matter"],
         },
         Install {
             label: "Roots",
-            root: h.join(ROOTS),
+            root: sta_testkit::game_root(ROOTS),
             modname: None,
             names: ["Dilithium", "Connections Nodes", "Tritanium", "Supply"],
         },

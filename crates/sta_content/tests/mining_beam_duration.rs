@@ -34,10 +34,9 @@ fn a_mining_beam_keeps_its_kind_and_takes_the_ordnance_life_span() {
 
 #[test]
 fn install_orbital_stations_with_a_multiplier_have_a_beam_with_a_positive_duration() {
-    let heroic = Path::new("/home/cedric/Games/Heroic");
     let roots = "Star Trek Armada II Fleet Operations Roots";
     for (dir, modname) in [("Star Trek Armada II (Stock)", None), (roots, Some("STA2 Classic Mod")), ("Star Trek Armada II Fleet Operations", None), (roots, None)] {
-        let root = heroic.join(dir);
+        let root = sta_testkit::game_root(dir);
         if !root.is_dir() {
             eprintln!("{dir}: skipped, not installed");
             continue;

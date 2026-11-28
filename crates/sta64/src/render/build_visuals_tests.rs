@@ -463,7 +463,7 @@ fn installed_ship_preview_attaches_partial_model_without_selection() {
         );
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     let vfs =

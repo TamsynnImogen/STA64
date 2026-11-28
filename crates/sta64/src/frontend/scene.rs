@@ -1902,7 +1902,7 @@ mod tests {
     /// content, every ship of the map drawn by a ship the install has.
     #[test]
     fn install_content_has_the_menus_ships() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
         let root = found.root_string();
         let m = found.mod_string();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();

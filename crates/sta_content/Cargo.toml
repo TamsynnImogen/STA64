@@ -12,6 +12,8 @@ sta_core = { workspace = true, features = ["serde"] }
 sta_odf.workspace = true
 sta_vfs.workspace = true
 sta_assets.workspace = true
+# Which install an install-gated test runs on (docs/GATED_TESTS.md); a dev-only cycle is allowed.
+sta_testkit.workspace = true
 a2fmt.workspace = true
 sta_bzn.workspace = true
 serde.workspace = true
@@ -23,6 +25,8 @@ sha2.workspace = true
 [dev-dependencies]
 # The install tests resolve models the way the renderer does (`sta_assets::find_model`).
 sta_assets.workspace = true
+# Which install an install-gated test runs on (docs/GATED_TESTS.md); a dev-only cycle is allowed.
+sta_testkit.workspace = true
 
 [[example]]
 name = "odf_references"

@@ -102,7 +102,7 @@ fn gallery_renders_on_gpu() {
         return;
     }
     let mounted = || {
-        sta_testkit::find(sta_testkit::Kind::Any)?.mount()
+        crate::testsupport::find(sta_testkit::Kind::Any)?.mount()
     };
     let size = UVec2::new(1600, 900);
     for profile in [UiProfile::Lcars, UiProfile::Armada2, UiProfile::FleetOps] {

@@ -131,7 +131,7 @@ fn colony_lights_frames_on_a_stock_map() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 and an install variable (docs/GATED_TESTS.md) to draw a colony's lights");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let mod_name = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mod_name.as_deref()).expect("mount");

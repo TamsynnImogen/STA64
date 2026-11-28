@@ -20,7 +20,7 @@ fn installed_ghost_is_readable_without_lights() {
         );
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     let vfs =

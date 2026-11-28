@@ -13,19 +13,15 @@ use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{Sim, WorldSource};
 use sta_vfs::Vfs;
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
 
 fn installs() -> Vec<(String, PathBuf, Option<String>)> {
-    let roots = || Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots");
+    let roots = || sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots");
     let mut v = vec![
         ("Roots".to_owned(), roots(), None),
         ("FO4".to_owned(), roots(), Some("Fleet Ops 4.0".to_owned())),
-        ("FO".to_owned(), Path::new(HEROIC).join("Star Trek Armada II Fleet Operations"), None),
-        ("A2".to_owned(), Path::new(HEROIC).join("Star Trek Armada II (Stock)"), None),
+        ("FO".to_owned(), sta_testkit::game_root("Star Trek Armada II Fleet Operations"), None),
+        ("A2".to_owned(), sta_testkit::game_root("Star Trek Armada II (Stock)"), None),
     ];
-    if let Ok(root) = std::env::var("STA64_TEST_INSTALL") {
-        v.push(("env".into(), PathBuf::from(root), std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty())));
-    }
     v
 }
 

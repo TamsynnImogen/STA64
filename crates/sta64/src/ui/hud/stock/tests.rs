@@ -437,7 +437,7 @@ fn personnel_flags_and_zero_rectangles_suppress_only_authored_labels() {
 /// readouts exist; a live PlayerView supplies their values without rebuilding them.
 #[test]
 fn installed_sta2_classic_personnel_respects_race_cfg() {
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
     let root = found.root.clone();
     let mode = found.mod_string();
     if mode != "STA2 Classic" {

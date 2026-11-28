@@ -11,7 +11,7 @@ fn installed_defiant_unit_attaches_visible_hull() {
         eprintln!("SKIP: set STA64_DEFIANT_TESTS=1 for the Classic Defiant fixture");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
     let (install, mod_name) = (found.root_string(), found.mod_string());
     let vfs = sta_vfs::Vfs::mount_install(
         std::path::Path::new(&install),
@@ -148,7 +148,7 @@ fn installed_defiant_unit_attaches_visible_hull() {
 /// holds. Regression of a playtest report: a dilithium moon on STA2 Classic could not be selected.
 #[test]
 fn install_visible_resource_nodes_are_pickable_and_minable() {
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -246,7 +246,7 @@ fn install_visible_resource_nodes_are_pickable_and_minable() {
 /// hides its model once zoomed out). Playtest report: the A1 `fed1` planet was drawn only when zoomed in.
 #[test]
 fn install_unseen_background_planet_stays_drawn_without_an_icon() {
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::FirstGame) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::FirstGame) else { return };
     let root = found.root_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
     let Some(map_name) = sta_testkit::a_map(&vfs) else { return };

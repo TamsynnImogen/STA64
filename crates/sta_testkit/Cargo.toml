@@ -6,8 +6,7 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
-# Dev-only: crates list it under `[dev-dependencies]`. It reads environment variables and mounts an
-# install read-only to check which game it is; it writes nothing and launches nothing.
+# Dev-only: crates list it under `[dev-dependencies]`. It reads environment variables and lists an
+# install read-only; it writes nothing and launches nothing. No `sta_content`: that crate dev-depends on it.
 [dependencies]
 sta_vfs.workspace = true
-sta_content.workspace = true

@@ -482,7 +482,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     }
 
     if profile == UiProfile::FleetOps
-        && sta_testkit::find(sta_testkit::Kind::ModFamily).and_then(|f| f.active_mod).as_deref() == Some("FO4")
+        && crate::testsupport::find(sta_testkit::Kind::ModFamily).and_then(|f| f.active_mod).as_deref() == Some("FO4")
         && matches!(hover_mode, HoverCapture::Selected | HoverCapture::SelectedHover)
     {
         let count = app.world_mut().query::<(&GuiImage, &ImageNode)>().iter(app.world())
@@ -1100,7 +1100,7 @@ fn installed_stock_hud_renders_on_gpu() {
         );
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     let profile = match std::env::var("STA64_HUD_PROFILE").as_deref() {
@@ -1176,7 +1176,7 @@ fn installed_construction_ship_station_tooltip_renders_on_gpu() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 an install variable (docs/GATED_TESTS.md)");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed Armada II VFS");
     capture_one(vfs, UiProfile::Armada2, UVec2::new(1280, 720), "gui_fed.cfg",
@@ -1191,7 +1191,7 @@ fn installed_armada2_builder_hud_renders_on_gpu() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 an install variable (docs/GATED_TESTS.md)");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
@@ -1206,7 +1206,7 @@ fn installed_armada2_starbase_readout_sizes_match_on_gpu() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     for (profile, label) in [
         (UiProfile::Armada2, "a2-fbase-readout-sizes"),
@@ -1225,7 +1225,7 @@ fn installed_armada2_medium_personnel_hud_renders_on_gpu() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
@@ -1243,7 +1243,7 @@ fn installed_armada2_active_construction_hud_renders_on_gpu() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 an install variable (docs/GATED_TESTS.md)");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     for (profile, product, class_name, label) in [
@@ -1266,10 +1266,10 @@ fn installed_classic_selection_readouts_render_on_gpu() {
     let native = std::env::var("STA64_HUD_A2_NATIVE_MAP").as_deref() == Ok("1");
     let active_mod = if native { None } else { Some("STA2 Classic") };
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1")
-        || (!native && sta_testkit::find(sta_testkit::Kind::ModFamily).and_then(|f| f.active_mod).as_deref() != Some("STA2 Classic")) {
+        || (!native && crate::testsupport::find(sta_testkit::Kind::ModFamily).and_then(|f| f.active_mod).as_deref() != Some("STA2 Classic")) {
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let map = if native { "mp02ring" } else { "3peace" };
     for odf in ["fbase", "fyard", "fconst", "fscout", "fspecial"].into_iter().chain(native.then_some("fresear")) {
@@ -1463,7 +1463,7 @@ fn aim_roots_hud(
 #[test]
 fn installed_group_names_render_on_gpu() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") { return; }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let mod_name = found.active_mod.clone();
     let (profile, cfg, prefix) = match mod_name.as_deref() {
@@ -1991,7 +1991,7 @@ fn installed_stock_hud_font_edges_on_gpu() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_HUD_TESTS=1 an install variable (docs/GATED_TESTS.md) STA64_HUD_PROFILE=a2|fo");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     let (profile, cfg, tag) = match std::env::var("STA64_HUD_PROFILE").as_deref() {
@@ -2017,7 +2017,7 @@ fn installed_titles_render_on_gpu() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_HUD_TESTS=1 an install variable (docs/GATED_TESTS.md) STA64_HUD_PROFILE=a1|a2|fo");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     let (profile, tag) = match std::env::var("STA64_HUD_PROFILE").as_deref() {
@@ -2119,7 +2119,7 @@ fn installed_refit_hud_labels_on_gpu() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_HUD_TESTS=1 an install variable (docs/GATED_TESTS.md)");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     for size in sizes(&[UVec2::new(3440, 1440)]) {

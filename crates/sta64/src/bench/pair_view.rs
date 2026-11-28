@@ -292,7 +292,7 @@ mod tests {
     /// owner and place, or the map's ships would be drawn as another unit. Unit by unit.
     #[test]
     fn the_bench_sim_of_a_map_has_the_map_views_entity_ids() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
         let root = found.root_string();
         let mod_name = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mod_name.as_deref()).expect("mount");

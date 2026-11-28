@@ -16,7 +16,6 @@ use sta_content::race::skirmish_races;
 use sta_content::{ContentDb, OdfIndex, RaceDef, Races};
 use sta_vfs::Vfs;
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
 
 /// One start unit of one race, and the model file it resolves to.
 struct Start {
@@ -62,41 +61,35 @@ fn installs() -> Vec<(String, PathBuf, Option<String>)> {
     let mut v: Vec<(String, PathBuf, Option<String>)> = vec![
         (
             "FO4".into(),
-            Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots"),
+            sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots"),
             Some("Fleet Ops 4.0".into()),
         ),
         (
             "Roots".into(),
-            Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots"),
+            sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots"),
             None,
         ),
         (
             "STA2 Classic".into(),
-            Path::new(HEROIC).join("Star Trek Armada II Fleet Operations Roots"),
+            sta_testkit::game_root("Star Trek Armada II Fleet Operations Roots"),
             Some("STA2 Classic Mod".into()),
         ),
         (
             "FO".into(),
-            Path::new(HEROIC).join("Star Trek Armada II Fleet Operations"),
+            sta_testkit::game_root("Star Trek Armada II Fleet Operations"),
             None,
         ),
         (
             "DW".into(),
-            Path::new(HEROIC).join("Star Trek Armada II Dominion War"),
+            sta_testkit::game_root("Star Trek Armada II Dominion War"),
             None,
         ),
         (
             "A2".into(),
-            Path::new(HEROIC).join("Star Trek Armada II (Stock)"),
+            sta_testkit::game_root("Star Trek Armada II (Stock)"),
             None,
         ),
     ];
-    if let Ok(root) = std::env::var("STA64_TEST_INSTALL") {
-        let m = std::env::var("STA64_TEST_MOD")
-            .ok()
-            .filter(|m| !m.is_empty());
-        v.push(("env".into(), PathBuf::from(root), m));
-    }
     v
 }
 

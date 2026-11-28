@@ -118,7 +118,7 @@ fn installed_status_queue_and_cargo_render_and_clear() {
         );
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let install = found.root_string();
     let active_mod = found.active_mod.clone();
     let cfg = std::env::var("STA64_TEST_CFG").expect("STA64_TEST_CFG");

@@ -18,7 +18,7 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
         sta_testkit::skip("set STA64_GPU_TESTS=1 (the GPU opt-in)");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let active_mod = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active_mod.as_deref()).unwrap();
@@ -251,7 +251,7 @@ impl MoonFrame {
 fn installed_moon_materials_draw_no_highlight_in_the_stock_look() {
     use crate::render::hulls::{hull_material, HullPart, HullView};
     use crate::render::stock::hulls::StockLight;
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let active_mod = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active_mod.as_deref()).unwrap();

@@ -968,7 +968,7 @@ fn gpu_the_cap_adds_in_its_level_colour_in_its_cell_with_the_pole_at_the_hit_and
 /// flipbook is an animation of the sprite table. Skips without an install.
 #[test]
 fn install_the_default_model_resolves_loads_and_every_vertex_lies_within_its_database_radius() {
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let m = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();

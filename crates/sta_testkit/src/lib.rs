@@ -4,23 +4,19 @@
 //! ([`Kind`]); the kind has one environment variable, and a test whose variable is unset, or whose install is not of
 //! that kind, skips with one line, `SKIP: set <NAME> (needs <kind>)`, instead of failing or returning silently.
 //!
-//! Transition: the old general variables `STA64_TEST_INSTALL` and `STA64_TEST_MOD` are still accepted, for a kind
-//! that has a content profile, when and only when the install they name is of that kind (read-only profile
-//! detection through the same mount the game uses). They go once every crate's tests are migrated.
+//! Transition: the old general variables `STA64_TEST_INSTALL` and `STA64_TEST_MOD` are still accepted by the client's
+//! own wrapper (`sta64::testsupport`), for a kind that has a content profile, when and only when the install they
+//! name is of that kind (profile detection needs `sta_content`, which this crate must not depend on: the content
+//! crate's own tests use it). They go once every crate's tests are migrated.
 //!
 //! Nothing here writes to disk or starts a game.
 //!
 //! **This crate must never become a dependency of a non-test target.** Crates list it under
 //! `[dev-dependencies]` only; it exists for tests that read a player's own install.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use sta_content::Profile;
 use sta_vfs::Vfs;
-
-/// The general variable of the transition and its mod companion.
-const GENERAL_INSTALL: &str = "STA64_TEST_INSTALL";
-const GENERAL_MOD: &str = "STA64_TEST_MOD";
 
 /// The kind of install a test needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,16 +75,6 @@ impl Kind {
         }
     }
 
-    /// The content profile of an install of this kind, when it has one the general variable can be checked against.
-    fn profile(self) -> Option<Profile> {
-        match self {
-            Kind::FirstGame => Some(Profile::Sta1Classic),
-            Kind::StockSecond => Some(Profile::Sta2Classic),
-            Kind::ModFamily => Some(Profile::Fo4),
-            Kind::Fo327 | Kind::DominionWar => Some(Profile::Fo3),
-            Kind::Evolution | Kind::Any => None,
-        }
-    }
 }
 
 /// An install a test runs on.
@@ -117,40 +103,21 @@ impl Found {
 }
 
 /// The text of a variable: set and not empty.
-fn var(name: &str) -> Option<String> {
+pub fn var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// The profile of the install at `root` with `active_mod`, read-only; `None` when it does not mount.
-fn detect(root: &Path, active_mod: Option<&str>) -> Option<Profile> {
-    Vfs::mount_install(root, active_mod).ok().map(|v| Profile::detect(&v))
-}
-
-/// The install of `kind`, if the machine has one: the kind's variable, else (transition) the general one when its
-/// install is of this kind. Prints nothing; [`install_with_mod`] and [`install`] print the skip line.
+/// The install of `kind`, if the machine has one: the kind's variable. Prints nothing; [`install_with_mod`] and
+/// [`install`] print the skip line.
 pub fn find(kind: Kind) -> Option<Found> {
     if kind == Kind::Any {
-        return Kind::ANY.iter().find_map(|k| find(*k)).or_else(|| general(None));
+        return Kind::ANY.iter().find_map(|k| find(*k));
     }
     if let Some(root) = var(kind.variable()) {
         let active_mod = kind.mod_variable().and_then(var);
         return Some(Found { root: PathBuf::from(root), active_mod });
     }
-    general(Some(kind))
-}
-
-/// The general variables of the transition, accepted for `kind` only when the install they name is of that kind
-/// (`None`: any kind, for [`Kind::Any`]).
-fn general(kind: Option<Kind>) -> Option<Found> {
-    let root = PathBuf::from(var(GENERAL_INSTALL)?);
-    let active_mod = var(GENERAL_MOD);
-    match kind {
-        None => Some(Found { root, active_mod }),
-        Some(kind) => match kind.profile() {
-            Some(wanted) if detect(&root, active_mod.as_deref()) == Some(wanted) => Some(Found { root, active_mod }),
-            _ => None,
-        },
-    }
+    None
 }
 
 /// The root of the install of `kind`, or `None` after the one-line skip message.
@@ -165,6 +132,30 @@ pub fn install_with_mod(kind: Kind) -> Option<Found> {
         skip(&format!("set {} (needs {})", kind.variable(), kind.needs()));
     }
     found
+}
+
+/// The kind a game folder title stands for, for the tests that name the games they check by title.
+fn kind_of_title(title: &str) -> Option<Kind> {
+    Some(match title {
+        "Star Trek Armada" => Kind::FirstGame,
+        "Star Trek Armada II" | "Star Trek Armada II (Stock)" => Kind::StockSecond,
+        "Star Trek Armada II Fleet Operations Roots" => Kind::ModFamily,
+        "Star Trek Armada II Fleet Operations" => Kind::Fo327,
+        "Star Trek Armada II Dominion War" => Kind::DominionWar,
+        "Star Trek Armada II Evolution" => Kind::Evolution,
+        _ => return None,
+    })
+}
+
+/// The install root of the game with this title, when its kind's variable is set.
+pub fn game(title: &str) -> Option<PathBuf> {
+    find(kind_of_title(title)?).map(|f| f.root)
+}
+
+/// [`game`], or, when the kind's variable is not set, a path that does not exist and names the variable, so that
+/// the older tests, which skip an absent install on their own, keep doing so. No default location is ever guessed.
+pub fn game_root(title: &str) -> PathBuf {
+    game(title).unwrap_or_else(|| PathBuf::from(format!("not-configured/{}", kind_of_title(title).map_or("unknown-game", Kind::variable))))
 }
 
 /// The one-line skip message of a test, on the standard error stream.
@@ -195,7 +186,48 @@ pub fn a_map(vfs: &Vfs) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
+
+    /// The patterns of a person's home directory and of one machine's games folder, split so this file does not match.
+    fn forbidden() -> Vec<String> {
+        vec![format!("/{}/{}", "home", "cedric"), format!("Games/{}", "Heroic"), format!("/{}/{}", "Users", "cedric")]
+    }
+
+    fn scan(dir: &Path, found: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let path = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if path.is_dir() {
+                if !matches!(name.as_str(), "target" | ".git" | "__pycache__" | "vendor") {
+                    scan(&path, found);
+                }
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                for (n, line) in text.lines().enumerate() {
+                    let home = line.contains("/home/") && !line.contains("assertNotIn(") && !line.contains("/home/example") && !line.contains("/home/user");
+                    if forbidden().iter().any(|f| line.contains(f)) || home {
+                        found.push(format!("{}:{}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+    }
+
+    /// No home directory of a person, and no games folder of one machine, appears under `crates/`, `tools/` or `docs/`
+    /// (a placeholder user such as `/home/example` is allowed in a document). `tools/gated.local` is git-ignored and
+    /// skipped.
+    #[test]
+    fn no_home_directory_literal_is_in_the_tree() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = Vec::new();
+        for dir in ["crates", "tools", "docs"] {
+            scan(&root.join(dir), &mut found);
+        }
+        found.retain(|f| !f.contains("gated.local"));
+        assert!(found.is_empty(), "a path of someone's machine is in the repository: {found:?}");
+    }
 
     #[test]
     fn each_kind_has_its_own_variable_and_only_the_mod_family_takes_a_mod() {

@@ -66,7 +66,7 @@ fn installed_reveal(preview: bool) {
         );
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let active_mod = found.active_mod.clone();
     let vfs =

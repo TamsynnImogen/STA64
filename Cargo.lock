@@ -5806,6 +5806,7 @@ dependencies = [
  "sta_bzn",
  "sta_core",
  "sta_odf",
+ "sta_testkit",
  "sta_vfs",
  "thiserror 2.0.21",
 ]
@@ -5905,6 +5906,7 @@ dependencies = [
  "sta_content",
  "sta_core",
  "sta_odf",
+ "sta_testkit",
  "sta_vfs",
 ]
 
@@ -5916,7 +5918,6 @@ version = "0.1.0"
 name = "sta_testkit"
 version = "0.1.0"
 dependencies = [
- "sta_content",
  "sta_vfs",
 ]
 

@@ -1323,7 +1323,7 @@ mod tests {
     /// layers) must have been seen. Skips without an install.
     #[test]
     fn install_map_sprite_and_icon_keys_resolve_through_the_sprite_table() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
         let root = found.root_string();
         let m = found.mod_string();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();

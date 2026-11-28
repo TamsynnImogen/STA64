@@ -2203,7 +2203,7 @@ mod tests {
     /// entity again, a ship obeys a move order, and two hostile ships fight.
     #[test]
     fn install_maps_build_a_sim_that_moves_and_fights() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
         let root = found.root_string();
         let m = found.mod_string();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -2305,7 +2305,7 @@ mod tests {
     /// install deploys a structure at a site abeam of it, however wide its turning circle.
     #[test]
     fn install_construction_ships_deploy_at_a_site_abeam() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
         let root = found.root_string();
         let m = found.mod_string();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();

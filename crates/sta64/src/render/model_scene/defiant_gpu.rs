@@ -14,7 +14,7 @@ fn installed_defiant_draws_offscreen() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_DEFIANT_TESTS=1 and an install variable (docs/GATED_TESTS.md)");
         return;
     }
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let active_mod = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&active_mod)).unwrap();

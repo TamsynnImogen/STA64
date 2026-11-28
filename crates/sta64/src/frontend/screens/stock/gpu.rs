@@ -145,7 +145,7 @@ fn main_menu_renders_without_a_window() {
     }
     capture(UVec2::new(1920, 1080), "short-mod", Some("Roots"), None, Screen::Main);
     capture(UVec2::new(1920, 1080), "long-mod", Some("Expanded Fleet Operations and Starship Construction Project"), None, Screen::Main);
-    if let Some(found) = sta_testkit::find(sta_testkit::Kind::Any) {
+    if let Some(found) = crate::testsupport::find(sta_testkit::Kind::Any) {
         let vfs = sta_vfs::Vfs::mount_install(&found.root, found.active_mod.as_deref())
             .expect("main-menu capture install mount");
         capture(UVec2::new(1920, 1080), "mounted", None, Some(vfs), Screen::Main);
@@ -169,7 +169,7 @@ fn graphics_options_render_without_a_window() {
     ] {
         capture(size, name, None, None, Screen::Settings);
     }
-    if let Some(found) = sta_testkit::find(sta_testkit::Kind::Any) {
+    if let Some(found) = crate::testsupport::find(sta_testkit::Kind::Any) {
         let vfs = sta_vfs::Vfs::mount_install(&found.root, found.active_mod.as_deref())
             .expect("graphics capture install mount");
         capture(UVec2::new(1920, 1080), "mounted", None, Some(vfs), Screen::Settings);

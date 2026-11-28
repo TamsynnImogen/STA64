@@ -196,7 +196,7 @@ fn an_idle_opponent_never_acts_and_survives() {
 /// craft, and that craft hitting the human opponent.
 #[test]
 fn install_skirmish_starts_and_the_ai_acts() {
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let ticks: u64 = std::env::var("STA64_TEST_AI_TICKS").map_or(9000, |s| s.parse().expect("STA64_TEST_AI_TICKS is an integer"));
     assert!((1..=108_000).contains(&ticks), "STA64_TEST_AI_TICKS must be between 1 and 108000");
@@ -275,7 +275,7 @@ fn install_skirmish_starts_and_the_ai_acts() {
 #[test]
 fn install_skirmish_rig_starts_building() {
     use sta_sim::command::{Command, CommandKind, Edit, Order};
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -336,7 +336,7 @@ fn install_skirmish_rig_starts_building() {
 #[test]
 fn install_skirmish_freighter_mines_a_moon() {
     use sta_sim::command::CommandKind;
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -428,7 +428,7 @@ fn install_skirmish_freighter_mines_a_moon() {
 fn install_map_picks_resource_moons() {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -503,7 +503,7 @@ fn install_map_icons_over_resource_moons() {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
     use crate::render::strategic::{Strategic, centre_for_bounds, shape_for, silhouette_size, SYMBOL_ENTER_PX};
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -614,7 +614,7 @@ fn install_map_icons_over_resource_moons() {
 #[test]
 fn install_preplaced_miners_mine_the_moons_the_seat_sees() {
     use sta_sim::command::CommandKind;
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -670,7 +670,7 @@ fn install_preplaced_miners_mine_the_moons_the_seat_sees() {
 fn install_map_resource_objects_are_pickable_top_down() {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::*;
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let m = found.mod_string();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();

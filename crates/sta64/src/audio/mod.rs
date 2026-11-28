@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn real_install_voices_follow_the_front_end_mod_switch() {
         use crate::frontend::screens::ModChosen;
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
         let root = found.root_string();
         let modname = found.active_mod.clone().unwrap_or_else(|| "STA2 Classic Mod".into());
         let root = std::path::PathBuf::from(root);

@@ -695,7 +695,7 @@ mod team_colour_tests {
     /// entries the install's palette has. No values are asserted.
     #[test]
     fn every_installed_armada_one_map_table_resolves_to_palette_entries() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::FirstGame) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::FirstGame) else { return };
         let root = found.root_string();
         let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), found.active_mod.as_deref()) else { return };
         let palette = TeamColours::load(&vfs);

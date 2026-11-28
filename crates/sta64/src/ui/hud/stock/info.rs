@@ -1570,7 +1570,7 @@ mod tests {
     /// Uses installed CFG rectangles and parsed sprite font sheets when opted in.
     #[test]
     fn installed_group_names_fit_one_line_above_hulls() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::ModFamily) else { return };
         let root = found.root.clone();
         let Some(mode) = found.active_mod.clone() else {
             sta_testkit::skip("set STA64_TEST_ROOTS_MOD (this test needs the mod's race sheets)");
@@ -1653,8 +1653,8 @@ mod tests {
     /// cannot be mounted or read fails; an unset one skips with a message.
     #[test]
     fn installed_resource_text_rectangles_lie_inside_their_panels() {
-        let a1 = sta_testkit::find(sta_testkit::Kind::FirstGame).map(|f| f.root.into_os_string());
-        let second = sta_testkit::find(sta_testkit::Kind::ModFamily).or_else(|| sta_testkit::find(sta_testkit::Kind::StockSecond));
+        let a1 = crate::testsupport::find(sta_testkit::Kind::FirstGame).map(|f| f.root.into_os_string());
+        let second = crate::testsupport::find(sta_testkit::Kind::ModFamily).or_else(|| crate::testsupport::find(sta_testkit::Kind::StockSecond));
         if a1.is_none() && second.is_none() {
             sta_testkit::skip("set STA64_TEST_A1_INSTALL (needs an Armada I install) or STA64_TEST_ROOTS_INSTALL / STA64_TEST_A2_STOCK_INSTALL");
             return;

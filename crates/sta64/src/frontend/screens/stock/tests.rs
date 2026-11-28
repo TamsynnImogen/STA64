@@ -812,7 +812,7 @@ fn hud_layout_dropdown_follows_the_setting() {
 /// stock buttons. Needs `STA64_TEST_INSTALL` (and `STA64_TEST_MOD`).
 #[test]
 fn captions_come_from_the_installs_label_map() {
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let active = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active.as_deref()).unwrap();

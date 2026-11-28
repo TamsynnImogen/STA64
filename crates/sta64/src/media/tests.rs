@@ -420,7 +420,7 @@ fn nointro_and_the_setting_queue_nothing() {
 /// sequence opens and its movies decode and play through the real player, on real Bink files.
 #[test]
 fn install_intro_sequence_plays() {
-    let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+    let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
     let root = found.root_string();
     let mod_name = found.active_mod.clone();
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mod_name.as_deref()).expect("mount");

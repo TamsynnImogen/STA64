@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn installed_name_pools_are_read_without_splitting_craft_names() {
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
         let root = found.root_string();
         let active_mod = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active_mod.as_deref())

@@ -8,16 +8,16 @@ use std::path::Path;
 use sta_content::{ContentDb, OdfIndex};
 use sta_vfs::Vfs;
 
-const ROOTS: &str = "/home/cedric/Games/Heroic/Star Trek Armada II Fleet Operations Roots";
+const ROOTS: &str = "Star Trek Armada II Fleet Operations Roots";
 
 type Rates = (Option<i64>, Vec<(String, f64)>);
 
 fn rates(active: Option<&str>) -> Option<Rates> {
-    let root = Path::new(ROOTS);
+    let root = sta_testkit::game_root(ROOTS);
     if !root.is_dir() {
         return None;
     }
-    let vfs = Vfs::mount_install(root, active).ok()?;
+    let vfs = Vfs::mount_install(&root, active).ok()?;
     let (index, _) = OdfIndex::build(&vfs);
     let (db, _) = ContentDb::load(&vfs, &index).ok()?;
     let rules = db.rules().crew()?.clone();
@@ -43,7 +43,7 @@ fn classic_federation_accumulates_four_per_second_and_roots_none() {
 /// ODFs (stock Armada II rules via the Classic mod; absent installs skip).
 #[test]
 fn classic_ordnance_and_units_carry_the_crew_loss_keys() {
-    let root = Path::new(ROOTS);
+    let root = sta_testkit::game_root(ROOTS);
     if !root.is_dir() {
         return;
     }

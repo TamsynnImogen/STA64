@@ -1340,7 +1340,7 @@ mod tests {
             eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 an install variable (docs/GATED_TESTS.md)");
             return;
         }
-        let Some(found) = sta_testkit::install_with_mod(sta_testkit::Kind::Any) else { return };
+        let Some(found) = crate::testsupport::install_with_mod(sta_testkit::Kind::Any) else { return };
         let install = found.root_string();
         let active_mod = found.active_mod.clone();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
