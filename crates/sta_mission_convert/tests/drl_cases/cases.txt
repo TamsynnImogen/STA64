@@ -1,3 +1,4 @@
+# generated with CPython 3.14
 case|single_variable
 iat|0x10041000|synthS.dsl|?p_ALPHA@@3PAVhot_int@@A
 iat|0x10041004|engine.dll|?p_ALWAYS_EVALUATE@@3PAVdirty_int@@A

@@ -270,3 +270,53 @@ impl PeBuilder {
         }
     }
 }
+
+/// Authored engine files for tests: an executable and its map in which every class the converter
+/// reads has a table, with the name each slot check wants ([`crate::drl::ENGINE_WANT`],
+/// [`crate::call::ENGINE_WANT`]) at its slot and an invented name in every other slot. Built
+/// from those lists, so it passes the checks whatever they are; no name is taken from a game
+/// file. Written as `Armada2.exe` and `armada2.map` into `dir`, where the engine lookup reads
+/// them.
+pub fn write_checked_engine(dir: &std::path::Path) -> std::io::Result<()> {
+    let wants: Vec<&crate::map::ExpectedSlot<'static>> =
+        crate::drl::ENGINE_WANT.iter().chain(crate::call::ENGINE_WANT.iter()).collect();
+    let classes = crate::drl::ENGINE_CLASSES.iter().chain(crate::call::OBJECT_CLASSES.iter());
+    let tables: Vec<(&str, Vec<String>)> = classes
+        .map(|&class| {
+            let mine: Vec<_> = wants.iter().filter(|w| w.class == class).collect();
+            let slots = mine.iter().map(|w| w.slot + 1).max().unwrap_or(1);
+            let names = (0..slots)
+                .map(|i| match mine.iter().find(|w| w.slot == i) {
+                    Some(w) => format!("{}UAEXXZ", w.prefix),
+                    None => format!("?invented{i}@{class}@@UAEXXZ"),
+                })
+                .collect();
+            (class, names)
+        })
+        .collect();
+    // every name is a function at its own code address; a class's table lists those addresses
+    let mut funcs: Vec<&str> = Vec::new();
+    for name in tables.iter().flat_map(|(_, names)| names) {
+        if !funcs.contains(&name.as_str()) {
+            funcs.push(name);
+        }
+    }
+    let code = |n: &str| 0x40_1000u32 + 0x10 * funcs.iter().position(|f| *f == n).unwrap_or(0) as u32;
+    let (mut rdata, mut map) = (Vec::new(), String::new());
+    for (i, f) in funcs.iter().enumerate() {
+        map.push_str(&format!(" 0001:{:08x} {f} {:08x} f\n", 0x10 * i, code(f)));
+    }
+    for (class, names) in &tables {
+        map.push_str(&format!(" 0002:{:08x} ??_7{class}@@6B@ {:08x} \n", rdata.len(), 0x40_2000 + rdata.len()));
+        for n in names {
+            rdata.extend_from_slice(&code(n).to_le_bytes());
+        }
+        // a word outside the code ends the table
+        rdata.extend_from_slice(&0u32.to_le_bytes());
+    }
+    let text = vec![0x90u8; (0x10 * funcs.len()).max(0x400)];
+    let exe = PeBuilder::new(0x40_0000).section(".text", 0x1000, &text, CODE).section(".rdata", 0x2000, &rdata, DATA).build().bytes;
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join("Armada2.exe"), exe)?;
+    std::fs::write(dir.join("armada2.map"), map)
+}

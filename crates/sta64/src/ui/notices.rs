@@ -340,6 +340,53 @@ fn events_to_notices(
     }
 }
 
+/// The notice for a move order that names craft whose engines are offline, if it does (#1031, point 2): one
+/// notice per order, naming the craft when it is one and counting them otherwise.
+///
+/// STA64's own hint, not the original's: the original's reaction to such an order was not measured (it accepts
+/// and keeps the order, and says nothing the notes record). It is shown in STA64's own HUD only
+/// ([`engines_offline_hint`]).
+pub fn engines_offline_notice(view: &sta_sim::WorldView, units: &[sta_sim::EntityId], name: impl Fn(&UnitView) -> String) -> Option<Notice> {
+    let off: Vec<&UnitView> = units
+        .iter()
+        .filter_map(|id| view.unit(*id))
+        .filter(|u| u.flags.contains(sta_sim::view::UnitFlags::ENGINES_OFF))
+        .collect();
+    Some(match off.as_slice() {
+        [] => return None,
+        [one] => Notice::new(Severity::Warn, trf("{0}: engines offline", &[&name(one)])),
+        many => Notice::new(Severity::Warn, trf("{0} ships: engines offline", &[&many.len()])),
+    })
+}
+
+/// A move order given to a craft whose engines are offline raises the hint once, in STA64's own HUD only. The
+/// stock HUD mode (every [`UiProfile`](super::profile::UiProfile) but the own one) adds nothing: what the
+/// original shows for such an order is not measured, and the stock look never carries STA64's additions
+/// (ADR 0008). The hint reads the unit's state from the view and does not depend on the sim's
+/// `engines_off_drift` switch: with it off the craft stops where it is, and its engines are as offline.
+fn engines_offline_hint(
+    mut issued: MessageReader<crate::sim_link::OrderIssued>,
+    link: Option<Res<SimLink>>,
+    db: Option<Res<ContentRes>>,
+    profile: Option<Res<super::profile::UiProfile>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    mut out: MessageWriter<Notice>,
+) {
+    let own_hud = !profile.is_some_and(|p| p.is_stock());
+    let Some(link) = link.filter(|_| own_hud && !crate::ui::presentation::cutscene_running(cine)) else {
+        issued.clear();
+        return;
+    };
+    for order in issued.read() {
+        if order.kind != crate::sim_link::OrderKind::Move {
+            continue;
+        }
+        if let Some(n) = engines_offline_notice(link.curr(), &order.units, |u| name_of(db.as_deref(), u)) {
+            out.write(n);
+        }
+    }
+}
+
 /// Units whose owner changed since the last call, and which side of `me` they crossed:
 /// `(id, from, to)` for a unit `me` lost or gained. A unit seen for the first time is only
 /// remembered; units gone from the view are forgotten.
@@ -887,6 +934,7 @@ impl Plugin for NoticePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
             .add_message::<SimMsg>()
+            .add_message::<crate::sim_link::OrderIssued>()
             .add_message::<Notice>()
             .add_message::<ChatMsg>()
             .init_resource::<Notices>()
@@ -900,7 +948,7 @@ impl Plugin for NoticePlugin {
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, tip_cfg_colours, load_tip_delays, unit_tip, (draw_notices, draw_chat, draw_tip), stock_tip_box).chain().in_set(GameSet::Ui).after(ProfileSync))
+            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), engines_offline_hint, collect, age, retheme, tip_cfg_colours, load_tip_delays, unit_tip, (draw_notices, draw_chat, draw_tip), stock_tip_box).chain().in_set(GameSet::Ui).after(ProfileSync))
             .add_systems(PostUpdate, position_tip.after(bevy::ui::UiSystems::Layout).before(bevy::ui::UiSystems::PostLayout));
     }
 }
@@ -909,6 +957,8 @@ impl Plugin for NoticePlugin {
 mod tooltip_layout_tests;
 #[cfg(test)]
 mod stock_tooltip_tests;
+#[cfg(test)]
+mod engines_hint_tests;
 
 #[cfg(test)]
 mod tests {

@@ -255,6 +255,12 @@ impl SpriteFont {
                 y += h * scale.y;
                 continue;
             }
+            // The stock text routine (`round_up` is its mark: only the stock path passes it) skips a code
+            // below the space with no advance and nothing drawn, instead of showing it as `?`. Grade: read
+            // from the executable, static; not measured. A line break is the one control code STA64 keeps.
+            if round_up && (ch as u32) < 0x20 {
+                continue;
+            }
             let code = windows_1252(ch);
             let found = self
                 .glyph(code)
@@ -3113,6 +3119,23 @@ mod tests {
         // Without rounding the pen advances by the exact scaled width, as before.
         let exact: Vec<f32> = f.layout_xy("abc", Vec2::splat(1.2), false).quads.iter().map(|q| q.rect[0]).collect();
         assert_eq!(exact, f.layout("abc", 1.2).quads.iter().map(|q| q.rect[0]).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_stock_routine_skips_a_control_code_with_no_advance() {
+        let f = authored("f", 10.0, 5.5, None);
+        let scale = Vec2::splat(1.2);
+        for text in ["a\tb", "a\u{1}b\u{1f}", "a\r"] {
+            let plain = text.chars().filter(|c| (*c as u32) >= 0x20).collect::<String>();
+            let (got, want) = (f.layout_xy(text, scale, true), f.layout_xy(&plain, scale, true));
+            assert_eq!(got.quads.iter().map(|q| q.rect).collect::<Vec<_>>(), want.quads.iter().map(|q| q.rect).collect::<Vec<_>>(), "{text:?}");
+            assert_eq!(got.width, want.width, "{text:?}");
+        }
+        // A line break stays a line break.
+        assert_eq!(f.layout_xy("a\nb", scale, true).quads.len(), 2);
+        // Every other path keeps drawing the substitute glyph for the code, as before.
+        assert_eq!(f.layout_xy("a\tb", scale, false).quads.len(), 3);
+        assert_eq!(f.layout("a\tb", 1.0).quads.len(), 3);
     }
 
     fn resolve_app(fonts: SpriteFonts, canvas: StockTextCanvas) -> App {

@@ -602,8 +602,9 @@ impl MissionHost for ClientHost {
 /// install has no campaign mission (Fleet Ops 4.0 and Dominion War list none) or cannot be mounted
 /// again for the scripts. Progress is read from the platform config directory.
 pub fn load_campaigns(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>) -> Option<(Campaigns, MissionMovies)> {
-    // The conversion covers the base game only (D6: a mod's chain is not converted).
-    let converted = install_root.filter(|_| active_mod.is_none_or(str::is_empty)).and_then(|r| crate::platform::converted_missions_dir(r, None));
+    // The converted missions follow the install and the mod they were made for (D6): the base game's folder,
+    // or, with a mod active, that mod's own.
+    let converted = install_root.and_then(|r| crate::platform::converted_missions_dir(r, active_mod.filter(|m| !m.is_empty())));
     load_campaigns_with(vfs, install_root, active_mod, converted.as_deref(), ProgressStore::platform)
 }
 
@@ -611,11 +612,6 @@ pub fn load_campaigns(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>
 /// given (tests keep the player's files out of it).
 pub fn load_campaigns_in(vfs: &sta_vfs::Vfs, install_root: Option<&std::path::Path>, active_mod: Option<&str>, store: impl FnOnce(&CampaignBook) -> ProgressStore) -> Option<(Campaigns, MissionMovies)> {
     load_campaigns_with(vfs, install_root, active_mod, None, store)
-}
-
-/// The command that converts an install's missions (shown by the missions screen).
-pub fn convert_hint(install_root: &std::path::Path) -> String {
-    format!("Run once from the STA64 checkout, then restart: python3 tools/convert_install_missions.py --install \"{}\"", install_root.display())
 }
 
 /// [`load_campaigns_in`] with the converted-missions folder `converted` (when it holds
@@ -639,7 +635,10 @@ pub fn load_campaigns_with(
         }
     };
     let own: std::collections::BTreeSet<String> = host_vfs.list("missions").into_iter().map(|p| p.to_ascii_lowercase()).collect();
-    let mounted = converted.filter(|d| sta_mission::converted::mount(&mut host_vfs, d));
+    // The mod family's own base game runs the scripts it ships: the stock campaign found at the root of a
+    // hand-made install is not converted under it, so nothing converted is mounted there (#1407, D6).
+    let family_base = active_mod.is_none_or(str::is_empty) && super::mission_convert::is_family_base(sta_content::Profile::detect(&host_vfs));
+    let mounted = converted.filter(|_| !family_base).filter(|d| sta_mission::converted::mount(&mut host_vfs, d));
     // The book reads the same layers the scripts will be read from.
     let book = CampaignBook::load_vfs(&host_vfs);
     for w in &book.warnings {
@@ -656,12 +655,13 @@ pub fn load_campaigns_with(
     if let Some(dir) = mounted {
         campaigns.mark_converted(dir, &own);
         info!("campaigns: {} missions run converted scripts from {} (experimental)", campaigns.experimental.len(), dir.display());
-    } else if campaigns.awaits_conversion()
-        && active_mod.is_none_or(str::is_empty)
-        && let Some(root) = install_root
-    {
-        campaigns.convert_hint = Some(convert_hint(root));
-        info!("campaigns: missions wait for a Lua conversion; {}", campaigns.convert_hint.as_deref().unwrap_or_default());
+    }
+    // The in-game conversion is offered where missions wait for it or a conversion is already mounted
+    // (`game::mission_convert`): for a plain stock install its own missions, with a mod active that mod's, and
+    // not for the mod family's own base game (#1407: the engine pair at the root does not make an offer).
+    campaigns.convertible = install_root.is_some() && !family_base && (campaigns.awaits_conversion() || mounted.is_some());
+    if campaigns.convertible && mounted.is_none() {
+        info!("campaigns: missions wait for a Lua conversion (Prepare missions on the mission list)");
     }
     if let Some(w) = &campaigns.load_warning {
         warn!("campaigns: saved progress not used: {w}");

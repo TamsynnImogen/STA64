@@ -98,6 +98,7 @@ fn a_ship_crosses_a_map_with_asteroid_fields() {
         units: vec![id],
         to,
         queue: false,
+        mode: None,
     });
     sim.step(&[Command {
         player: PlayerId(1),

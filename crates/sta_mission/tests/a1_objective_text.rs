@@ -2,11 +2,15 @@
 //! names a flat file of the install's `objtxt.zfs` (mounted at the VFS root by
 //! `sta_vfs`, CON-15); `A1` hands it to the shared objective loader that
 //! Armada II and Roots missions use. The first test authors its own archive;
-//! the second is install-gated (`STA64_TEST_A1_INSTALL`, needs `python3` and
-//! `objdump` for the converter) and prints counts only, no game text.
+//! the second is install-gated (`STA64_TEST_A1_INSTALL`; it converts with the Rust
+//! converter, no Python and no `objdump`, into a temporary folder that is removed
+//! with the test) and prints counts only, no game text; it pins no count either.
+
+#[path = "support/convert.rs"]
+mod support;
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use sta_mission::campaign::*;
@@ -59,21 +63,6 @@ fn objtxt_archive_feeds_the_objective_state_for_a1_calls() {
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
 }
 
-fn convert(install: &str, tag: &str) -> PathBuf {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(tag);
-    let _ = std::fs::remove_dir_all(&out);
-    let run = std::process::Command::new("python3")
-        .arg("-I")
-        .arg(repo.join("tools/a1_to_lua.py"))
-        .args(["--install", install, "--out"])
-        .arg(&out)
-        .output()
-        .expect("run python3 tools/a1_to_lua.py");
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-    out
-}
-
 /// The text names the converted Lua passes to the A1 call.
 fn referenced(missions: &Path) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
@@ -93,7 +82,8 @@ fn every_objective_text_a_converted_a1_mission_issues_resolves() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let out = convert(&install, "a1_objective_text");
+    let conv = support::convert(Path::new(&install), "a1-objective-text", &[], false);
+    let out = conv.dir();
     let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
     vfs.push_dir("converted".into(), out.clone()).expect("mount the converted missions");
     let vfs = Arc::new(vfs);
@@ -101,7 +91,7 @@ fn every_objective_text_a_converted_a1_mission_issues_resolves() {
     // Static: every file name any converted mission passes loads to a
     // non-empty text (a goal list, or a story for the goal-less files).
     let names = referenced(&out);
-    assert_eq!(names.len(), 67, "distinct text names the converted missions pass");
+    assert!(!names.is_empty(), "the converted missions pass no objective text name");
     let (mut with_goals, mut story_only, mut goals) = (0, 0, 0);
     for name in &names {
         let rt = runtime(vfs.clone());

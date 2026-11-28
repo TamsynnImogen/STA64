@@ -10,6 +10,7 @@ fn diagnostics_button_and_escape_keep_the_menu_modal() {
         .add_message::<ButtonClicked>()
         .add_message::<OpenInGameMenu>()
         .add_message::<LeaveMatch>()
+        .add_message::<crate::ui::save_menu::OpenSaveScreen>()
         .add_message::<AppExit>()
         .add_systems(Update, (keys_and_requests, buttons).chain());
     let diagnostics = app.world_mut().spawn(MenuAct::Diagnostics).id();

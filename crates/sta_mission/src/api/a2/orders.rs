@@ -363,7 +363,7 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
         if warp && n == 0 {
             env.order("Goto", unit.id, |units| Order::MoveWarp { units, to, queue: false })?;
         } else {
-            env.order("Goto", unit.id, |units| Order::Move { units, to, queue: n > 0 })?;
+            env.order("Goto", unit.id, |units| Order::Move { units, to, queue: n > 0, mode: None })?;
         }
     }
     nothing()
@@ -724,7 +724,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let (Some(unit), Some(target)) = (e.alive(a[0].id()), e.alive(a[2].id())) else { return nothing() };
         match what {
             CMD_GO => {
-                e.order("SetCommandWhatWhoVO", unit.id, |units| Order::Move { units, to: target.pos, queue: false })?;
+                e.order("SetCommandWhatWhoVO", unit.id, |units| Order::Move { units, to: target.pos, queue: false, mode: None })?;
             }
             CMD_ATTACK => return attack(e, "SetCommandWhatWhoVO", unit.id, target.id),
             CMD_GUARD => return guard(e, "SetCommandWhatWhoVO", unit.id, target.id),

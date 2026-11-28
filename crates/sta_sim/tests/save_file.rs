@@ -93,7 +93,7 @@ impl Controller for Counter {
         self.n += 1;
         let k = self.n + self.fired;
         let to = v((k * 377 % 3000) as i32 - 1500, (k * 911 % 3000) as i32 - 1500);
-        out.push(Command { player: P1, seq: self.n, kind: CommandKind::Order(Order::Move { units, to, queue: false }) });
+        out.push(Command { player: P1, seq: self.n, kind: CommandKind::Order(Order::move_to(units, to, false)) });
     }
     fn save_state(&self) -> Option<ControllerState> {
         let mut data = self.n.to_le_bytes().to_vec();
@@ -230,10 +230,10 @@ fn formation_round_a_moon() -> Scenario {
         |ids, s| {
             let group = ids[..4].to_vec();
             s.order(1, P0, Order::Formation { units: group.clone(), kind: 3 });
-            s.order(1, P0, Order::Move { units: group.clone(), to: v(1800, 900), queue: false });
-            s.order(2, P0, Order::Move { units: group.clone(), to: v(-1200, 1500), queue: true });
+            s.order(1, P0, Order::move_to(group.clone(), v(1800, 900), false));
+            s.order(2, P0, Order::move_to(group.clone(), v(-1200, 1500), true));
             s.order(500, P0, Order::Formation { units: group.clone(), kind: 2 });
-            s.order(500, P0, Order::Move { units: group, to: v(0, -1500), queue: false });
+            s.order(500, P0, Order::move_to(group, v(0, -1500), false));
         },
     )
 }
@@ -246,13 +246,13 @@ fn with_a_computer_player() -> Scenario {
         &[("fx_cruiser", P0, -2500, 0), ("fx_frigate", P0, -2400, 100), ("fx_cruiser", P1, 2500, 0), ("fx_frigate", P1, 2400, 100), ("fx_yard", P1, 3000, 300)],
         1100,
         |ids, s| {
-            s.order(1, P0, Order::Move { units: vec![ids[0], ids[1]], to: v(2000, 0), queue: false });
+            s.order(1, P0, Order::move_to(vec![ids[0], ids[1]], v(2000, 0), false));
             s.order(600, P0, Order::Attack { units: vec![ids[0]], target: ids[2] });
             // Player and sandbox input submitted for the same tick (one sequence
             // counter between them), and more player input a few ticks later.
-            s.order(700, P0, Order::Move { units: vec![ids[1]], to: v(500, 500), queue: false });
+            s.order(700, P0, Order::move_to(vec![ids[1]], v(500, 500), false));
             s.edit(700, Edit::Cargo(P0, 0, Fixed::from_int(50)));
-            s.order(705, P0, Order::Move { units: vec![ids[1]], to: v(-500, -500), queue: false });
+            s.order(705, P0, Order::move_to(vec![ids[1]], v(-500, -500), false));
             s.edit(710, Edit::Cargo(P0, 0, Fixed::from_int(60)));
         },
     )
@@ -694,7 +694,8 @@ fn not_a_save_file() {
 #[test]
 fn another_container_version_is_refused_not_migrated() {
     let (_, mut bytes) = a_save();
-    for found in [0u16, 2, 77] {
+    // version 1 is the one before the warp option (#1102): refused like any other
+    for found in [0u16, 1, 77] {
         bytes[4..6].copy_from_slice(&found.to_le_bytes());
         let e = load(&bytes, content(), map_source()).err().expect("refused");
         assert_eq!(e, SaveError::ContainerVersion { found, expected: save::CONTAINER_VERSION });

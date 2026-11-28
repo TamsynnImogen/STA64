@@ -14,3 +14,7 @@ indexmap = "2"
 thiserror.workspace = true
 # Cache keys and the integrity check of cache entries (LUA-15f).
 sha2.workspace = true
+# The install folder key, shared with the game (LUA-15j); no dependencies of its own.
+sta_core.workspace = true
+# The game's own mount of an install with a mod (#927, D6): a mod's missions are found through it.
+sta_vfs.workspace = true

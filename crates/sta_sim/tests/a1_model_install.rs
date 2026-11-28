@@ -43,7 +43,7 @@ fn fly(db: &Arc<ContentDb>, key: sta_core::ContentKey, to: (f64, f64), secs: u32
     let to = Vec3 { x: Fixed::from_f64(to.0), y: Fixed::ZERO, z: Fixed::from_f64(to.1) };
     let mut at = Vec::new();
     for i in 0..secs * TICK_HZ {
-        let cmds = if i == 0 { vec![Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![s], to, queue: false }) }] } else { vec![] };
+        let cmds = if i == 0 { vec![Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![s], to, queue: false, mode: None }) }] } else { vec![] };
         WorldSource::step(&mut sim, &cmds);
         let u = sim.unit(s).unwrap();
         at.push((f(u.pos.x), f(u.pos.z), f(u.speed)));

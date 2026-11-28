@@ -1,0 +1,218 @@
+//! The client's record in a save (ADR 0010 V2: one opaque, versioned record written and read by the
+//! client). JSON, so a field can be added or dropped without a new version: unknown fields are
+//! ignored, a missing or unreadable field takes its default and is reported, and only another
+//! `version` or text that is not JSON gives up the whole record. A record the client cannot read
+//! never makes a save unloadable: the match loads with defaults and a notice says what was left out.
+
+use serde_json::{Value, json};
+use crate::clock::MatchSpeed;
+use crate::frontend::screens::SetupFog;
+use crate::render::fog::ExploredRecord;
+
+/// The record layout this build writes and reads. Still 1: the record has not been released, and the
+/// commands in flight it briefly held moved to the container (they change the game, so damage must
+/// refuse); a field that is no longer written is ignored on reading anyway.
+pub const VERSION: u32 = 1;
+
+/// The orbit camera's pose (the capture index records the same fields).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CameraRec {
+    pub focus: [f32; 3],
+    pub yaw: f32,
+    pub pitch: f32,
+    pub dist: f32,
+}
+
+/// What the client saves for itself. Not in it, and rebuilt as on a fresh start: selection, HUD mode
+/// and pages, minimap, notices, music, cursor. Control groups wait for the input claim (#960).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClientRecord {
+    pub camera: Option<CameraRec>,
+    /// The local seat's explored memory.
+    pub explored: Option<ExploredRecord>,
+    /// The match's tick pacing.
+    pub speed: MatchSpeed,
+    /// The setup's shroud and fog choice (presentation only, so it is the client's to keep).
+    pub fog: SetupFog,
+}
+
+impl Default for ClientRecord {
+    fn default() -> Self {
+        ClientRecord { camera: None, explored: None, speed: MatchSpeed::Normal, fog: SetupFog::default() }
+    }
+}
+
+/// The most bytes of a client record read: a few MiB cover the runs of any map grid ([`MAX_CELLS`]
+/// squared cells), and the file around it may be anything up to the container's limit.
+///
+/// [`MAX_CELLS`]: crate::render::fog::MAX_CELLS
+pub const MAX_RECORD: usize = 4 << 20;
+
+fn speed_name(s: MatchSpeed) -> &'static str {
+    match s {
+        MatchSpeed::Slow => "slow",
+        MatchSpeed::Normal => "normal",
+        MatchSpeed::Fast => "fast",
+    }
+}
+
+impl ClientRecord {
+    pub fn encode(&self) -> Vec<u8> {
+        let camera = self.camera.map(|c| json!({"focus": c.focus, "yaw": c.yaw, "pitch": c.pitch, "dist": c.dist}));
+        let explored = self.explored.as_ref().map(|e| {
+            let runs: Vec<u64> = e.runs.iter().flat_map(|&(v, n)| [u64::from(v), u64::from(n)]).collect();
+            json!({"min": e.min, "w": e.w, "h": e.h, "runs": runs})
+        });
+        let v = json!({
+            "camera": camera,
+            "explored": explored,
+            "speed": speed_name(self.speed),
+            "fog": self.fog.key(),
+        });
+        v.to_string().into_bytes()
+    }
+
+    /// The record, and what was left out of it. `Err` when the version is not this build's or the
+    /// bytes are not a record at all: the caller then starts with [`ClientRecord::default`].
+    pub fn decode(version: u32, bytes: &[u8]) -> Result<(ClientRecord, Vec<String>), String> {
+        if version != VERSION {
+            return Err(format!("the client record is version {version}, this build reads version {VERSION}"));
+        }
+        if bytes.len() > MAX_RECORD {
+            return Err(format!("the client record is {} bytes, more than the {MAX_RECORD} this build reads", bytes.len()));
+        }
+        let v: Value = serde_json::from_slice(bytes).map_err(|e| format!("the client record is damaged: {e}"))?;
+        if !v.is_object() {
+            return Err("the client record is damaged: not an object".into());
+        }
+        let mut notes = Vec::new();
+        let mut rec = ClientRecord::default();
+        match &v["camera"] {
+            Value::Null => {}
+            c => match camera_of(c) {
+                Some(c) => rec.camera = Some(c),
+                None => notes.push("the camera position".to_owned()),
+            },
+        }
+        match &v["explored"] {
+            Value::Null => {}
+            e => match explored_of(e) {
+                Some(e) => rec.explored = Some(e),
+                None => notes.push("the explored map".to_owned()),
+            },
+        }
+        match v["speed"].as_str() {
+            Some("slow") => rec.speed = MatchSpeed::Slow,
+            Some("normal") | None => {}
+            Some("fast") => rec.speed = MatchSpeed::Fast,
+            Some(_) => notes.push("the game speed".to_owned()),
+        }
+        match v["fog"].as_str() {
+            None => {}
+            Some(k) => match [SetupFog::Both, SetupFog::FogOnly, SetupFog::Neither, SetupFog::ShroudOnly].into_iter().find(|f| f.key() == k) {
+                Some(f) => rec.fog = f,
+                None => notes.push("the shroud and fog choice".to_owned()),
+            },
+        }
+        Ok((rec, notes))
+    }
+}
+
+fn floats<const N: usize>(v: &Value) -> Option<[f32; N]> {
+    let a = v.as_array().filter(|a| a.len() == N)?;
+    let mut out = [0.0; N];
+    for (o, x) in out.iter_mut().zip(a) {
+        *o = x.as_f64().filter(|f| f.is_finite())? as f32;
+    }
+    Some(out)
+}
+
+fn camera_of(v: &Value) -> Option<CameraRec> {
+    let f = |k: &str| v[k].as_f64().filter(|f| f.is_finite()).map(|f| f as f32);
+    Some(CameraRec { focus: floats(&v["focus"])?, yaw: f("yaw")?, pitch: f("pitch")?, dist: f("dist")? })
+}
+
+fn explored_of(v: &Value) -> Option<ExploredRecord> {
+    let flat = v["runs"].as_array()?;
+    if flat.len() % 2 != 0 {
+        return None;
+    }
+    // The shape and the runs must fit the largest grid there is before anything is allocated from them.
+    let (w, h) = (usize::try_from(v["w"].as_u64()?).ok()?, usize::try_from(v["h"].as_u64()?).ok()?);
+    let cells = crate::render::fog::MAX_CELLS;
+    if w == 0 || h == 0 || w > cells || h > cells {
+        return None;
+    }
+    let mut runs = Vec::with_capacity(flat.len() / 2);
+    let mut total = 0usize;
+    for pair in flat.chunks(2) {
+        let n = u32::try_from(pair[1].as_u64()?).ok()?;
+        total = total.checked_add(n as usize)?;
+        if total > w * h {
+            return None;
+        }
+        runs.push((u8::try_from(pair[0].as_u64()?).ok()?, n));
+    }
+    Some(ExploredRecord { min: floats(&v["min"])?, w, h, runs })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn full() -> ClientRecord {
+        ClientRecord {
+            camera: Some(CameraRec { focus: [1.5, 0.0, -300.25], yaw: 0.3, pitch: -0.7, dist: 812.5 }),
+            explored: Some(ExploredRecord { min: [-100.0, -50.5], w: 3, h: 2, runs: vec![(0, 2), (255, 1), (130, 3)] }),
+            speed: MatchSpeed::Fast,
+            fog: SetupFog::ShroudOnly,
+        }
+    }
+
+    #[test]
+    fn a_record_over_the_cap_and_a_grid_larger_than_any_are_not_parsed() {
+        let big = vec![b' '; MAX_RECORD + 1];
+        assert!(ClientRecord::decode(VERSION, &big).unwrap_err().contains("more than"));
+        let mut v: Value = serde_json::from_slice(&full().encode()).unwrap();
+        v["explored"]["w"] = json!(1_000_000);
+        let (rec, notes) = ClientRecord::decode(VERSION, v.to_string().as_bytes()).unwrap();
+        assert_eq!((rec.explored, notes), (None, vec!["the explored map".to_owned()]));
+        let mut v: Value = serde_json::from_slice(&full().encode()).unwrap();
+        v["explored"]["runs"] = json!([0, 4_000_000_000u64]);
+        assert!(ClientRecord::decode(VERSION, v.to_string().as_bytes()).unwrap().0.explored.is_none(), "runs longer than the grid");
+    }
+
+    #[test]
+    fn a_record_round_trips_exactly() {
+        let r = full();
+        let (back, notes) = ClientRecord::decode(VERSION, &r.encode()).unwrap();
+        assert_eq!(back, r);
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn another_version_or_garbage_gives_up_the_whole_record() {
+        assert!(ClientRecord::decode(VERSION + 1, &full().encode()).unwrap_err().contains("version"));
+        assert!(ClientRecord::decode(VERSION, b"\x00 not json").is_err());
+        assert!(ClientRecord::decode(VERSION, b"[1]").is_err());
+    }
+
+    #[test]
+    fn an_unreadable_field_is_left_out_and_named_and_the_rest_survives() {
+        let mut v: Value = serde_json::from_slice(&full().encode()).unwrap();
+        v["camera"] = json!({"focus": "up"});
+        v["future_field"] = json!(7);
+        let (rec, notes) = ClientRecord::decode(VERSION, v.to_string().as_bytes()).unwrap();
+        assert_eq!(rec.camera, None);
+        assert_eq!(rec.explored, full().explored);
+        assert_eq!(rec.speed, MatchSpeed::Fast);
+        assert_eq!(notes, ["the camera position"]);
+    }
+
+    #[test]
+    fn a_missing_field_is_the_default_without_a_note() {
+        let (rec, notes) = ClientRecord::decode(VERSION, b"{}").unwrap();
+        assert_eq!(rec, ClientRecord::default());
+        assert!(notes.is_empty());
+    }
+}

@@ -251,7 +251,7 @@ fn sample_header() -> Header {
             SeatRec { id: PlayerId(3), team: TeamId(2), race: "d".into(), control: ControlRec::Remote },
             SeatRec { id: PlayerId(4), team: TeamId(2), race: "e".into(), control: ControlRec::RemoteAi("r".into()) },
         ],
-        options: GameOptions { officer_limit: 5, directors_cut: true, ..GameOptions::default() },
+        options: GameOptions { officer_limit: 5, directors_cut: true, allow_warp: false, ..GameOptions::default() },
         starts: StartRec::Races { loadouts: 9 },
         seed: 77,
         local_seat: Some(PlayerId(0)),
@@ -262,7 +262,7 @@ fn sample_header() -> Header {
     }
 }
 
-const GOLDEN_HEADER: &str = "056275696c64ef9bafcdf8acd19101066e617469766502087061636b206f6e65087061636b2074776f066e617469766507696e7374616c6c046d6f6473066d6170732f782a0001016d017302030500000161000101016202026169020101630303020164010402016504017200050101094d0100d209ae2c80e2cfaa060464657363";
+const GOLDEN_HEADER: &str = "056275696c64ef9bafcdf8acd19101066e617469766502087061636b206f6e65087061636b2074776f066e617469766507696e7374616c6c046d6f6473066d6170732f782a0001016d01730203050000016100010101620202616902010163030302016401040201650401720005010001094d0100d209ae2c80e2cfaa060464657363";
 const GOLDEN_SEAT_CONTROLLER: &str = "010102616903020908";
 const GOLDEN_JOURNAL: &str = "ac020200011e0200";
 const GOLDEN_IN_FLIGHT: &str = "0501000400010107";
@@ -383,6 +383,46 @@ fn a_header_with_other_seats_teams_or_options_is_refused() {
     assert!(matches!(loads(&dc), Err(SaveError::Invalid(why)) if why.contains("Director")));
     let id = forged(|h, _| h.seats[1].id = PlayerId(4));
     assert!(matches!(loads(&id), Err(SaveError::Invalid(_))));
+}
+
+/// The match option "warp allowed" (#1102) under the profile it counts for: a save keeps it,
+/// and a header that says the other thing than the snapshot is refused.
+#[test]
+fn a_save_keeps_the_warp_option_and_a_header_that_disagrees_is_refused() {
+    let content = Arc::new(ContentDb::builder().profile(sta_content::Profile::Sta2Classic).build().unwrap());
+    let map = Arc::new(sta_content::MapDef::empty());
+    let game = |allow_warp: bool| {
+        let setup = GameSetup {
+            seed: 3,
+            map: Arc::clone(&map),
+            content: Arc::clone(&content),
+            players: vec![
+                PlayerSetup { id: PlayerId(0), team: TeamId(0), race: "fx".into(), control: Control::Human },
+                PlayerSetup { id: PlayerId(1), team: TeamId(1), race: "fx".into(), control: Control::Idle },
+            ],
+            options: GameOptions { allow_warp, ..GameOptions::default() },
+        };
+        let mut sim = Sim::from_setup(&setup);
+        let mut replay = Replay::new(&setup);
+        replay.digests.push((0, sim.digest()));
+        for t in 0..10 {
+            let out = sim.step(&[]);
+            replay.log_step(t, &[], out.view.tick, out.view.digest, 5);
+        }
+        save_of(&sim, &replay, &InFlight { next_seq: 0, commands: Vec::new() }, false)
+    };
+    let load = |bytes: &[u8]| load(bytes, Arc::clone(&content), Some(MapSource { hash: 7, map: Arc::clone(&map) }));
+    for allow in [false, true] {
+        let bytes = game(allow);
+        let back = load(&bytes).expect("the save loads");
+        assert_eq!((back.header.options.allow_warp, back.sim.match_warp_off(), back.replay.options.allow_warp), (allow, !allow, allow));
+        // the header saying the other thing than the snapshot holds
+        let lied = forge(&bytes, |h, _| h.options.allow_warp = !allow);
+        assert!(matches!(load(&lied), Err(SaveError::Invalid(why)) if why.contains("warp option")), "option {allow}");
+    }
+    // under a profile the option does not count for, the field is ignored and does not refuse
+    let ignored = forged(|h, _| h.options.allow_warp = false);
+    assert!(loads(&ignored).is_ok_and(|l| !l.sim.match_warp_off()));
 }
 
 #[test]

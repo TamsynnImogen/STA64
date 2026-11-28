@@ -84,6 +84,7 @@ fn commands(sim: &Sim, setup: &GameSetup, tick: u64) -> Vec<Command> {
                         ((k * 71 + usize::from(p) * 29) % 600) as f32 - 300.0,
                     ]),
                     queue: k.is_multiple_of(3),
+                    mode: None,
                 }),
             });
         }

@@ -11,8 +11,12 @@ use sta_vfs::Vfs;
 const UNIT: &str = "unitName = \"x\"\nclassLabel = \"craft\"\nweapon1 = \"w_gun\"\nweaponHardpoints1 = \"hp01\"\n";
 
 fn load(weapon: &str, ordnance: &str) -> ContentDb {
+    load_as(Profile::Sta2Classic, weapon, ordnance)
+}
+
+fn load_as(profile: Profile, weapon: &str, ordnance: &str) -> ContentDb {
     let files = [("u_a.odf", UNIT), ("w_gun.odf", weapon), ("w_base.odf", "wpnName = \"Gun\"\nclassLabel = \"cannon\"\nordName = \"o_shot\"\nhitChance = 0.8\n\"fbattle.odf\" 0.5\ntargetEnemyCraft = 1\n"), ("o_shot.odf", ordnance)];
-    load_with(Profile::Sta2Classic, &Overrides::default(), &["u_a".to_owned(), "w_gun".to_owned()], &mut |name, version| {
+    load_with(profile, &Overrides::default(), &["u_a".to_owned(), "w_gun".to_owned()], &mut |name, version| {
         files.iter().find(|f| f.0.eq_ignore_ascii_case(name) && version == 0).map(|f| f.1.to_owned())
     })
     .unwrap()
@@ -61,11 +65,22 @@ fn typed_only_keys_do_not_move_the_content_hash() {
     let plain = load(PLAIN_WEAPON, PLAIN_ORDNANCE).hash();
     let keyed = load(
         &format!("{PLAIN_WEAPON}hitChance = 0.5\n\"fbattle.odf\" 0.1\nneedTarget = 1\ntargetEnemyCraft = 0\nstopToHitModifier = -0.2\n"),
-        &format!("{PLAIN_ORDNANCE}ignoreShield = 1\nomegaTurn = 2\n"),
+        &format!("{PLAIN_ORDNANCE}ignoreShield = 1\nshotAccel = 2\n"),  // omegaTurn is read now, under `ordnance_flight`
     )
     .hash();
     assert_eq!(plain, keyed, "nothing in the sim reads the base keys yet (SIM-73 digests what it reads)");
     assert_eq!(sta_content::fake::db().hash(), 0x9ef5_3881_3050_10f8);
+}
+
+/// `ordnance_flight` reads `lifeSpan`, `seekTime` and `omegaTurn` of a torpedo (ADR 0004 D10: the content digest covers
+/// what the sim reads): under a profile without the switch they leave the hash as it was, under one with it they move it.
+#[test]
+fn the_flight_keys_move_the_content_hash_only_under_the_switch() {
+    let keyed = format!("{PLAIN_ORDNANCE}lifeSpan = 3\nseekTime = 1\nomegaTurn = 2\n");
+    let hash = |profile: Profile, ordnance: &str| load_as(profile, PLAIN_WEAPON, ordnance).hash();
+    assert!(!Profile::Fo4.features().ordnance_flight && Profile::Sta2Classic.features().ordnance_flight);
+    assert_eq!(hash(Profile::Fo4, PLAIN_ORDNANCE), hash(Profile::Fo4, &keyed), "the switch is off: not read");
+    assert_ne!(hash(Profile::Sta2Classic, PLAIN_ORDNANCE), hash(Profile::Sta2Classic, &keyed), "the switch is on: read");
 }
 
 #[test]

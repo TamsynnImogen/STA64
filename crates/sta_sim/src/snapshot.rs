@@ -76,9 +76,43 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 45 appends cargo routes and holds.
 /// Format 46 stores build queue job identities and the last allocated id.
 /// Format 50 is the last without the Director's Cut match option; format 51 appends it
-/// and 50 still loads with it off. Earlier formats are refused.
-pub const FORMAT_VERSION: u16 = 51;
-const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
+/// and 50 still loads with it off. The format of SIM-76 (the current one) appends the move modes
+/// of move orders; 50 and 51 still load, every order then taking the content's default.
+/// Format 53 appends the beams in flight of `beam_damage_at_end` (#1068); 50 to 52 still load,
+/// with no beam in flight.
+/// Format 54 appends the dying phases of `dying_phase` (#1100); 50 to 53 still load, with
+/// nobody dying.
+/// Format 56 appends the warp ramps of `warp_shape` (#1102); 50 to 54 still load, with no
+/// ramp: a craft at warp is at warp, one leaving it has no shift left. (55 is neither written
+/// nor read: the number is reserved.)
+/// Format 58 appends the match option "warp allowed" (#1102); 50 to 56 still load, with warp
+/// allowed. (57 is neither written nor read: the number is reserved.)
+/// Format 59 appends the flights of the torpedoes under `ordnance_flight` (#1068): their heading and the tick
+/// their life ends; 50 to 58 still load, a torpedo in flight in one of them gets its heading toward its target and
+/// a life counted from the load (INTERIM: its launch is not known). (57 is neither written nor read.)
+/// Earlier formats are refused.
+pub const FORMAT_VERSION: u16 = 59;
+/// The last format without the Director's Cut flag (still loads). Fixed history, not renumbered.
+#[doc(hidden)]
+pub const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
+/// The last format without the move-mode record (still loads): main's number before SIM-76.
+#[doc(hidden)]
+pub const PRE_MOVE_MODE_FORMAT: u16 = 51;
+/// The last format without the beams record (still loads).
+#[doc(hidden)]
+pub const PRE_BEAMS_FORMAT: u16 = 52;
+/// The last format without the dying record (still loads).
+#[doc(hidden)]
+pub const PRE_DYING_FORMAT: u16 = 53;
+/// The last format without the warp ramp record (still loads).
+#[doc(hidden)]
+pub const PRE_WARP_RAMP_FORMAT: u16 = 54;
+/// The last format without the warp option (still loads).
+#[doc(hidden)]
+pub const PRE_WARP_OPTION_FORMAT: u16 = 56;
+/// The last format without the flights of torpedoes (still loads).
+#[doc(hidden)]
+pub const PRE_FLIGHT_FORMAT: u16 = 58;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -128,7 +162,7 @@ fn check_header(bytes: &[u8]) -> Result<(u16, u64), SnapshotError> {
         return Err(SnapshotError::BadMagic);
     }
     let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | FORMAT_VERSION) {
+    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | PRE_DYING_FORMAT | PRE_WARP_RAMP_FORMAT | PRE_WARP_OPTION_FORMAT | PRE_FLIGHT_FORMAT | FORMAT_VERSION) {
         return Err(SnapshotError::FormatVersion { found });
     }
     let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -159,7 +193,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } if *found < FORMAT_VERSION => {
-                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT} and {FORMAT_VERSION})")
+                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT} to {FORMAT_VERSION})")
             }
             SnapshotError::FormatVersion { found } => {
                 write!(f, "snapshot format {found}, expected {FORMAT_VERSION}")
@@ -261,6 +295,42 @@ struct WarpRec {
 struct WatchRec {
     version: u8,
     rows: Vec<(EntityId, crate::watchdog::Row)>,
+}
+
+/// Format 52 (SIM-76): the move mode each unit's last move order named, by unit id.
+/// INTERIM: the group record replaces this record (see `move_mode.rs`).
+#[derive(Serialize, Deserialize)]
+struct MoveModeRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::command::MoveMode)>,
+}
+
+/// Format 53 (#1068): the beams in flight under `beam_damage_at_end`, in the order they fired.
+#[derive(Serialize, Deserialize)]
+struct BeamsRec {
+    version: u8,
+    rows: Vec<crate::combat::weapons::Beam>,
+}
+
+/// Format 56 (#1102): the warp ramps of `warp_shape`, by craft id.
+#[derive(Serialize, Deserialize)]
+struct WarpRampRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::movement::approach::Ramp)>,
+}
+
+/// Format 59 (#1068): the flights of the torpedoes in flight under `ordnance_flight`, by shot id.
+#[derive(Serialize, Deserialize)]
+struct FlightRec {
+    version: u8,
+    rows: Vec<(u32, crate::combat::flight::Flight)>,
+}
+
+/// Format 54 (#1100): the units in their dying phase under `dying_phase`, by unit id.
+#[derive(Serialize, Deserialize)]
+struct DyingRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::combat::dying::Row)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -536,6 +606,12 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.production.officer_upgrade_rows()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.economy.trade_rows()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.directors_cut).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&MoveModeRec { version: 1, rows: self.move_mode_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&BeamsRec { version: 1, rows: self.weapons.beams_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&DyingRec { version: 1, rows: self.dying.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&WarpRampRec { version: 1, rows: self.approach_warp.ramps_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&!self.match_warp_off).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&FlightRec { version: 1, rows: self.weapons.flights_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -631,6 +707,55 @@ impl Sim {
         } else {
             postcard::take_from_bytes(rest).map_err(corrupt_postcard)?
         };
+        // Formats 50 and 51 carry no move modes (SIM-76): every order took the content's default.
+        let (move_mode_rows, rest): (Vec<(EntityId, crate::command::MoveMode)>, _) = if format <= PRE_MOVE_MODE_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (MoveModeRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown move mode record version".into())); }
+            (record.rows, rest)
+        };
+        // Formats 50 to 52 carry no beams in flight (#1068): every beam had hit when it fired.
+        let (beam_rows, rest): (Vec<crate::combat::weapons::Beam>, _) = if format <= PRE_BEAMS_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (BeamsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown beams record version".into())); }
+            (record.rows, rest)
+        };
+        // Formats 50 to 53 carry no dying phases (#1100): a unit was removed at hull zero.
+        let (dying_rows, rest): (Vec<(EntityId, crate::combat::dying::Row)>, _) = if format <= PRE_DYING_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (DyingRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown dying record version".into())); }
+            (record.rows, rest)
+        };
+        // Formats 50 to 54 carry no warp ramps (#1102): a warp there has only its phase.
+        let (warp_ramps, rest): (Vec<(EntityId, crate::movement::approach::Ramp)>, _) = if format <= PRE_WARP_RAMP_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (WarpRampRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown warp ramp record version".into())); }
+            (record.rows, rest)
+        };
+        // Formats 50 to 56 carry no warp option (#1102): warp was allowed in every match.
+        let (allow_warp, rest): (bool, _) = if format <= PRE_WARP_OPTION_FORMAT {
+            (true, rest)
+        } else {
+            postcard::take_from_bytes(rest).map_err(corrupt_postcard)?
+        };
+        // Formats 50 to 58 carry no torpedo flights (#1068): their shots in flight are given one below.
+        let (flight_rows, rest): (Vec<(u32, crate::combat::flight::Flight)>, _) = if format <= PRE_FLIGHT_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (FlightRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown flight record version".into())); }
+            (record.rows, rest)
+        };
+        if !allow_warp && !content.as_deref().is_some_and(crate::setup::GameOptions::warp_option_counts) {
+            return Err(SnapshotError::Corrupt("the warp option is off for content it does not count for".into()));
+        }
         if directors_cut && !content.as_ref().is_some_and(|db| db.profile() == sta_content::Profile::Sta1Classic) {
             return Err(SnapshotError::Corrupt("Director's Cut requires Armada I content".into()));
         }
@@ -711,6 +836,10 @@ impl Sim {
             })
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
+        if move_mode_rows.iter().any(|(id, _)| units.get(*id).is_none()) {
+            return Err(corrupt("move mode unit"));
+        }
+        let move_modes = crate::move_mode::MoveModes::from_rows(move_mode_rows).ok_or_else(|| corrupt("move modes"))?;
         {
             let v = attrs.view();
             if v.races.iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
@@ -720,7 +849,19 @@ impl Sim {
                 return Err(SnapshotError::Corrupt("attribute seat does not exist".into()));
             }
         }
-        let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
+        let mut weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
+        if !weapons.set_beams(content.as_deref(), beam_rows) {
+            return Err(corrupt("beams"));
+        }
+        if format <= PRE_FLIGHT_FORMAT {
+            if let Some(db) = content.as_deref() {
+                weapons.adopt_flights(db, &units, b.tick);
+            }
+        } else if !weapons.set_flights(content.as_deref(), flight_rows, b.tick) {
+            return Err(corrupt("torpedo flights"));
+        }
+        let dying = crate::combat::dying::Dying::from_rows(dying_rows, b.tick, &units)
+            .ok_or_else(|| SnapshotError::Corrupt("dying rows out of order, ended or of a unit that is not dying".into()))?;
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
         if autonomy.to_rec().iter().any(|(id, _)| {
             units.get(*id).is_none_or(|u| !matches!(u.kind, EntityKind::Craft | EntityKind::Station))
@@ -747,9 +888,18 @@ impl Sim {
         if switches.to_rows().iter().any(|(id, _)| units.get(*id).is_none()) {
             return Err(SnapshotError::Corrupt("switches of an unknown entity".into()));
         }
-        let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
+        if !crate::movement::approach::Warp::ramps_fit(&warp_rows, &warp_ramps) {
+            return Err(SnapshotError::Corrupt("warp ramp rows out of order, without a length or of a craft with no warp phase".into()));
+        }
+        let approach_warp = crate::movement::approach::Warp::from_rec(warp_rows, warp_ramps).ok_or_else(|| SnapshotError::Corrupt("attack warp rows out of order or of an unknown phase".into()))?;
         if approach_warp.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
             return Err(SnapshotError::Corrupt("attack warp entity is not a craft".into()));
+        }
+        // A ramp the rules cannot have made is refused: too long, a shift below zero or beyond
+        // what the craft's hull allows, or begun after this snapshot was taken.
+        let hull = |id: EntityId| units.get(id).and_then(|u| content.as_deref().and_then(|db| db.unit(u.def))).map_or(Fixed::ZERO, |d| d.radius);
+        if approach_warp.ramps_rec().iter().any(|(id, ramp)| !ramp.plausible(b.tick, hull(*id))) {
+            return Err(SnapshotError::Corrupt("warp ramp longer than a ramp can be, with a shift out of range or from the future".into()));
         }
         let engagement = crate::combat::targeting::Engagement::from_rec(engagement_rows, b.tick, |id| units.contains(id))
             .ok_or_else(|| SnapshotError::Corrupt("engagement rows out of order, from the future or of an unknown entity".into()))?;
@@ -808,6 +958,7 @@ impl Sim {
             ai_seats: b.ai_seats,
             content,
             directors_cut,
+            match_warp_off: !allow_warp,
             starts: b.starts,
             regions: b.regions,
             bounds,
@@ -844,6 +995,8 @@ impl Sim {
             recycles,
             nebula_shields,
             mission_switches,
+            move_modes,
+            dying,
         };
         sim.refresh_seat_rules();
         sim.restore_ship_upgrade_memo();
@@ -900,6 +1053,9 @@ mod perception_tests;
 #[cfg(test)]
 #[path = "snapshot/warp_tests.rs"]
 mod warp_tests;
+#[cfg(test)]
+#[path = "snapshot/warp_ramp_tests.rs"]
+mod warp_ramp_tests;
 
 #[cfg(test)]
 #[path = "snapshot/alert_tests.rs"]
@@ -954,6 +1110,7 @@ mod tests {
                     units: ids.clone(),
                     to: v(400, 0, 300),
                     queue: false,
+                    mode: None,
                 },
             ),
             cmd(
@@ -962,6 +1119,7 @@ mod tests {
                     units: ids.clone(),
                     to: v(-300, 20, 900),
                     queue: true,
+                    mode: None,
                 },
             ),
         ]);
@@ -986,6 +1144,7 @@ mod tests {
                         units: vec![EntityId(2)],
                         to: v(0, 0, -500),
                         queue: false,
+                        mode: None,
                     },
                 )]
             } else {

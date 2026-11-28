@@ -46,7 +46,7 @@ fn orbit_builder(profile: Option<sta_content::Profile>, range: i32, too_close: O
     orbiter.hardpoints = vec![Hardpoint { weapon: DefRef::new("fx_minebeam"), node: "hp01".into(), arc: None }];
     if let Some(t) = too_close {
         orbiter.movement.too_close_to_turn = Fixed::from_int(t);
-        orbiter.movement.path_lead = Fixed::from_int(300);
+        orbiter.movement.path_lead = Fixed::from_int(2 * t);
     }
     let mut moon = base.units().find(|u| u.odf == "fx_moon").unwrap().clone();
     moon.radius = Fixed::from_int(40);
@@ -257,7 +257,7 @@ fn the_first_trip_circles_whatever_the_approach() {
         spawn(&mut sim, "fx_station", PlayerId(0), v(1500, 0));
         let m = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(sx, sz));
         if fast {
-            sim.step(&[Command { player: PlayerId(0), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![m], to: v(-2000, 0), queue: false }) }]);
+            sim.step(&[Command { player: PlayerId(0), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![m], to: v(-2000, 0), queue: false, mode: None }) }]);
             for _ in 0..90 { sim.step(&[]); }
         }
         assert!(mine(&mut sim, 0, m, moon));
@@ -458,15 +458,19 @@ fn freighters_still_dock_at_an_orbital_station_that_circles_its_planet() {
     assert!(unloads.iter().all(|&n| n >= 2), "unloads per freighter (beam-armed, beamless): {unloads:?}");
 }
 
-/// Fleet Operations 4.0's miners (every race) have a 150 beam and `tooCloseToTurn 120`: the 30 degree
-/// pursuit point lies inside that, so the smooth model halted the miner and it sat still, beam on,
-/// instead of circling. The point is pushed out to `tooCloseToTurn + 10` from the miner. Pure pursuit
-/// of that point settles on a circle of about 0.87 of the range (130 for 150).
+/// A miner whose `tooCloseToTurn` is large against its beam's range: the pursuit point, 30 degrees
+/// ahead on the circle of the range, lies about half the range away, inside `tooCloseToTurn`, so
+/// the smooth model would halt the miner and it would sit still, beam on, instead of circling. The
+/// point is pushed out to `tooCloseToTurn + 10` from the miner. Pure pursuit of that point settles
+/// on a circle of about 0.87 of the range (the cosine of the 30 degrees).
 #[test]
 fn a_miner_with_a_large_too_close_to_turn_still_circles_at_the_beams_range() {
-    // Start far away flying in, and start at rest inside the circle (68..119 from the centre).
-    for (start, at_rest) in [(v(900, 100), false), (v(90, 0), true), (v(0, -110), true)] {
-        let mut sim = orbit_game_tuned(Some(sta_content::Profile::Fo4), 150, Some(120));
+    // Authored for this test: any pair with `too_close` above half of `range` meets the rule.
+    let (range, too_close) = (200, 140);
+    let circle = 0.87 * range as f32;
+    // Start far away flying in, and start at rest inside the circle.
+    for (start, at_rest) in [(v(900, 100), false), (v(120, 0), true), (v(0, -140), true)] {
+        let mut sim = orbit_game_tuned(Some(sta_content::Profile::Fo4), range, Some(too_close));
         let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
         spawn(&mut sim, "fx_station", PlayerId(0), v(3000, 0));
         let m = spawn(&mut sim, "fx_orbiter", PlayerId(0), start);
@@ -487,6 +491,6 @@ fn a_miner_with_a_large_too_close_to_turn_still_circles_at_the_beams_range() {
         }
         // Moving at more than half the combat speed (the stop threshold), clockwise, on the circle.
         assert!(swept < -3.0, "start {start:?}: swept {swept} rad, the miner did not circle");
-        assert!(late.iter().all(|(r, v)| (*r - 130.0).abs() < 15.0 && *v > 50.0), "start {start:?}: {late:?}");
+        assert!(late.iter().all(|(r, v)| (*r - circle).abs() < 0.1 * range as f32 && *v > 50.0), "start {start:?}: {late:?}");
     }
 }

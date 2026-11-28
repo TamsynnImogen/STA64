@@ -506,7 +506,7 @@ impl SkirmishController {
     fn go(&mut self, tick: Tick, out: &mut Vec<Command>, unit: EntityId, to: Vec3) {
         let key = OrderKey::Move(to.x.to_bits(), to.z.to_bits());
         if self.orders.get(&unit) != Some(&key) {
-            self.issue(tick, out, vec![unit], Order::Move { units: vec![unit], to, queue: false }, Some(key), None);
+            self.issue(tick, out, vec![unit], Order::Move { units: vec![unit], to, queue: false, mode: None }, Some(key), None);
         }
     }
 

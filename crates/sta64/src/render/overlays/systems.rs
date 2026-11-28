@@ -1,0 +1,368 @@
+//! The Armada II hover readout's system icons (#1163), Stock look only, through [`super::armada2_look`]: a row of five
+//! icons under a hovered craft.
+//!
+//! Rules (grades: "measured" is from frames of the original on the modded bench; "static" read from the executable):
+//! - **Shown** for a craft while it is hovered and the readout's bars are up (the same gate as the bars; static). A
+//!   craft that is only selected, with the pointer elsewhere, shows none (measured, one window size, one frame). The
+//!   row is a state row, not only a damage row: a craft without hull damage whose systems are switched off shows it too
+//!   (measured, one frame).
+//! - **Place:** the row is centred on the craft's projected box, under it ([`BELOW_BOX`] below its bottom edge, static),
+//!   and its spacing and offset scale with the window like the rest of the HUD (measured, two window sizes: both are in
+//!   units of an 800x600 window, [`DESIGN_HEIGHT`]).
+//! - **Art:** the install's global GUI sprite table has one numbered entry per system ([`SPRITE`] and the system's index);
+//!   icon `i` takes entry `i` (a bare entry stands for the first), read at run time; an icon without its entry is not drawn.
+//! - **Looks:** each icon takes one of several looks (measured: two alert tints, a dim one, once a partial one). INTERIM:
+//!   which look means which level, which icon is which system and the icons' order are not established (the bench could
+//!   not read the health of a system); the order is that of the static read (engines, life support, sensors, shields,
+//!   weapons), and the looks are mapped to offline, damaged and fine by [`look_of`].
+//! - Interim: none while a cineractive runs (not established for the original).
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use bevy::prelude::*;
+use bevy::transform::helper::TransformHelper;
+use bevy::ui::UiScale;
+use sta_sim::EntityId;
+use sta_sim::appearance::SystemAppearance;
+
+use super::readout::RowArt;
+use super::{DEFAULT_RADIUS, ModelBounds, armada2_look, geometry};
+use crate::input::hover::HoverReadout;
+use crate::render::units::SelectRadius;
+use crate::sim_link::{ContentRes, SimEntities, SimLink};
+use crate::ui::gui_sprites::{self, GuiImageSampling, GuiSprites};
+use crate::ui::profile::UiProfile;
+use crate::viewer::Mounted;
+
+/// The sprite key of the system icons in the global GUI sprite table: entry `<key>.<n>` is system `n`'s icon.
+pub const SPRITE: &str = "select_system";
+/// The window height the icon layout is laid out in (the HUD's design height; measured: the layout scales with it).
+pub const DESIGN_HEIGHT: f32 = 600.0;
+/// The distance between neighbouring icon centres, in design units (measured, two window sizes).
+pub const PITCH: f32 = 14.0;
+/// The gap between the box's bottom edge and the icons, in design units (read from the executable, static).
+pub const BELOW_BOX: f32 = 32.0;
+/// The number of systems (static).
+pub const COUNT: usize = 5;
+
+/// How one icon looks. INTERIM mapping, see the module doc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Look {
+    /// Switched off or destroyed.
+    Offline,
+    /// Damaged: below its full health.
+    Damaged,
+    /// Working and undamaged.
+    Fine,
+}
+
+/// The look of a system (INTERIM mapping).
+pub fn look_of(s: &SystemAppearance) -> Look {
+    if !s.enabled || s.health[0].to_f32() <= 0.0 {
+        Look::Offline
+    } else if s.health[0] < s.health[1] {
+        Look::Damaged
+    } else {
+        Look::Fine
+    }
+}
+
+/// The tint of a look: the existing readout palette of the stock look's strip (INTERIM; the original's tints are
+/// not in the repository).
+pub fn tint(look: Look) -> Color {
+    match look {
+        Look::Offline => Color::srgb(0.2, 0.2, 0.2),
+        Look::Damaged => Color::srgb(1.0, 1.0, 0.0),
+        Look::Fine => Color::WHITE,
+    }
+}
+
+/// Whether the hovered unit `id` shows its row: it is the hovered one and the bars are up.
+pub fn shows(readout: &HoverReadout, id: EntityId) -> bool {
+    readout.bars_up() && readout.unit == Some(id)
+}
+
+/// The five icon centres for a unit box, in camera pixels: centred on the box, under it, scaled with the window.
+pub fn row_centres(b: Rect, window_height: f32) -> [Vec2; COUNT] {
+    let s = window_height / DESIGN_HEIGHT;
+    let y = b.max.y + BELOW_BOX * s;
+    std::array::from_fn(|i| Vec2::new(b.center().x + (i as f32 - (COUNT as f32 - 1.0) / 2.0) * PITCH * s, y))
+}
+
+/// The table entry of system `index`'s icon: the numbered entry, and for the first one a bare entry too.
+pub fn icon_entry(table: &sta_assets::a2fmt::spr::SpriteTable, index: usize) -> Option<&sta_assets::a2fmt::spr::Sprite> {
+    table.sprite(&format!("{SPRITE}.{index}")).or_else(|| (index == 0).then(|| table.sprite(SPRITE)).flatten())
+}
+
+/// The art of the five icons, when the Armada II look is on and the install defines the entries.
+#[derive(Resource, Default)]
+pub struct SystemArt {
+    pub icons: [Option<RowArt>; COUNT],
+    tried_for_mount: bool,
+}
+
+pub(super) fn load_art(mut art: ResMut<SystemArt>, profile: Option<Res<UiProfile>>, mounted: Option<Res<Mounted>>, images: Option<ResMut<Assets<Image>>>) {
+    let (Some(mounted), Some(mut images)) = (mounted, images) else {
+        art.icons = Default::default();
+        return;
+    };
+    if !armada2_look(profile.as_deref()) {
+        art.icons = Default::default();
+        art.tried_for_mount = false;
+        return;
+    }
+    if mounted.is_changed() {
+        art.tried_for_mount = false;
+    }
+    if art.tried_for_mount {
+        return;
+    }
+    art.tried_for_mount = true;
+    let table = gui_sprites::read_table(&mounted.0, "sprites/gui_global.spr");
+    let mut cache = GuiSprites::default();
+    art.icons = std::array::from_fn(|i| {
+        let sprite = icon_entry(&table, i)?;
+        let (image, size) = gui_sprites::page(sprite, GuiImageSampling::Linear, &mounted.0, &mut cache, &mut images, bevy::image::CompressedImageFormats::empty())?;
+        let rect = gui_sprites::crop(sprite, size)?;
+        Some(RowArt { image, rect, size })
+    });
+}
+
+/// One icon's node: `index` 0 to 4 of the unit's row.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SystemIcon {
+    pub unit: EntityId,
+    pub index: u8,
+}
+
+/// One icon to show: its centre in camera pixels and its look.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placed {
+    pub centre: Vec2,
+    pub look: Look,
+}
+
+/// The nodes of the icons.
+pub type IconQuery<'w, 's> = Query<'w, 's, (Entity, &'static SystemIcon, &'static mut Node, &'static mut ImageNode)>;
+
+/// Bring the UI nodes in line with `want`, keeping the ones that stay. `size` is an icon's size in camera pixels,
+/// `ui_scale` converts camera pixels to UI pixels.
+pub fn reconcile(commands: &mut Commands, existing: &mut IconQuery, want: &BTreeMap<SystemIcon, Placed>, art: &[Option<RowArt>; COUNT], window_scale: f32, ui_scale: f32) {
+    let size_of = |icon: &SystemIcon| art[icon.index as usize].as_ref().map_or(Vec2::ZERO, |a| a.rect.size() * window_scale);
+    let at = |icon: &SystemIcon, p: &Placed| {
+        let size = size_of(icon);
+        ((p.centre.x - size.x / 2.0) / ui_scale, (p.centre.y - size.y / 2.0) / ui_scale)
+    };
+    let mut have = BTreeSet::new();
+    for (e, icon, mut node, mut image) in existing.iter_mut() {
+        let Some(p) = want.get(icon).filter(|_| have.insert(*icon)) else {
+            commands.entity(e).try_despawn();
+            continue;
+        };
+        let (left, top) = at(icon, p);
+        let (left, top) = (Val::Px(left), Val::Px(top));
+        if node.left != left {
+            node.left = left;
+        }
+        if node.top != top {
+            node.top = top;
+        }
+        let colour = tint(p.look);
+        if image.color != colour {
+            image.color = colour;
+        }
+    }
+    for (icon, p) in want {
+        if have.contains(icon) {
+            continue;
+        }
+        let Some(art) = art[icon.index as usize].as_ref() else { continue };
+        let size = size_of(icon);
+        let (left, top) = at(icon, p);
+        let mut image = ImageNode::new(art.image.clone()).with_color(tint(p.look));
+        image.rect = Some(art.rect);
+        commands.spawn((
+            Name::new("system icon"),
+            *icon,
+            Node { position_type: PositionType::Absolute, left: Val::Px(left), top: Val::Px(top), width: Val::Px(size.x / ui_scale), height: Val::Px(size.y / ui_scale), ..default() },
+            image,
+            bevy::picking::Pickable::IGNORE,
+        ));
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(super) fn sync_icons(
+    mut commands: Commands,
+    profile: Option<Res<UiProfile>>,
+    readout: Res<HoverReadout>,
+    art: Res<SystemArt>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    ui_scale: Option<Res<UiScale>>,
+    content: Option<Res<ContentRes>>,
+    link: Res<SimLink>,
+    ents: Res<SimEntities>,
+    cam: Query<(Entity, &Camera, &Projection), crate::map::MainCamera>,
+    parents: Query<(Option<&ModelBounds>, Option<&SelectRadius>)>,
+    helper: TransformHelper,
+    mut existing: IconQuery,
+) {
+    let mut want: BTreeMap<SystemIcon, Placed> = BTreeMap::new();
+    let mut scale = 1.0;
+    let mut window_scale = 1.0;
+    if armada2_look(profile.as_deref())
+        && !crate::ui::presentation::cutscene_running(cine)
+        && let Some(id) = readout.unit.filter(|id| shows(&readout, *id))
+        && let Some(unit) = link.curr().unit(id)
+        && content.as_deref().and_then(|c| c.0.unit(unit.def)).is_some_and(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft)
+        && let Ok((cam_entity, camera, projection)) = cam.single()
+        && let (Some(window), Ok(transform)) = (camera.logical_viewport_size(), helper.compute_global_transform(cam_entity))
+        && let Some(&root) = ents.0.get(&id)
+        && let Ok(world) = helper.compute_global_transform(root)
+        && let Ok((bounds, radius)) = parents.get(root)
+    {
+        let origin = camera.logical_viewport_rect().map_or(Vec2::ZERO, |r| r.min);
+        let clip = projection.get_clip_from_view() * transform.to_matrix().inverse();
+        scale = ui_scale.map_or(1.0, |s| s.0).max(1e-3);
+        let bounds = bounds.copied().unwrap_or_else(|| ModelBounds::fallback(radius.map_or(DEFAULT_RADIUS, |r| r.0)));
+        if let Some((b, _)) = geometry::project(bounds, world.to_matrix(), clip, window) {
+            let b = Rect { min: b.min + origin, max: b.max + origin };
+            let sys = link.curr().appearance.systems.binary_search_by_key(&id, |(u, _)| *u).ok().map(|i| link.curr().appearance.systems[i].1);
+            window_scale = window.y / DESIGN_HEIGHT;
+            for (i, centre) in row_centres(b, window.y).into_iter().enumerate() {
+                // A system the class does not have draws no icon.
+                if let Some(look) = sys.and_then(|a| a[i]).map(|a| look_of(&a)) {
+                    want.insert(SystemIcon { unit: id, index: i as u8 }, Placed { centre, look });
+                }
+            }
+        }
+    }
+    reconcile(&mut commands, &mut existing, &want, &art.icons, window_scale, scale);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use sta_sim::{Fixed, PlayerId};
+
+    fn sys(enabled: bool, now: i32, max: i32) -> SystemAppearance {
+        SystemAppearance { enabled, health: [Fixed::from_int(now), Fixed::from_int(max)] }
+    }
+
+    fn hov(unit: u32, fade: f32) -> HoverReadout {
+        HoverReadout { unit: Some(EntityId(unit)), team: Some(PlayerId(1)), fade }
+    }
+
+    #[test]
+    fn the_row_shows_for_the_hovered_craft_once_the_bars_are_up_and_never_for_a_selection_alone() {
+        assert!(shows(&hov(1, 0.75), EntityId(1)));
+        assert!(!shows(&hov(1, 0.75), EntityId(2)), "another unit of the same team: no row");
+        assert!(!shows(&hov(1, 0.5), EntityId(1)), "the bars are not up yet");
+        assert!(!shows(&HoverReadout::default(), EntityId(1)), "nothing hovered: a selected craft shows none");
+    }
+
+    #[test]
+    fn the_row_is_centred_under_the_box_and_scales_with_the_window() {
+        let b = Rect { min: Vec2::new(100.0, 50.0), max: Vec2::new(180.0, 130.0) };
+        let at_design = row_centres(b, DESIGN_HEIGHT);
+        assert_eq!(at_design[2].x, 140.0, "the middle icon is on the box's centre line");
+        assert_eq!(at_design[2].y, 130.0 + BELOW_BOX);
+        assert_eq!(at_design[1].x - at_design[0].x, PITCH);
+        assert_eq!(at_design[0].x + at_design[4].x, 280.0, "symmetric about the centre");
+        // At twice the window height the spacing and the offset below the box double.
+        let double = row_centres(b, DESIGN_HEIGHT * 2.0);
+        assert_eq!(double[1].x - double[0].x, PITCH * 2.0);
+        assert_eq!(double[2].y, 130.0 + BELOW_BOX * 2.0);
+    }
+
+    #[test]
+    fn a_system_is_offline_damaged_or_fine() {
+        assert_eq!(look_of(&sys(false, 10, 10)), Look::Offline, "switched off, whatever its health");
+        assert_eq!(look_of(&sys(true, 0, 10)), Look::Offline, "destroyed");
+        assert_eq!(look_of(&sys(true, 5, 10)), Look::Damaged);
+        assert_eq!(look_of(&sys(true, 10, 10)), Look::Fine);
+        let tints = [tint(Look::Offline), tint(Look::Damaged), tint(Look::Fine)];
+        assert!(tints[0] != tints[1] && tints[1] != tints[2] && tints[0] != tints[2], "three different looks");
+    }
+
+    /// The art loads through the real path from an authored numbered table: icon `i` takes entry `i`, five distinct rects.
+    #[test]
+    fn the_five_icons_load_from_a_numbered_table_one_entry_each() {
+        use std::fs;
+        let root = std::env::temp_dir().join(format!("sta64-system-art-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let data = root.join("Data");
+        fs::create_dir_all(data.join("sprites")).unwrap();
+        fs::create_dir_all(data.join("textures/rgb")).unwrap();
+        let mut table = String::new();
+        for i in 0..COUNT {
+            table += &format!("{SPRITE}.{i} icons {} 0 8 8\n", i * 8);
+        }
+        fs::write(data.join("sprites/gui_global.spr"), table).unwrap();
+        let mut tga = vec![0u8; 18];
+        tga[2] = 2;
+        tga[12] = 40;
+        tga[14] = 8;
+        tga[16] = 24;
+        for _ in 0..(40 * 8) {
+            tga.extend_from_slice(&[255, 255, 255]);
+        }
+        fs::write(data.join("textures/rgb/icons.tga"), tga).unwrap();
+        let vfs = sta_vfs::Vfs::mount_install(&root, None).unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>().init_resource::<SystemArt>().insert_resource(UiProfile::Armada2).insert_resource(Mounted(vfs)).add_systems(Update, load_art);
+        app.update();
+        let art = app.world().resource::<SystemArt>();
+        let rects: Vec<Rect> = art.icons.iter().map(|a| a.as_ref().expect("an icon per system").rect).collect();
+        assert_eq!(rects.len(), COUNT);
+        for (i, r) in rects.iter().enumerate() {
+            assert_eq!(*r, Rect::new(i as f32 * 8.0, 0.0, i as f32 * 8.0 + 8.0, 8.0), "icon {i} takes entry {i}");
+        }
+        // Another look clears them.
+        app.insert_resource(UiProfile::Armada1);
+        app.update();
+        assert!(app.world().resource::<SystemArt>().icons.iter().all(Option::is_none));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Install-gated (`STA64_TEST_A2_STOCK_INSTALL`, read at run time): the install's global sprite table has an entry for
+    /// each of the five systems under the lookup the loader uses.
+    #[test]
+    fn install_every_system_icon_has_its_table_entry() {
+        let Some(root) = std::env::var_os("STA64_TEST_A2_STOCK_INSTALL") else {
+            eprintln!("SKIP: set STA64_TEST_A2_STOCK_INSTALL");
+            return;
+        };
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+        let table = gui_sprites::read_table(&vfs, "sprites/gui_global.spr");
+        let found = (0..COUNT).filter(|&i| icon_entry(&table, i).is_some()).count();
+        assert_eq!(found, COUNT, "an entry for every system");
+    }
+
+    #[test]
+    fn nodes_follow_what_is_wanted() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>();
+        let one = RowArt { image: Handle::default(), rect: Rect::new(0.0, 0.0, 8.0, 8.0), size: UVec2::new(16, 16) };
+        let art: [Option<RowArt>; COUNT] = std::array::from_fn(|_| Some(one.clone()));
+        let id = |i: u8| SystemIcon { unit: EntityId(1), index: i };
+        let run = |app: &mut App, want: BTreeMap<SystemIcon, Placed>| {
+            let art = art.clone();
+            app.world_mut().run_system_once(move |mut c: Commands, mut q: IconQuery| reconcile(&mut c, &mut q, &want, &art, 1.0, 1.0)).unwrap();
+            app.world_mut().flush();
+        };
+        let count = |app: &mut App| app.world_mut().query::<&SystemIcon>().iter(app.world()).count();
+        let placed = |x: f32, look| Placed { centre: Vec2::new(x, 20.0), look };
+        run(&mut app, BTreeMap::from([(id(0), placed(10.0, Look::Fine)), (id(1), placed(24.0, Look::Damaged))]));
+        assert_eq!(count(&mut app), 2);
+        run(&mut app, BTreeMap::from([(id(1), placed(30.0, Look::Offline))]));
+        assert_eq!(count(&mut app), 1, "the other icon is gone");
+        let mut q = app.world_mut().query::<(&Node, &ImageNode)>();
+        let (n, i) = q.single(app.world()).unwrap();
+        assert_eq!((n.left, n.top), (Val::Px(26.0), Val::Px(16.0)), "centre minus half the icon");
+        assert_eq!(i.color, tint(Look::Offline));
+        run(&mut app, BTreeMap::new());
+        assert_eq!(count(&mut app), 0, "the pointer left: the row is gone");
+    }
+}

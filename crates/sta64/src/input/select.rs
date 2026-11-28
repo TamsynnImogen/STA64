@@ -53,7 +53,7 @@ use crate::render::units::SelectRadius;
 use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink, SimMsg};
 
 /// Seconds within which a second click counts as a double click.
-const DOUBLE: f64 = 0.4;
+pub(crate) const DOUBLE: f64 = 0.4;
 /// Seconds within which a second group tap centres the camera (stock: 750 ms).
 const GROUP_TAP: f64 = 0.75;
 /// Pixels of drag before a click becomes a box.
@@ -167,8 +167,11 @@ pub fn own_selection(selection: &Selection, link: &SimLink) -> Vec<EntityId> {
     selection.0.iter().copied().filter(|&id| is_own(link, id)).collect()
 }
 
+/// Whether `id` is an own unit that can be picked: a unit in its dying phase is not (INTERIM: the
+/// original's rule for picking a dying unit is not established; the selection of one ends when its
+/// hull reaches zero, measured once).
 fn is_own(link: &SimLink, id: EntityId) -> bool {
-    link.curr().unit(id).is_some_and(|u| u.owner == link.player())
+    link.curr().unit(id).is_some_and(|u| u.owner == link.player() && !u.flags.contains(sta_sim::view::UnitFlags::DYING))
 }
 
 /// Whether `id` is a ship: a craft by its definition's class. Without content
@@ -282,6 +285,15 @@ pub(crate) fn target_seen(view: &sta_sim::WorldView, local: Option<sta_sim::Play
     view.visibility.binary_search_by_key(&player, |v| v.0).is_ok_and(|i| view.visibility[i].1.binary_search(&id).is_ok())
 }
 
+/// [`target_seen`] and not in its dying phase: what a click, a right click, the order cursor and a HUD
+/// target may pick. A dying unit cannot be picked, so a right click on a dying enemy is what a click on
+/// the ground there would be, not an attack. INTERIM: the original's rule for picking or ordering
+/// against a dying unit is not established (the sim ignores such an order, and a hostile unit in its
+/// dying phase is not chosen as a target by the original's AI: read from the executable, static).
+pub(crate) fn pickable(view: &sta_sim::WorldView, local: Option<sta_sim::PlayerId>, id: EntityId) -> bool {
+    target_seen(view, local, id) && !view.unit(id).is_some_and(|u| u.flags.contains(sta_sim::view::UnitFlags::DYING))
+}
+
 /// The unit under the cursor: a strategic icon, else the nearest sphere on the ray.
 pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
     unit_under_where(cursor, ray, units, |_| true)
@@ -375,7 +387,7 @@ fn damaged(u: &sta_sim::UnitView) -> bool {
 /// Elsewhere (ours; stock's own behaviour is not established): the own ship after the highest-id
 /// selected one, wrapping round.
 fn next_own_ship(link: &SimLink, content: Option<&ContentRes>, current: &[EntityId]) -> Option<EntityId> {
-    let mut ships: Vec<EntityId> = link.curr().units.iter().filter(|u| u.owner == link.player() && is_ship(link, content, u.id)).map(|u| u.id).collect();
+    let mut ships: Vec<EntityId> = link.curr().units.iter().filter(|u| u.owner == link.player() && !u.flags.contains(sta_sim::view::UnitFlags::DYING) && is_ship(link, content, u.id)).map(|u| u.id).collect();
     ships.sort();
     let after = current.iter().copied().max();
     ships.iter().copied().find(|&id| after.is_none_or(|a| id > a)).or_else(|| ships.first().copied())
@@ -420,7 +432,7 @@ pub fn select_keys(
                 .curr()
                 .units
                 .iter()
-                .filter(|u| u.owner == link.player() && defs.contains(&u.def))
+                .filter(|u| u.owner == link.player() && !u.flags.contains(sta_sim::view::UnitFlags::DYING) && defs.contains(&u.def))
                 .map(|u| u.id)
                 .collect();
             cap(&mut selection.0, *max);
@@ -601,7 +613,7 @@ pub fn select(
             }
             push_unique(&mut sel, id);
         }
-    } else if let Some(id) = unit_under_where(cursor, aim.ray, &units, |id| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), id)) {
+    } else if let Some(id) = unit_under_where(cursor, aim.ray, &units, |id| pickable(link.curr(), local.as_deref().and_then(|l| l.0), id)) {
         // (With a local player only what its team sees is clickable: kept-drawn scenery outside the sensors is no fog leak; without one, everything drawn is.)
         let double = drag.last_click.is_some_and(|(t, last)| last == id && now - t <= DOUBLE);
         drag.last_click = if double { None } else { Some((now, id)) };
@@ -1312,6 +1324,48 @@ mod tests {
         click(&mut app, 100.0, 100.0);
         tap(&mut app, KeyCode::KeyT);
         assert_eq!(sorted(sel(&app)), [A, B, F, D]);
+    }
+
+    /// Unit B in its dying phase: the view's flag, as the sim sets it under `dying_phase`.
+    fn make_dying(app: &mut App, id: EntityId) {
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        let u = view.units.iter_mut().find(|u| u.id == id).unwrap();
+        u.flags = u.flags | sta_sim::view::UnitFlags::DYING;
+        app.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+    }
+
+    /// A unit in its dying phase cannot be picked by a click, a box, select-by-type, next-ship or a group
+    /// recall (INTERIM: the original's pick rule for such a unit is not established); the same actions on a
+    /// living unit are as before, so with the switch off (no unit is ever dying) nothing changes.
+    #[test]
+    fn a_dying_unit_cannot_be_picked() {
+        // The same actions with nothing dying: B is picked each time.
+        let mut app = app();
+        click(&mut app, 300.0, 100.0);
+        assert_eq!(sel(&app), [B]);
+        drag(&mut app, (50.0, 50.0), (350.0, 150.0));
+        assert_eq!(sel(&app), [A, B]);
+        click(&mut app, 100.0, 100.0);
+        tap(&mut app, KeyCode::KeyT);
+        assert_eq!(sorted(sel(&app)), [A, B, F, D]);
+        let link = app.world().resource::<SimLink>();
+        assert_eq!(next_own_ship(link, None, &[A]), Some(B));
+
+        // B dying.
+        let mut app = build(false);
+        make_dying(&mut app, B);
+        click(&mut app, 300.0, 100.0);
+        assert!(sel(&app).is_empty(), "a click on a dying unit selects nothing");
+        drag(&mut app, (50.0, 50.0), (350.0, 150.0));
+        assert_eq!(sel(&app), [A], "a box leaves the dying unit out");
+        click(&mut app, 100.0, 100.0);
+        tap(&mut app, KeyCode::KeyT);
+        assert_eq!(sorted(sel(&app)), [A, F, D], "select-by-type leaves it out");
+        let link = app.world().resource::<SimLink>();
+        assert_eq!(next_own_ship(link, None, &[A]), Some(C), "next-ship skips it");
+        app.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![A, B];
+        tap(&mut app, KeyCode::Digit1);
+        assert_eq!(sel(&app), [A], "a group recall leaves it out");
     }
 
     #[test]

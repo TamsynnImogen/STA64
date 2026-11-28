@@ -320,6 +320,11 @@ fn the_shader_preserves_stock_colour_and_alpha_in_ldr() {
 // ---------------------------------------------------------------------------------------------
 
 fn content(rules: ShotCfg) -> ContentDb {
+    content_with(rules, false)
+}
+
+/// [`content`], with `beam_damage_at_end` on and the phaser a beam with a life of thirty ticks when `at_end`.
+fn content_with(rules: ShotCfg, at_end: bool) -> ContentDb {
     let mut ship = UnitDef::new("t_ship", "cruiser");
     ship.hardpoints = vec![
         Hardpoint { weapon: DefRef::new("w_phaser"), node: "hp_phaser".into(), arc: None },
@@ -332,7 +337,17 @@ fn content(rules: ShotCfg) -> ContentDb {
     target.stats.hull_target_hardpoints = vec!["hull_a".into(), "hull_b".into()];
     let mut r = sta_content::Rules::default();
     r.shots = rules;
+    let mut features = sta_content::Features::default();
+    features.beam_damage_at_end = at_end;
+    let phaser = move || {
+        let mut w = phaser();
+        if at_end {
+            w.duration = 30;
+        }
+        w
+    };
     ContentBuilder::default()
+        .features(features)
         .weapon(phaser())
         .weapon({
             let mut w = phaser();
@@ -362,16 +377,36 @@ fn content(rules: ShotCfg) -> ContentDb {
 struct Shielded {
     inner: ScriptedSource,
     shields: bool,
+    /// The shields show only before this tick (they drop then), when set.
+    shields_until: Option<u64>,
+    /// The views of these ticks (from, until) carry unit 1's beam at unit 2 as one the sim holds (#1068).
+    held: Option<(u64, u64, sta_sim::ContentKey)>,
+    /// From this tick on unit 1 (the shooter) carries the dying flag.
+    dying_from: Option<u64>,
 }
 
 impl Shielded {
     fn patch(&self, view: Arc<WorldView>) -> Arc<WorldView> {
-        if !self.shields {
+        if !self.shields && self.held.is_none() && self.dying_from.is_none() {
             return view;
         }
         let mut v = (*view).clone();
-        for u in v.units.iter_mut().filter(|u| u.id.0 >= 2) {
-            u.shields = [[Fixed::from_int(50), Fixed::from_int(50)]; 4];
+        if self.shields && self.shields_until.is_none_or(|t| v.tick < t) {
+            for u in v.units.iter_mut().filter(|u| u.id.0 >= 2) {
+                u.shields = [[Fixed::from_int(50), Fixed::from_int(50)]; 4];
+            }
+        }
+        if let Some((from, until, weapon)) = self.held
+            && (from..until).contains(&v.tick)
+        {
+            v.beam_rows = vec![sta_sim::view::BeamRow { shooter: EntityId(1), weapon, target: EntityId(2), ends: until }];
+        }
+        if let Some(from) = self.dying_from
+            && v.tick >= from
+        {
+            for u in v.units.iter_mut().filter(|u| u.id.0 == 1) {
+                u.flags = u.flags.with(sta_sim::view::UnitFlags::DYING, true);
+            }
         }
         Arc::new(v)
     }
@@ -391,6 +426,8 @@ impl WorldSource for Shielded {
 struct Setup {
     db: ContentDb,
     shields: bool,
+    /// The shields drop at this tick, when set.
+    shields_until: Option<u64>,
     /// Unit 2's def and a rail point (the target); `until` ends it.
     target_def: &'static str,
     target_z: i32,
@@ -399,11 +436,25 @@ struct Setup {
     target_until: Option<u64>,
     shooter_until: Option<u64>,
     events: Vec<(u64, &'static str, u8, u64)>,
+    /// The ticks (from, until) whose views carry the phaser's beam as held by the sim.
+    held: Option<(u64, u64)>,
+    /// The shooter starts to die at this tick.
+    shooter_dying: Option<u64>,
 }
 
 impl Setup {
     fn new(rules: ShotCfg) -> Setup {
-        Setup { db: content(rules), shields: false, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new() }
+        Setup { db: content(rules), shields: false, shields_until: None, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None, shooter_dying: None }
+    }
+    /// The phaser lands at the end of its life (`beam_damage_at_end`).
+    fn at_end(mut self, rules: ShotCfg) -> Setup {
+        self.db = content_with(rules, true);
+        self
+    }
+    /// The views of ticks `from` up to `until` carry the beam as one the sim holds.
+    fn held(mut self, from: u64, until: u64) -> Setup {
+        self.held = Some((from, until));
+        self
     }
     /// A beam fired at tick `at` at a place (the point the target unit stands at), not at a unit.
     fn fire_at_point(mut self, at: u64, weapon: &'static str, hardpoint: u8) -> Self {
@@ -441,7 +492,7 @@ impl Setup {
             .add_plugins(SimLinkPlugin)
             .insert_resource(ContentRes(Arc::new(self.db.clone())))
             .insert_resource(SpriteTables(Arc::new(table())))
-            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields }), Box::new(LocalRouter::new()), PlayerId(0)));
+            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, shields_until: self.shields_until, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())), dying_from: self.shooter_dying }), Box::new(LocalRouter::new()), PlayerId(0)));
         if let Some(p) = profile {
             app.insert_resource(p);
         }
@@ -717,6 +768,153 @@ fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_twice_the_ra
     assert_eq!(beams(2100), 0);
 }
 
+/// The frame (one per tick) a lone phaser beam fired at tick 4 is last drawn on, over `frames` frames.
+fn last_drawn(setup: &Setup, frames: usize) -> Option<usize> {
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let mut last = None;
+    for i in 0..frames {
+        app.update();
+        if !shots(&mut app).is_empty() {
+            last = Some(i);
+        }
+    }
+    last
+}
+
+#[test]
+fn under_beam_damage_at_end_the_beam_is_drawn_while_the_sim_holds_it_and_not_after_it_loses_it() {
+    // The sim holds the beam through its thirty ticks: drawn to the end of its life, as ever.
+    let held = Setup::new(ShotCfg::default()).at_end(ShotCfg::default()).fire(4, "w_phaser", 0).held(4, 34);
+    let full = last_drawn(&held, 60).expect("drawn");
+    assert!((32..=36).contains(&full), "a held beam is drawn for its whole life: last frame {full}");
+    // The sim loses it at tick 12 (its target out of range, say): the drawing ends within a few ticks, and never comes back.
+    let lost = Setup::new(ShotCfg::default()).at_end(ShotCfg::default()).fire(4, "w_phaser", 0).held(4, 12);
+    let cut = last_drawn(&lost, 60).expect("drawn");
+    assert!(cut <= 16, "a beam the sim lost is still drawn at frame {cut}");
+    assert!(cut >= 8, "and it was drawn while the sim held it (frame {cut})");
+    // Every other profile reads the beam as before: the same view rows (or none) change nothing.
+    let off = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0).held(4, 12);
+    assert_eq!(last_drawn(&off, 60), last_drawn(&Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0), 60), "the switch off: the rows are not read");
+    assert!(last_drawn(&off, 60).is_some_and(|f| f >= 28), "a beam without the switch lives its life");
+}
+
+#[test]
+fn under_beam_damage_at_end_a_beam_the_sim_lost_is_drawn_on_to_its_range_while_the_miss_timer_runs_then_ends() {
+    let miss = ShotCfg { beam_miss_lifetime: Some(Fixed::from_f64(0.5)), normal_weapon_team_color: None };
+    // The last frame drawn and its end, for a beam the sim loses at tick 12.
+    let run = |cfg: ShotCfg| {
+        let setup = Setup::new(cfg).at_end(cfg).fire(4, "w_phaser", 0).held(4, 12);
+        let mut app = setup.app(Some(RenderProfile::Stock));
+        let (mut last, mut end) = (None, None);
+        for i in 0..60 {
+            app.update();
+            if let Some(s) = shots(&mut app).first() {
+                last = Some(i);
+                end = Some(s.geom);
+            }
+        }
+        (last.expect("drawn"), end)
+    };
+    // With a timer of fifteen ticks from the shot the beam runs on to the weapon's range, then ends: INTERIM, along the last aim line.
+    let (last, end) = run(miss);
+    assert!((17..=22).contains(&last), "drawn on to the end of the timer: last frame {last}");
+    let Some(Geom::Segment { b, .. }) = end else { panic!("{end:?}") };
+    assert!((b.length() - 1000.0).abs() < 25.0, "the end {b} is at the weapon's range from the muzzle");
+    // No timer: it ends within a few ticks of the sim's loss, as before.
+    assert!(run(ShotCfg::default()).0 <= 16);
+    // The switch off: the rows are not read and the beam lives its life (the other profiles are unchanged).
+    let off = Setup::new(miss).fire(4, "w_phaser", 0).held(4, 12);
+    assert!(last_drawn(&off, 60).is_some_and(|f| f >= 28));
+}
+
+#[test]
+fn under_beam_damage_at_end_a_dying_shooter_or_a_target_beyond_twice_the_range_ends_the_beam_at_once_and_a_lost_target_does_not() {
+    let miss = ShotCfg { beam_miss_lifetime: Some(Fixed::from_f64(0.5)), normal_weapon_team_color: None };
+    let base = || Setup::new(miss).at_end(miss).fire(4, "w_phaser", 0).held(4, 12);
+    // The target is lost (phased, say) with the timer running: drawn on past the loss.
+    assert!(last_drawn(&base(), 60).is_some_and(|f| f >= 17));
+    // The shooter starts to die when the sim loses the beam: it ends within a few ticks, timer or not.
+    let mut dying = base();
+    dying.shooter_dying = Some(12);
+    assert!(last_drawn(&dying, 60).is_some_and(|f| f <= 16), "a dying shooter's beam ran on");
+    // The target is beyond twice the range (the authored range is 1000): it ends at once as without the switch.
+    let mut far = base();
+    far.target_z = 2100;
+    assert!(last_drawn(&far, 60).is_some_and(|f| f <= 16), "a beam to a target beyond the break distance ran on");
+}
+
+#[test]
+fn a_beam_the_sim_lost_stays_lost_to_the_end_of_its_life_with_a_timer_longer_than_the_life() {
+    // A timer of two seconds outlasts the beam's life: the beam, lost at tick 12 with its target still in the view, is
+    // drawn on to its range to the end and does not snap back to the target when the judging window ends.
+    let long = ShotCfg { beam_miss_lifetime: Some(Fixed::from_f64(2.0)), normal_weapon_team_color: None };
+    let setup = Setup::new(long).at_end(long).fire(4, "w_phaser", 0).held(4, 12);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let mut late = Vec::new();
+    for i in 0..60 {
+        app.update();
+        if let Some(s) = shots(&mut app).first()
+            && i >= 14
+            && let Geom::Segment { b, .. } = s.geom
+        {
+            late.push(b.length());
+        }
+    }
+    assert!(late.len() >= 10, "drawn on to the end of the life: {} frames", late.len());
+    assert!(late.iter().all(|l| (l - 1000.0).abs() < 25.0), "{late:?}");
+}
+
+#[test]
+fn the_drawing_breaks_a_beam_at_the_distance_the_sim_does() {
+    // One source: the sim's factor, public, squared. An authored range of 1000: the sim holds a target at its limit and loses one beyond.
+    let limit = (sta_sim::combat::weapons::BEAM_BREAK_RANGE_FACTOR * 1000) as f32;
+    assert_eq!(break_distance_squared(1000.0), limit * limit);
+    assert!(1900.0f32.powi(2) <= break_distance_squared(1000.0) && 2100.0f32.powi(2) > break_distance_squared(1000.0));
+}
+
+#[test]
+fn a_torpedo_in_flight_keeps_one_line_to_its_node_when_the_targets_shields_drop() {
+    let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_torp", 2);
+    setup.shields = true;
+    setup.shields_until = Some(30);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let node = Vec3::new(5.0, 0.0, 0.0);
+    let mut points = Vec::new();
+    for i in 0..58 {
+        app.update();
+        if i == 0 {
+            model(&mut app, 2, &[("hull_a", node), ("hull_b", node)]);
+        }
+        for s in shots(&mut app) {
+            if let Geom::Billboard { c } = s.geom {
+                points.push((i, c, s.muzzle));
+            }
+        }
+    }
+    assert!(points.iter().any(|p| p.0 < 28) && points.iter().any(|p| p.0 > 34), "drawn before and after the shields dropped");
+    // One straight line from the muzzle: every drawn place is the same share of the way along it, to a fixed end.
+    let (_, last, muzzle) = *points.last().unwrap();
+    let dir = (last - muzzle).normalize();
+    let worst = points.iter().map(|(_, c, m)| (*c - *m).cross(dir).length()).fold(0.0, f32::max);
+    assert!(worst < 0.05, "a sideways step of {worst} across the flight");
+    // The line goes to the node (five units off the target's centre), not the centre.
+    let centre_dir = (Vec3::new(0.0, 0.0, -600.0) - muzzle).normalize();
+    assert!(dir.distance(centre_dir) > 1e-3, "the flight aims at the centre");
+}
+
+#[test]
+fn under_beam_damage_at_end_the_sims_break_distance_decides_not_the_drawings_own_reading() {
+    // The drawing's own cut ends a beam whose target is beyond twice the range (the authored range is 1000), measured from
+    // the muzzle: with the switch off a target at 2100 gets no beam. With the switch on the sim decides: it holds the beam
+    // (its distance is the sim's own, centre to centre), so the beam is drawn.
+    let mut setup = Setup::new(ShotCfg::default()).at_end(ShotCfg::default()).fire(4, "w_phaser", 0).held(4, 34);
+    setup.target_z = 2100;
+    assert!(last_drawn(&setup, 60).is_some_and(|f| f >= 30), "the sim holds it: drawn");
+    let mut off = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0);
+    off.target_z = 2100;
+    assert_eq!(last_drawn(&off, 60), None, "the switch off: the drawing's own cut, as before");
+}
+
 #[test]
 fn a_shot_in_flight_flies_on_when_its_shooter_is_gone_and_a_beam_does_not() {
     let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_pulse", 1).fire(4, "w_torp", 2).fire(4, "w_phaser", 0);
@@ -781,7 +979,7 @@ fn a_pulse_streak_and_a_torpedo_sprite_fly_to_their_target_and_end_on_the_hit() 
     hit.events.clear();
     let inner = ScriptedSource::from_json5(&src, &hit.db).unwrap();
     let mut app = hit.app(Some(RenderProfile::Stock));
-    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false }), Box::new(LocalRouter::new()), PlayerId(0));
+    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, shields_until: None, held: None, dying_from: None }), Box::new(LocalRouter::new()), PlayerId(0));
     let mut after = Vec::new();
     for _ in 0..24 {
         app.update();
@@ -973,6 +1171,7 @@ fn flares_follow_their_objects() {
                     assert!((f.at - centre).distance(Vec3::new(7.0, 0.0, -2.0)) < 1e-2, "{} from the target at {centre}", f.at);
                     impact_x.push(f.at.x);
                 }
+                FlareKind::HullHit | FlareKind::DeathSpark => unreachable!("no sparks in this scene"),
             }
         }
     }
@@ -1385,6 +1584,7 @@ fn authored_shot(path: ShotPath, geom: Geom, radius: f32, sprite: &str) -> Stock
         muzzle_flare: None,
         impact_flare: None,
         arrived: false,
+        sim_lost: false,
         geom,
     }
 }

@@ -60,7 +60,7 @@ pub enum Control {
 }
 
 /// Native starting choices, shared by all peers and persisted in replays.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct GameOptions {
     pub starting_resources: sta_content::StartingResources,
@@ -69,6 +69,45 @@ pub struct GameOptions {
     /// Armada I's dogfighting mode, agreed at match start.
     #[serde(default)]
     pub directors_cut: bool,
+    /// Armada II's match option "warp allowed" (#1102), agreed at match start. Off, no craft
+    /// warps in this match, whatever a mission script switches: the option, the mission switch
+    /// and the content's warp rule must all allow warp (`Sim::warp_allowed`; that the three are
+    /// separate in the original and combined so: read from the executable, static). It counts
+    /// under the stock Armada II profile only and is ignored under every other one, as
+    /// [`GameOptions::directors_cut`] is outside its game.
+    ///
+    /// On by default. INTERIM, STA64's own: the original's default was not read.
+    #[serde(default = "on")]
+    pub allow_warp: bool,
+}
+
+fn on() -> bool {
+    true
+}
+
+impl Default for GameOptions {
+    fn default() -> Self {
+        GameOptions { starting_resources: Default::default(), officer_limit: 0, directors_cut: false, allow_warp: true }
+    }
+}
+
+impl GameOptions {
+    /// Whether a match on `content` has the option "warp allowed" to choose: the stock Armada II
+    /// profile, and content that has warp at all (`Rules::warp_enabled`; where the content
+    /// switches warp off the option could not bring it back, so it is not offered). The set-up
+    /// screens show the control when this is true.
+    ///
+    /// STA64's own: it is offered for a single-player skirmish as for a network match (whether
+    /// the original offers it outside a network match is not established).
+    pub fn warp_offered(content: &sta_content::ContentDb) -> bool {
+        Self::warp_option_counts(content) && content.rules().warp_enabled()
+    }
+
+    /// Whether [`GameOptions::allow_warp`] counts for a match on `content`: the one profile it
+    /// belongs to.
+    pub(crate) fn warp_option_counts(content: &sta_content::ContentDb) -> bool {
+        content.profile() == sta_content::Profile::Sta2Classic
+    }
 }
 
 /// A computer player or a mission: reads views and events, writes commands.

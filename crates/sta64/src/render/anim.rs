@@ -30,11 +30,10 @@
 //!   ([`Trigger::None`]); the track rests.
 //!
 //! What the original engine does, per trigger (read from the executable, static; the
-//! owning functions are `ConstructionRig::StartBuild` / `WorkerBeeHasReturned`,
-//! `ResourceTransferInterface::SetDock`, `Shipyard::SetRepairDock` and
-//! `Weapon::Simulate`): every call sets the owner's animation flags and restarts its
-//! clock. Flag 1 loops, flag 2 plays forward once and holds the last key, flag 4 plays
-//! backwards once and holds the first key. A rig sets 2 at `StartBuild` and 4 once the
+//! triggers are a rig starting a build, a worker bee's return, a dock at a transfer station
+//! or a shipyard, and a weapon's shot): every one sets the owner's animation flags and
+//! restarts its clock. Flag 1 loops, flag 2 plays forward once and holds the last key, flag 4 plays
+//! backwards once and holds the first key. A rig sets 2 when the build starts and 4 once the
 //! last worker bee is back: **workers at work** is the construction hold already done
 //! by `ConstructionBays` (open from the start of the build until every worker is
 //! home). A freighter docking at a transfer station sets 1 on the station (loop) and
@@ -117,8 +116,8 @@ pub struct Caps {
 }
 
 /// Whether a shot of this weapon animates its owner: the weapon's ODF `animateOwner` (read
-/// from the executable, static: `Weapon::Simulate` plays the owner forward once per shot
-/// when it is set). A weapon with no ODF text behind it (native content, test content) has
+/// from the executable, static: a weapon plays its owner forward once per shot when it is
+/// set). A weapon with no ODF text behind it (native content, test content) has
 /// no such key to read, so its shots count.
 pub fn owner_animates(w: &sta_content::WeaponDef) -> bool {
     w.raw.class_label().is_none() || w.raw.i64("animateOwner").is_some_and(|v| v != 0)
@@ -963,7 +962,7 @@ mod tests {
     }
 
     /// A drop-off's track loops while a freighter is docked and rests on the first key before
-    /// and after (the engine's flag 1 at `SetDock`, animation off when the freighter leaves).
+    /// and after (the engine's flag 1 when the freighter docks, animation off when it leaves).
     #[test]
     fn a_drop_offs_track_loops_while_docked_and_rests_otherwise() {
         // 60 fps frames; the sim ticks at 30 Hz, so tick 30..300 is about frames 60..600.

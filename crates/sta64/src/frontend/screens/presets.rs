@@ -29,7 +29,7 @@ fn save_at(path: &Path, draft: &SetupDraft, data: &ScreenData) -> Result<(), Str
     validate(draft, data)?;
     let map = &data.maps[draft.map].def.name;
     let mut text = format!(
-        "version={VERSION}\nmap={}\nseed={}\nseat_count={}\nobserving={}\nreturn_row={}\nspeed={}\nresources={}\nofficer_limit={}\ndirectors_cut={}\ncolour={}\nfog={}\nrandom_placement={}\npreview_visible={}\nstart_markers={}\n",
+        "version={VERSION}\nmap={}\nseed={}\nseat_count={}\nobserving={}\nreturn_row={}\nspeed={}\nresources={}\nofficer_limit={}\ndirectors_cut={}\nallow_warp={}\ncolour={}\nfog={}\nrandom_placement={}\npreview_visible={}\nstart_markers={}\n",
         encode(map),
         draft.seed,
         draft.seats.len(),
@@ -39,6 +39,7 @@ fn save_at(path: &Path, draft: &SetupDraft, data: &ScreenData) -> Result<(), Str
         resources_key(draft.options.starting_resources),
         draft.options.officer_limit,
         draft.options.directors_cut,
+        draft.options.allow_warp,
         draft
             .colour
             .map_or_else(|| "default".to_owned(), |n| n.to_string()),
@@ -177,6 +178,10 @@ fn load_at(path: &Path, data: &ScreenData) -> Result<SetupDraft, String> {
     draft.options.officer_limit = number(get("officer_limit")?, "officer_limit")?;
     let directors_cut = fields.get("directors_cut").map_or(Ok(false), |value| boolean(value, "directors_cut"))?;
     draft.options.directors_cut = directors_cut && data.content.profile() == sta_content::Profile::Sta1Classic;
+    // The match option "warp allowed" (#1102): a preset made before the option has no key and loads it on; where the
+    // content does not offer it the saved value is ignored (the option stays on), but an invalid value is still refused.
+    let allow_warp = fields.get("allow_warp").map_or(Ok(true), |value| boolean(value, "allow_warp"))?;
+    draft.options.allow_warp = allow_warp || !sta_sim::setup::GameOptions::warp_offered(&data.content);
     draft.colour = match get("colour")? {
         "default" => None,
         value => Some(number(value, "colour")?),
@@ -363,6 +368,57 @@ mod tests {
         assert!(loaded.random_placement);
         assert!(!loaded.preview_visible);
         assert_eq!(loaded.start_markers, SetupStartMarkers::None);
+        std::fs::remove_file(file).unwrap();
+    }
+
+    /// The match option "warp allowed" is a preset key (`allow_warp`, #1102): saved and loaded like the other options,
+    /// where the content offers it; a preset without the key (made before the option) loads it on; where it is not
+    /// offered the saved value is ignored; an invalid value is refused; an unknown key is ignored, so an older build
+    /// reads a newer preset.
+    #[test]
+    fn a_preset_keeps_warp_allowed_where_it_is_offered_and_loads_it_on_otherwise() {
+        let offered = |on: bool| {
+            let mut data = ScreenData::fake();
+            data.races = std::sync::Arc::new(sta_content::Races::from_defs(vec![sta_content::RaceDef {
+                stem: "fx".into(),
+                name: "fx".into(),
+                display_key: None,
+                slot: Some(0),
+                interface: None,
+                interface_sprites: None,
+                single_player_music: None,
+                multiplayer_music: None,
+                music_tracks: Vec::new(),
+                standard_units: Vec::new(),
+                minimal_units: Vec::new(),
+                stock: [0; 4],
+                lots_stock: [0; 4],
+                normal_crew: None,
+                lots_crew: None,
+            }]));
+            let db = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta2Classic).build().unwrap();
+            data.content = std::sync::Arc::new(if on { db } else { db.clone().with_rules(db.rules().clone().with_warp(Some(false))) });
+            data
+        };
+        let (data, other) = (offered(true), offered(false));
+        let file = path("warp-option");
+        let mut draft = SetupDraft::new(&data);
+        assert!(draft.options.allow_warp, "on by default");
+        draft.options.allow_warp = false;
+        save_at(&file, &draft, &data).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("allow_warp=false\n"));
+        assert!(!load_at(&file, &data).unwrap().options.allow_warp, "round trip with the option off");
+        assert!(load_at(&file, &other).unwrap().options.allow_warp, "ignored where it is not offered");
+        // a preset from before the option, and one with a key an older build does not know
+        std::fs::write(&file, text.replace("allow_warp=false\n", "")).unwrap();
+        assert!(load_at(&file, &data).unwrap().options.allow_warp, "no key: on");
+        std::fs::write(&file, format!("{text}future_key=1\n")).unwrap();
+        assert!(!load_at(&file, &data).unwrap().options.allow_warp, "unknown keys are ignored");
+        // an invalid value is refused, also where the option is not offered
+        std::fs::write(&file, text.replace("allow_warp=false", "allow_warp=maybe")).unwrap();
+        assert!(load_at(&file, &data).unwrap_err().contains("allow_warp"));
+        assert!(load_at(&file, &other).unwrap_err().contains("allow_warp"));
         std::fs::remove_file(file).unwrap();
     }
 

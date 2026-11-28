@@ -49,9 +49,91 @@ pub struct WorldView {
     pub active_point_defence: Vec<(EntityId, u8)>,
     #[serde(default)]
     pub a1_specials: crate::specials::SpecialView,
+    /// Every craft in warp or dropping out of it (the attack approach and
+    /// scripted warp moves), ascending entity id. Derived from the sim's warp
+    /// record and the craft's speed; no state of its own.
+    #[serde(default)]
+    pub warp_rows: Vec<WarpRow>,
+    /// Beams in flight under `beam_damage_at_end` (#1068): fired, their damage not yet applied, sorted by
+    /// shooter, weapon, target and end tick. Empty when the switch is off. Derived from the weapons state.
+    #[serde(default)]
+    pub beam_rows: Vec<BeamRow>,
+}
+
+/// A beam whose life has not ended: the sim still holds it, and applies its damage on tick `ends`
+/// unless the beam is lost before (its shooter or target gone, the target phased, out of range).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BeamRow {
+    pub shooter: EntityId,
+    pub weapon: ContentKey,
+    pub target: EntityId,
+    /// The sim tick the beam's hit is applied on (fire tick plus the weapon's `duration`); the view that step
+    /// makes has the next tick and no row for the beam.
+    pub ends: Tick,
+}
+
+/// Where a craft is in its warp (SIM-36).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WarpPhase {
+    /// On its way from impulse speed to warp speed.
+    Entering,
+    /// At warp speed.
+    AtWarp,
+    /// Dropping out of warp.
+    Leaving,
+}
+
+/// One craft's warp for the renderer (#1102 part 1).
+///
+/// `ramp_start` and `ramp_len` say how far the craft is into the short ramp of
+/// its entry or exit: `tick - ramp_start` of `ramp_len` ticks.
+///
+/// Under `warp_shape` (#1102 part 2) they are the stored ramp: the tick it
+/// began and its length, fixed when it began. The speed does not change over
+/// that ramp (the craft holds its speed and is shifted forward, then is at warp
+/// speed; leaving is the mirror image), so the ramp is the time of the stretch
+/// to draw. At warp the row keeps the entry's ramp, which is then over
+/// (`tick - ramp_start >= ramp_len`). A craft loaded from a snapshot older than
+/// the stored ramp has a row of length zero.
+///
+/// Without the switch the ramp is the smooth speed change between impulse and
+/// warp speed: `ramp_len` is that change's length in ticks, and `ramp_start` is
+/// worked out from the craft's speed, so it is exact for a ramp that runs
+/// unbroken and is clamped to the current tick otherwise. At warp it is the
+/// tick the ramp would have begun to end now (`tick - ramp_len`).
+///
+/// `phase` is the contract; the ramp fields are presentation hints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WarpRow {
+    pub id: EntityId,
+    pub phase: WarpPhase,
+    pub ramp_start: Tick,
+    pub ramp_len: u32,
+    /// The craft's stretch factor at full warp: the one the ramp's length and shift are made from (the sim's own rule,
+    /// derived from the craft's speeds, one source for the drawing). Never below one.
+    #[serde(default = "one")]
+    pub stretch: Fixed,
+}
+
+fn one() -> Fixed {
+    Fixed::ONE
 }
 
 impl WorldView {
+    /// Whether the sim holds a beam of `weapon` from `shooter` at `target` (its life has not ended and it is not lost).
+    /// Two beams of the same weapon from one shooter at the same target are not told apart (harmless: every condition
+    /// that loses one loses both).
+    pub fn beam_held(&self, shooter: EntityId, weapon: ContentKey, target: EntityId) -> bool {
+        let key = (shooter, weapon, target);
+        let at = self.beam_rows.partition_point(|r| (r.shooter, r.weapon, r.target) < key);
+        self.beam_rows.get(at).is_some_and(|r| (r.shooter, r.weapon, r.target) == key)
+    }
+
+    /// The craft's warp row, if it is in warp or dropping out.
+    pub fn warp_of(&self, id: EntityId) -> Option<&WarpRow> {
+        self.warp_rows.binary_search_by_key(&id, |row| row.id).ok().map(|i| &self.warp_rows[i])
+    }
+
     pub fn point_defence_on(&self, id: EntityId, slot: u8) -> bool {
         self.active_point_defence.binary_search(&(id, slot)).is_ok()
     }

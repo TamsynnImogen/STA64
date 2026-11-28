@@ -373,7 +373,14 @@ impl Sim {
         if bodies.is_empty() {
             return;
         }
-        let (mut shifts, lifts) = self.craft_shifts(&bodies);
+        // #1100: a dying craft is no obstacle to other craft and is not pushed by them
+        // (measured, repeated); solids still push it (INTERIM: not measured).
+        let (mut shifts, lifts) = if self.dying.is_empty() {
+            self.craft_shifts(&bodies)
+        } else {
+            let living: Vec<Body> = bodies.iter().filter(|b| !self.dying.contains(b.id)).copied().collect();
+            self.craft_shifts(&living)
+        };
         let obstacles = self.obstacles();
         for b in bodies.iter().filter(|body| body.movable) {
             let Some(unit) = self.units.get(b.id) else { continue };

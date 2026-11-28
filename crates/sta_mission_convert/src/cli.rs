@@ -80,15 +80,26 @@ pub struct Args {
     pub keep_foreign: bool,
     pub cache: bool,
     pub cache_dir: Option<PathBuf>,
+    /// `--mod`: convert the missions of this mod inside the install (#927).
+    pub active_mod: Option<String>,
+    /// `--engine`: the folder the Armada II engine files are read from instead of the install.
+    pub engine: Option<PathBuf>,
 }
 
-const USAGE: &str = "usage: sta_mission_convert [-h] --install INSTALL [--out OUT] [--only ONLY] \
-[--include-unmapped] [--keep-foreign] [--cache] [--cache-dir CACHE_DIR]";
+const USAGE: &str = "usage: sta_mission_convert [-h] --install INSTALL [--mod MOD] [--engine ENGINE] [--out OUT] \
+[--only ONLY] [--include-unmapped] [--keep-foreign] [--cache] [--cache-dir CACHE_DIR]";
 
 const HELP: &str = "\nConvert an install's own compiled missions (Armada I and II) to Lua.\n\n\
 options:\n\
   -h, --help           show this help and exit\n\
   --install INSTALL    the game install root (read-only)\n\
+  --mod MOD            convert the compiled missions of the mod MOD inside the install (found as\n\
+                       the game mounts the install with that mod: the mod, its parent mods, the\n\
+                       base data) instead of the base game's; the output and the cache are kept\n\
+                       for this install with this mod only\n\
+  --engine ENGINE      Armada II: read the engine files (Armada2.exe and armada2.map) in the\n\
+                       folder ENGINE (read-only) instead of the install root; needed with --mod\n\
+                       when the install has none at its root: a stock Armada II root\n\
   --out OUT            output folder instead of the data directory's; the Lua goes to OUT/missions,\n\
                        a manifest of what was written to OUT/.sta_mission_convert.manifest\n\
   --only ONLY          one mission, e.g. a2_fed01 (Armada I: a map, e.g. fed1); repeatable\n\
@@ -104,8 +115,18 @@ deleted, and listed in the output. The output folder may not be, contain or lie 
 Exit code: 0 when every mission converted; 1 when any mission failed or was skipped, even if other\n\
 scripts were written (the Python wrapper exits 0 then, after its warning).";
 
-const OPTIONS: [&str; 8] =
-    ["--help", "--install", "--out", "--only", "--include-unmapped", "--keep-foreign", "--cache", "--cache-dir"];
+const OPTIONS: [&str; 10] = [
+    "--help",
+    "--install",
+    "--mod",
+    "--engine",
+    "--out",
+    "--only",
+    "--include-unmapped",
+    "--keep-foreign",
+    "--cache",
+    "--cache-dir",
+];
 
 enum Parsed {
     Help,
@@ -183,6 +204,12 @@ fn parse_args(args: &[OsString]) -> std::result::Result<Parsed, String> {
             "--help" => return Ok(Parsed::Help),
             "--install" => install = Some(PathBuf::from(value()?)),
             "--out" => a.out = Some(PathBuf::from(value()?)),
+            "--engine" => a.engine = Some(PathBuf::from(value()?)),
+            "--mod" => {
+                let v = value()?;
+                a.active_mod =
+                    Some(v.into_string().map_err(|_| "argument --mod: the mod's name is not valid UTF-8".to_owned())?);
+            }
             "--only" => {
                 let v = value()?;
                 a.only.push(
@@ -238,14 +265,33 @@ pub fn run_with<S: AsRef<OsStr>>(
         }
     };
     let shown = a.install.display().to_string();
-    let inst = match Install::open(&a.install) {
-        Ok(i) => i,
-        Err(e) => return die(io, &install_error_text(&e, &shown)),
+    let opened = match &a.active_mod {
+        None => Install::open(&a.install).map_err(|e| install_error_text(&e, &shown)),
+        Some(name) => Install::open_mod(&a.install, name).map_err(|e| match e {
+            install::ModError::NotAFolder { .. } => format!("--install {shown}: not a folder"),
+            install::ModError::Mount { reason, .. } => format!("--install {shown} --mod {name}: {reason}"),
+        }),
     };
+    let inst = match opened {
+        Ok(i) => i,
+        Err(m) => return die(io, &m),
+    };
+    let inst = match &a.engine {
+        None => inst,
+        Some(_) if inst.game == install::Game::Armada1 => {
+            return die(io, &format!("--install {shown}: --engine is for Armada II missions"));
+        }
+        Some(e) => match inst.with_engine(e) {
+            Ok(i) => i,
+            Err(_) => return die(io, &format!("--engine {}: not a folder", e.display())),
+        },
+    };
+    // D6: what is converted from an install with a mod is kept for that pair only
+    let folder_key = key(&inst.root, inst.active_mod());
     let given_out: PathBuf = match &a.out {
         Some(o) => o.clone(),
         None => match &env.data_dir {
-            Some(base) => base.join("converted").join(key(&inst.root, None)),
+            Some(base) => base.join("converted").join(&folder_key),
             None => return die(io, "no user data folder known: set STA64_DATA_DIR or pass --out"),
         },
     };
@@ -256,7 +302,7 @@ pub fn run_with<S: AsRef<OsStr>>(
     let cache_dir = match (&a.cache_dir, a.cache) {
         (Some(d), _) => Some(d.clone()),
         (None, true) => match &env.data_dir {
-            Some(base) => Some(base.join("convert-cache").join(key(&inst.root, None))),
+            Some(base) => Some(base.join("convert-cache").join(&folder_key)),
             None => return die(io, "no user data folder known: set STA64_DATA_DIR or pass --cache-dir"),
         },
         (None, false) => None,
@@ -275,7 +321,10 @@ pub fn run_with<S: AsRef<OsStr>>(
         Ok(o) => o,
         Err(m) => return die(io, &m),
     };
-    say(io, &format!("converting {} -> {}", inst.root.display(), given_out.display()));
+    match inst.active_mod() {
+        None => say(io, &format!("converting {} -> {}", inst.root.display(), given_out.display())),
+        Some(m) => say(io, &format!("converting {} (mod {m}) -> {}", inst.root.display(), given_out.display())),
+    }
     let opts = Options { only: a.only.clone(), include_unmapped: a.include_unmapped, ..Options::default() };
     let mut moved_total = 0;
     let summary = {
@@ -286,7 +335,8 @@ pub fn run_with<S: AsRef<OsStr>>(
             }
             Event::Console(l) => say(io, l),
             Event::Failed { name, message, .. } => say(io, &format!("  FAIL {name}: {message}")),
-            Event::Planned { .. } | Event::Started { .. } | Event::Done { .. } => {}
+            // the command line opens its folder with `Edited::Foreign`: a file is never kept
+            Event::Planned { .. } | Event::Started { .. } | Event::Done { .. } | Event::KeptEdited { .. } => {}
         };
         install::convert_install(&inst, &opts, &mut outdir, cache.as_ref(), decoder, &|| false, &mut sink)
     };

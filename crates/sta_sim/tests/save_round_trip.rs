@@ -169,7 +169,7 @@ impl Script {
         self.push(tick, PlayerId::BENCH, CommandKind::Edit(e));
     }
     fn go(&mut self, tick: u64, player: u8, units: &[EntityId], to: Vec3, queue: bool) {
-        self.order(tick, player, Order::Move { units: units.to_vec(), to, queue });
+        self.order(tick, player, Order::Move { units: units.to_vec(), to, queue, mode: None });
     }
     fn commands(&self, tick: u64) -> &[Command] {
         self.at.get(&tick).map_or(&[][..], Vec::as_slice)

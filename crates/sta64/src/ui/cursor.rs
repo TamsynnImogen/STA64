@@ -14,9 +14,9 @@
 //! where the table has it, else the plain sprite; stock tables have none and are unchanged.
 //!
 //! Rules (read from data; see the package notes outside the repository): the hotspot is in
-//! texture pixels; a cell's size on screen is its texture size, so a mod that ships a larger
-//! texture under the same sprite names gets a larger cursor; a flipbook plays over the
-//! animation's length.
+//! texture pixels; a cell's size on screen is its texture size times the size factors of
+//! [`size_factors`] (the Remaster look: one), so a mod that ships a larger texture under the same
+//! sprite names gets a larger cursor; a flipbook plays over the animation's length.
 
 use std::collections::HashMap;
 
@@ -26,6 +26,7 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 use sta_assets::a2fmt::spr::{Animation, Auto, Field, Sprite, SpriteTable};
 
 use super::gui_sprites::{GuiImageSampling, GuiSprites, crop, page};
+use super::hud::stock::layout::{HudFit, StockLayout};
 use crate::viewer::Mounted;
 
 /// The sprite table the cursors are read from: cursor sprites are resolved against the whole sprite
@@ -37,6 +38,70 @@ pub(crate) fn load_table(vfs: &sta_vfs::Vfs) -> SpriteTable {
 
 /// The sprite name of the plain pointer.
 pub const DEFAULT: &str = "standard_cursor";
+
+/// The cursor of the first row of the action table: what an action whose cursor has no art draws, with
+/// Armada II content (read from the executable, static; a lookup name the executable carries; not measured).
+/// Other content keeps the pointer for such an action (INTERIM: their tables are not read).
+pub const FIRST_ROW: &str = "c_select";
+
+/// The actions of the cursor table that have a cursor name (Armada II; read from the executable, static, the
+/// rows for patrol, guard, attack and the minimap also measured). The shared decision of the main view, the
+/// minimap and the armed modes returns one of these; the invalid column is chosen by one bit of the action.
+/// The table is fixed in the executable; only the art is data (the install's cursor table, read at run time).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // The whole table is here; the armed modes use the rows STA64 has commands for.
+pub enum CursorAction {
+    /// Nothing to do, or a selection (the first row).
+    Select,
+    Go,
+    GoWarp,
+    Attack,
+    SpecialAttack,
+    TransportAttack,
+    Transport,
+    /// Follow and defend share one row; its cursor has no art in the original's tables, so it draws the first row.
+    Follow,
+    SetRallyPoint,
+    Decommission,
+    Mine,
+    Guard,
+    Build,
+    Patrol,
+    Wormhole,
+    StartTrade,
+    EndTrade,
+    Colonize,
+    RepairOther,
+}
+
+/// The cursor name of an action: the valid column, or with `invalid` the invalid one. A row with no invalid name
+/// (select, follow, rally, decommission, guard, patrol, wormhole) draws the first row's cursor instead. Every
+/// other action of the original (stop, get repair, go to the rally point, ...) has no name and so draws it too.
+pub fn action_cursor(action: CursorAction, invalid: bool) -> &'static str {
+    use CursorAction as A;
+    let (valid, refused) = match action {
+        A::Select => (FIRST_ROW, None),
+        A::Go => ("c_move", Some("c_nomove")),
+        A::GoWarp => ("c_warp", Some("c_nomove")),
+        A::Attack => ("c_attack", Some("c_noattack")),
+        A::SpecialAttack => ("c_specweap", Some("c_nospecweap")),
+        A::TransportAttack => ("c_capture", Some("c_nocapture")),
+        A::Transport => ("c_transport", Some("c_notransport")),
+        A::Follow => ("c_follow", None),
+        A::SetRallyPoint => ("c_rally", None),
+        A::Decommission => ("c_decommission", None),
+        A::Mine => ("c_mining", Some("c_nomining")),
+        A::Guard => ("c_guard", None),
+        A::Build => ("c_build", Some("c_nobuild")),
+        A::Patrol => ("c_patrol", None),
+        A::Wormhole => ("c_wormin", None),
+        A::StartTrade => ("c_strade", Some("c_nostrade")),
+        A::EndTrade => ("c_etrade", Some("c_noetrade")),
+        A::Colonize => ("c_colonize", Some("c_nocolonize")),
+        A::RepairOther => ("c_repair", Some("c_norepair")),
+    };
+    if invalid { refused.unwrap_or(FIRST_ROW) } else { valid }
+}
 
 /// The cursor sprite wanted this frame. Reset to [`DEFAULT`] at the start of every frame;
 /// a system that knows better sets it before the cursor is placed.
@@ -150,9 +215,40 @@ pub(crate) fn inset_rect(r: Rect) -> Rect {
 
 /// The node of the inset frame: its top-left and size, from the full frame's (`pos`, `size` in UI
 /// units, the cell's texel scaled by the cursor size factor `k`).
-pub(crate) fn inset_node(frame: Rect, pos: Vec2, k: f32) -> (Vec2, Vec2) {
+pub(crate) fn inset_node(frame: Rect, pos: Vec2, k: Vec2) -> (Vec2, Vec2) {
     let inner = inset_rect(frame);
     (pos + (inner.min - frame.min) * k, inner.size() * k)
+}
+
+/// The fixed reference size the stock engine divides the window by to size its cursor, per axis
+/// (the rule: cell texels times window width over `.x` and window height over `.y`). Grade: read
+/// from the executable, static; measured at two window sizes for Armada II. It is not the HUD's
+/// canvas.
+const STOCK_CURSOR_REFERENCE: Vec2 = Vec2::new(800.0, 600.0);
+
+/// How many UI units one texel of the cursor covers, horizontally and vertically (D-06, #1152).
+/// `stock` is the HUD fit with the window and the HUD area's height in the HUD's theme units
+/// (`StockLayout::extent_for_aspect`), or `None` for the Remaster look.
+///
+/// - Remaster look (LCARS, and Armada I's HUD, whose cursor scaling is not measured): the texel
+///   covers one unit, times the player's `cursor_scale`.
+/// - Stock look, Stretched HUD fit: the original's rule, the window over
+///   [`STOCK_CURSOR_REFERENCE`] per axis, so the cursor is wider than tall on a wide window. Grade:
+///   read from the executable, static, and measured for Armada II. INTERIM for the Fleet Operations
+///   and Roots profiles: their cursor scaling was never measured; they take the rule on inference
+///   (same engine family, same strings and tables).
+/// - Stock look, Centred HUD fit: the centred HUD area's height over the reference height on both
+///   axes. STA64's own choice (D-06): it equals the original at the sheet's own aspect and keeps
+///   the cursor's size relative to the panels on any other.
+///
+/// Under the Stock look `cursor_scale` multiplies the result.
+pub(crate) fn size_factors(stock: Option<(HudFit, Vec2, f32)>, cursor_scale: f32) -> Vec2 {
+    let base = match stock {
+        None => Vec2::ONE,
+        Some((HudFit::Stretched, window, _)) => window / STOCK_CURSOR_REFERENCE,
+        Some((HudFit::Centred, _, hud_height)) => Vec2::splat(hud_height / STOCK_CURSOR_REFERENCE.y),
+    };
+    base * cursor_scale
 }
 
 /// The frame to show `t` seconds in.
@@ -187,13 +283,18 @@ fn resolve(name: &str, sprites: &mut CursorSprites, vfs: &sta_vfs::Vfs, images: 
 }
 
 /// The sprite names to try, in order: the wanted cursor's race variant, the wanted cursor, the
-/// cursor the click would otherwise show (the move cursor for the warp cursor), the default's race
-/// variant, the default.
-pub(crate) fn candidates(wanted: &str, race: Option<&str>) -> Vec<String> {
+/// cursor the click would otherwise show (the move cursor for the warp cursor), with `first_row` (Armada II
+/// content: a cursor with no art draws the first row's, read from the executable, static) the first row's
+/// cursor, then the default's race variant and the default. Without `first_row` a missing cursor shows the
+/// default, as before (INTERIM: the other games' tables are not read).
+pub(crate) fn candidates(wanted: &str, race: Option<&str>, first_row: bool) -> Vec<String> {
     let mut out = Vec::new();
     let mut names = vec![wanted];
     if wanted == "c_warp" {
         names.push("c_move");
+    }
+    if first_row && wanted != DEFAULT {
+        names.push(FIRST_ROW);
     }
     names.push(DEFAULT);
     for name in names {
@@ -212,7 +313,7 @@ fn reset_wanted(mut wanted: ResMut<WantedCursor>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn place(
     mut commands: Commands,
     wanted: Res<WantedCursor>,
@@ -220,6 +321,7 @@ fn place(
     images: Option<ResMut<Assets<Image>>>,
     device: Option<Res<bevy::render::renderer::RenderDevice>>,
     ui_scale: Option<Res<UiScale>>,
+    (profile, hud, content): (Option<Res<super::profile::UiProfile>>, Option<Res<super::hud::HudConfig>>, Option<Res<crate::sim_link::ContentRes>>),
     race: Option<Res<crate::game::LocalRace>>,
     settings: Option<Res<crate::frontend::screens::Settings>>,
     // INTERIM (not measured): the animation clock is real time, so it also runs while the game is paused.
@@ -246,7 +348,8 @@ fn place(
         (Some(m), Some(_)) if !dragging => {
             let vfs = &m.0;
             let race = race.as_deref().map(|r| r.name.as_str()).filter(|n| !n.is_empty());
-            candidates(wanted.0, race).iter().find_map(|name| resolve(name, &mut sprites, vfs, &mut images, formats))
+            let first_row = content.as_deref().is_some_and(|c| c.0.profile() == sta_content::Profile::Sta2Classic);
+            candidates(wanted.0, race, first_row).iter().find_map(|name| resolve(name, &mut sprites, vfs, &mut images, formats))
         }
         _ => None,
     };
@@ -267,8 +370,15 @@ fn place(
     };
     let frame = frame_at(art.frames.len(), art.period, time.elapsed_secs());
     let rect = art.frames[frame];
-    // The player's size factor (UI-45) scales the drawn cell and the hotspot alike.
-    let size = settings.as_deref().map_or(1.0, |s| s.cursor_scale).clamp(0.5, 3.0);
+    // The size rule (D-06) and the player's factor (UI-45) scale the drawn cell and the hotspot alike.
+    let player = settings.as_deref().map_or(1.0, |s| s.cursor_scale).clamp(0.5, 3.0);
+    let stock = profile.as_deref().filter(|p| p.is_stock() && **p != super::profile::UiProfile::Armada1)
+        .zip(hud.as_deref().and_then(|h| h.gui.as_ref().map(|gui| (h, gui))))
+        .map(|(_, (h, gui))| {
+            let (window, hud_height) = StockLayout::extent_for_aspect(gui, h.aspect, h.fit);
+            (h.fit, window, hud_height)
+        });
+    let size = size_factors(stock, player);
     let pos = node_pos(pointer, art.origin * size, ui_scale.map_or(1.0, |s| s.0));
     // The sampled rectangle and the node are inset together (see `inset_rect`).
     let (pos, node_size) = inset_node(rect, pos, size);
@@ -326,8 +436,42 @@ mod tests {
     /// An install whose table has no warp cursor shows the move cursor, not the pointer.
     #[test]
     fn a_missing_warp_cursor_falls_back_to_the_move_cursor() {
-        assert_eq!(candidates("c_warp", None), ["c_warp", "c_move", DEFAULT]);
-        assert_eq!(candidates("c_warp", Some("fx")), ["c_warp_fx", "c_warp", "c_move_fx", "c_move", "standard_cursor_fx", "standard_cursor"]);
+        assert_eq!(candidates("c_warp", None, false), ["c_warp", "c_move", DEFAULT]);
+        assert_eq!(candidates("c_warp", Some("fx"), false), ["c_warp_fx", "c_warp", "c_move_fx", "c_move", "standard_cursor_fx", "standard_cursor"]);
+    }
+
+    /// A cursor with no art draws the first row's with Armada II content (read from the executable, static), and the
+    /// pointer only where there is no such row; other content keeps the pointer (INTERIM: its tables are not read).
+    #[test]
+    fn a_cursor_with_no_art_falls_back_to_the_first_rows_with_armada_two_content_and_to_the_pointer_elsewhere() {
+        assert_eq!(candidates("unnamed", None, true), ["unnamed", FIRST_ROW, DEFAULT]);
+        assert_eq!(candidates("unnamed", Some("fx"), true), ["unnamed_fx", "unnamed", &format!("{FIRST_ROW}_fx"), FIRST_ROW, &format!("{DEFAULT}_fx"), DEFAULT]);
+        assert_eq!(candidates("c_warp", None, true), ["c_warp", "c_move", FIRST_ROW, DEFAULT]);
+        assert_eq!(candidates("unnamed", None, false), ["unnamed", DEFAULT], "other content: as before");
+        // The pointer's own cursor (the panels') has no first-row step.
+        assert_eq!(candidates(DEFAULT, None, true), [DEFAULT]);
+    }
+
+    /// The action table: one column valid, one invalid; a row with no invalid name draws the first row's cursor.
+    #[test]
+    fn the_action_table_gives_the_valid_and_the_invalid_column_and_the_first_row_for_a_missing_name() {
+        use CursorAction as A;
+        for a in [A::Go, A::GoWarp, A::Attack, A::SpecialAttack, A::TransportAttack, A::Transport, A::Mine, A::Build, A::StartTrade, A::EndTrade, A::Colonize, A::RepairOther] {
+            assert_ne!(action_cursor(a, false), action_cursor(a, true), "{a:?}: two columns");
+            assert_ne!(action_cursor(a, true), FIRST_ROW, "{a:?}: the invalid column has its own name");
+        }
+        for a in [A::Select, A::Follow, A::SetRallyPoint, A::Decommission, A::Guard, A::Patrol, A::Wormhole] {
+            assert_eq!(action_cursor(a, true), FIRST_ROW, "{a:?}: no invalid name");
+        }
+        assert_eq!(action_cursor(A::Select, false), FIRST_ROW);
+        // A move and a warp move refuse with the same cursor.
+        assert_eq!(action_cursor(A::Go, true), action_cursor(A::GoWarp, true));
+        // Every valid name is its own row's, except the shared one of the first row.
+        let valid: Vec<_> = [A::Select, A::Go, A::GoWarp, A::Attack, A::SpecialAttack, A::TransportAttack, A::Transport, A::Follow, A::SetRallyPoint, A::Decommission, A::Mine, A::Guard, A::Build, A::Patrol, A::Wormhole, A::StartTrade, A::EndTrade, A::Colonize, A::RepairOther].map(|a| action_cursor(a, false)).to_vec();
+        let mut sorted = valid.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), valid.len(), "each row has its own valid cursor");
     }
 
     #[test]
@@ -339,15 +483,53 @@ mod tests {
         for (i, f) in frames.iter().enumerate() {
             let r = inset_rect(*f);
             assert_eq!(r, Rect::new(f.min.x + 0.5, 0.5, f.max.x - 0.5, 31.5), "frame {i}");
-            let (pos, size) = inset_node(*f, Vec2::new(10.0, 20.0), 2.0);
+            let (pos, size) = inset_node(*f, Vec2::new(10.0, 20.0), Vec2::splat(2.0));
             assert_eq!((pos, size), (Vec2::new(11.0, 21.0), Vec2::new(62.0, 62.0)));
         }
         // The scale is unchanged: units per texel are the node's over the rectangle's.
-        let (_, size) = inset_node(frames[0], Vec2::ZERO, 2.0);
+        let (_, size) = inset_node(frames[0], Vec2::ZERO, Vec2::splat(2.0));
         assert_eq!(size / inset_rect(frames[0]).size(), Vec2::splat(2.0));
         // A frame of a texel or less is not inset.
         let tiny = Rect::new(4.0, 4.0, 5.0, 9.0);
         assert_eq!(inset_rect(tiny), tiny);
+    }
+
+    /// D-06 (#1152): the cursor's size under each HUD fit, derived from the rule (the window over
+    /// [`STOCK_CURSOR_REFERENCE`] per axis when stretched; the centred HUD area's height over the
+    /// reference height when centred) at 4:3, 16:9 and a window narrower than 4:3. The HUD area comes
+    /// from a layout on the layout's own default canvas (no sheet is loaded).
+    #[test]
+    fn the_cursor_size_follows_the_window_over_the_reference_under_each_fit_and_the_player_factor_multiplies() {
+        let gui = sta_content::GuiLayout::default();
+        let factors = |aspect: f32, fit: HudFit, player: f32| {
+            let (window, hud_height) = StockLayout::extent_for_aspect(&gui, aspect, fit);
+            size_factors(Some((fit, window, hud_height)), player)
+        };
+        let near = |a: Vec2, b: Vec2| assert!((a - b).abs().max_element() < 1e-3, "{a:?} vs {b:?}");
+        // The HUD's theme units: a window is 1080 high.
+        let window = |aspect: f32| Vec2::new(1080.0 * aspect, 1080.0);
+        let reference = STOCK_CURSOR_REFERENCE;
+        // 4:3 window: both fits are the original's rule, window over reference.
+        near(factors(4.0 / 3.0, HudFit::Stretched, 1.0), window(4.0 / 3.0) / reference);
+        near(factors(4.0 / 3.0, HudFit::Centred, 1.0), window(4.0 / 3.0) / reference);
+        // 16:9 window: Stretched is wider than tall by the window's ratio; Centred keeps the height's factor on both axes.
+        let wide = factors(16.0 / 9.0, HudFit::Stretched, 1.0);
+        near(wide, window(16.0 / 9.0) / reference);
+        assert!(wide.x > wide.y);
+        near(factors(16.0 / 9.0, HudFit::Centred, 1.0), Vec2::splat(1080.0 / reference.y));
+        // A window narrower than the sheet: the centred area is shorter than the window, so is the cursor.
+        let narrow = factors(1.0, HudFit::Centred, 1.0);
+        assert!(narrow.x == narrow.y && narrow.y < 1080.0 / reference.y, "{narrow:?}");
+        near(factors(1.0, HudFit::Stretched, 1.0), window(1.0) / reference);
+        // The player's factor multiplies either.
+        near(factors(16.0 / 9.0, HudFit::Stretched, 2.0), 2.0 * window(16.0 / 9.0) / reference);
+        near(factors(16.0 / 9.0, HudFit::Centred, 0.5), Vec2::splat(0.5 * 1080.0 / reference.y));
+        // The Remaster look draws the texture size times the player's factor, whatever the window.
+        assert_eq!(size_factors(None, 1.0), Vec2::ONE);
+        assert_eq!(size_factors(None, 1.5), Vec2::splat(1.5));
+        // The drawn cell of 32 x 32 texels on the stretched 16:9 window (half a texel inset each side).
+        let (_, node) = inset_node(Rect::new(0.0, 0.0, 32.0, 32.0), Vec2::ZERO, wide);
+        near(node, 31.0 * wide);
     }
 
     #[test]
@@ -490,14 +672,14 @@ mod tests {
 
     #[test]
     fn the_local_races_variant_comes_first_then_the_plain_cursor() {
-        assert_eq!(candidates("c_attack", Some("klingonempire")), ["c_attack_klingonempire", "c_attack", &format!("{DEFAULT}_klingonempire"), DEFAULT]);
-        assert_eq!(candidates("c_attack", None), ["c_attack", DEFAULT]);
+        assert_eq!(candidates("c_attack", Some("klingonempire"), false), ["c_attack_klingonempire", "c_attack", &format!("{DEFAULT}_klingonempire"), DEFAULT]);
+        assert_eq!(candidates("c_attack", None, false), ["c_attack", DEFAULT]);
         // The table's own lookup ignores case, so `c_attack_KlingonEmpire` is found by this name.
         let table = SpriteTable::parse(b"sprite_table\n@referenceWidth=64\n@referenceHeight=32\nc_attack_KlingonEmpire tex_a 0 0 32 32 @cursor\nc_attack tex_a 32 0 32 32 @cursor\n");
-        let picked = candidates("c_attack", Some("klingonempire")).into_iter().find(|n| table.sprite(n).is_some());
+        let picked = candidates("c_attack", Some("klingonempire"), false).into_iter().find(|n| table.sprite(n).is_some());
         assert_eq!(picked.as_deref(), Some("c_attack_klingonempire"));
         assert_eq!(table.sprite("c_attack_klingonempire").unwrap().name, "c_attack_KlingonEmpire");
-        let plain = candidates("c_attack", Some("borg")).into_iter().find(|n| table.sprite(n).is_some());
+        let plain = candidates("c_attack", Some("borg"), false).into_iter().find(|n| table.sprite(n).is_some());
         assert_eq!(plain.as_deref(), Some("c_attack"), "no Borg variant: the plain cursor");
     }
 
@@ -552,7 +734,7 @@ mod tests {
         let with_variants = names.iter().filter(|r| table.sprite(&format!("c_attack_{r}")).is_some()).count();
         eprintln!("race cursor variants: {with_variants} of {} playable races ({names:?})", names.len());
         for r in &names {
-            let first = candidates("c_attack", Some(r)).into_iter().find(|n| table.sprite(n).is_some());
+            let first = candidates("c_attack", Some(r), false).into_iter().find(|n| table.sprite(n).is_some());
             assert!(first.is_some(), "{r}: no attack cursor at all");
         }
     }

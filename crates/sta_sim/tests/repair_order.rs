@@ -85,9 +85,11 @@ fn existing_order_tags_and_payload_field_order_are_frozen() {
         Order::Move {
             units: vec![id],
             to: point(1, 2),
-            queue: true
+            queue: true,
+            mode: None
         },
-        (vec![id], point(1, 2), true)
+        // The move mode (SIM-76) follows the queue flag: `None` is one zero byte.
+        (vec![id], point(1, 2), true, None::<sta_sim::command::MoveMode>)
     );
     wire!(1, Order::Stop { units: vec![id] }, (vec![id],));
     wire!(
@@ -270,6 +272,7 @@ fn rejected_repair_keeps_existing_queued_course_and_sim_state() {
                 units: vec![ids[0]],
                 to: point(4000, 0),
                 queue: false,
+                mode: None,
             },
         ),
         order_command(
@@ -279,6 +282,7 @@ fn rejected_repair_keeps_existing_queued_course_and_sim_state() {
                 units: vec![ids[0]],
                 to: point(5000, 0),
                 queue: true,
+                mode: None,
             },
         ),
     ];
