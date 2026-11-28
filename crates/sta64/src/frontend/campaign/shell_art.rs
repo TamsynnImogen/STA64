@@ -1,17 +1,18 @@
 //! The campaign screens' backdrops from the mounted content's own shell bitmaps (#931), for the stock Armada II
-//! profile.
+//! profile and, as an interim, its mod family.
 //!
 //! Under the stock Armada II profile ([`UiProfile::Armada2`]) the single-player screen (the campaign select) and the
-//! mission list draw the mounted content's shell picture behind their controls. Every other profile (the first
-//! game's stock profile, the mod family's, and the LCARS profile) keeps what it had before: the widget theme or its
-//! own front end. The briefing is STA64's own screen and keeps the widget theme. Nothing of the art is in the
+//! mission list draw the mounted content's shell picture behind their controls. The mod family's profile (the same
+//! engine line) draws them too: not read for this profile, follows the stock reading: INTERIM. The first game's
+//! stock profile (its shell was never read) and STA64's own look keep what they had before: the widget theme or
+//! their own front end. The briefing is STA64's own screen and keeps the widget theme. Nothing of the art is in the
 //! repository: the pictures are read from the mounted layers (install or mod) at run time, a mod's own files winning
 //! by the layering, and a screen whose picture the content does not have keeps the widget theme.
 //!
 //! Rules and grades:
 //! - Which pictures are opened: the two paths below are constants of the code, stock Armada II's (a path the engine
 //!   opens: read from the executable, static). Which screen draws which picture is not traced: INTERIM. They are read
-//!   only under the profile they were read for.
+//!   only under the profiles that draw them.
 //! - The picture fills the stock box the screen is laid out in ([`StockBoxNode`]), so the art
 //!   and the controls move together at every window shape (arranged, STA64's own).
 //! - INTERIM, a first step: only the backdrop. The controls keep their arranged regions and the widget
@@ -83,13 +84,15 @@ fn load(vfs: &sta_vfs::Vfs, stem: &str) -> Option<Image> {
     })
 }
 
-/// Whether the campaign screens draw the shell pictures under `profile`: the profile they were read for.
+/// Whether the campaign screens draw the shell pictures under `profile`: the profile they were read for, and the mod
+/// family's, which follows that reading (INTERIM: not read for this profile). Not the first game's stock profile (its shell
+/// was never read) and not STA64's own look.
 pub(crate) fn drawn_under(profile: Option<&UiProfile>) -> bool {
-    profile.is_some_and(|p| *p == UiProfile::Armada2)
+    profile.is_some_and(|p| matches!(p, UiProfile::Armada2 | UiProfile::FleetOps))
 }
 
-/// Read the pictures when the mount is new or changed, under the profile they were read for only; under another one
-/// none are read (and any read before are dropped).
+/// Read the pictures when the mount is new or changed, under the profiles that draw them only ([`drawn_under`]); under
+/// another one none are read (and any read before are dropped).
 pub(crate) fn load_art(mounted: Option<Res<Mounted>>, images: Option<ResMut<Assets<Image>>>, profile: Option<Res<UiProfile>>, mut art: ResMut<ShellArt>) {
     let (Some(mounted), Some(mut images)) = (mounted, images) else { return };
     if !drawn_under(profile.as_deref()) {

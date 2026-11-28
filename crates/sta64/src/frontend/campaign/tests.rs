@@ -889,23 +889,30 @@ fn campaign_select_and_the_mission_list_draw_the_shell_picture_under_a_stock_pro
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// The gate: the pictures are read and drawn under the profile they were read for (stock Armada II) and under no other
-/// stock profile (the first game's, the mod family's): those keep what they had before.
+/// The gate, per profile: the profile the pictures were read for draws them; the mod family draws them as an interim
+/// (not read for that profile: it follows the stock reading; a later reading changes this on purpose); the first game's
+/// stock profile and STA64's own look do not.
 #[test]
-fn the_shell_pictures_are_read_and_drawn_under_the_profile_they_were_read_for_and_under_no_other_stock_profile() {
-    assert!(super::shell_art::drawn_under(Some(&crate::ui::profile::UiProfile::Armada2)));
-    for other in [crate::ui::profile::UiProfile::Armada1, crate::ui::profile::UiProfile::FleetOps, crate::ui::profile::UiProfile::Lcars] {
-        assert!(!super::shell_art::drawn_under(Some(&other)), "{other:?}");
-    }
+fn the_shell_pictures_are_drawn_under_the_read_profile_and_as_an_interim_the_mod_family_and_not_under_the_first_game_or_the_own_look() {
+    use crate::ui::profile::UiProfile;
+    assert!(super::shell_art::drawn_under(Some(&UiProfile::Armada2)));
+    assert!(super::shell_art::drawn_under(Some(&UiProfile::FleetOps)), "the mod family: INTERIM");
+    assert!(!super::shell_art::drawn_under(Some(&UiProfile::Armada1)));
+    assert!(!super::shell_art::drawn_under(Some(&UiProfile::Lcars)));
     assert!(!super::shell_art::drawn_under(None));
-    for (tag, profile) in [("shell-gate-a1", "armada1"), ("shell-gate-fo", "fleetops")] {
+    for (tag, profile, drawn) in [("shell-gate-a2", "armada2", true), ("shell-gate-fo", "fleetops", true), ("shell-gate-a1", "armada1", false)] {
         let dir = authored_mount_for(tag, true, profile);
-        for screen in [Screen::SinglePlayer, Screen::Missions] {
+        for (screen, want) in [(Screen::SinglePlayer, SINGLE_RGB), (Screen::Missions, LIST_RGB)] {
             let mut cs = fixture(true, None);
             cs.campaign = Some("federation".into());
             let mut app = art_app(&dir, false, cs, (1920, 1080));
             go(&mut app, screen);
-            assert!(backdrops(&mut app).is_empty(), "{profile} {screen:?}: keeps what it had");
+            let got = backdrops(&mut app);
+            if drawn {
+                assert_eq!(got, vec![(screen, want)], "{profile} {screen:?}");
+            } else {
+                assert!(got.is_empty(), "{profile} {screen:?}: keeps what it had");
+            }
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
