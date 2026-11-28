@@ -5,7 +5,7 @@ use crate::app::configure_sets;
 use crate::render::fx::impacts::{self, ImpactFx, ImpactFxPlugin, SmokeEmitter, HIT_SPARKS};
 use crate::render::fx::stock_shots;
 use crate::render::sprites::SpriteTables;
-use crate::render::hulls::HullPart;
+use crate::render::hulls::{HullPart, HullSample};
 use crate::render::units::HullShare;
 use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink, SimLinkPlugin};
 use bevy::time::TimeUpdateStrategy;
@@ -112,9 +112,8 @@ fn model(app: &mut App, id: u32, nodes: &[(&str, Vec3)], hull: Option<(Vec3, Vec
         app.world_mut().spawn((Name::new(name.to_string()), GlobalTransform::from_translation(*at), ChildOf(root)));
     }
     if let Some((at, vertices)) = hull {
-        let mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, default()).with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
-        let handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
-        app.world_mut().spawn((Mesh3d(handle), HullPart::default(), GlobalTransform::from_translation(at), ChildOf(root)));
+        // The client keeps its own sample of a hull part's vertices (the part's mesh is not readable once drawn).
+        app.world_mut().spawn((HullSample(vertices.into()), HullPart::default(), GlobalTransform::from_translation(at), ChildOf(root)));
     }
     app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(id), root);
 }
@@ -361,4 +360,36 @@ fn two_hits_of_one_weapon_on_one_target_in_one_frame_take_two_shots() {
     assert!(counts.contains(&2), "both torpedoes were drawn: {counts:?}");
     let two = counts.iter().rposition(|c| *c == 2).unwrap();
     assert_eq!(counts[two + 1], 0, "both shots ended on their hits: {counts:?}");
+}
+
+/// #1426: the death sparks never read a hull mesh the renderer has taken. A unit's hull part whose mesh is in the extracted
+/// state (put there by the engine's own call) and that has no sample of its own: the sparks go on, inside the shield
+/// ellipsoid, and nothing panics.
+#[test]
+fn death_sparks_do_not_read_a_hull_mesh_the_renderer_has_taken() {
+    let mut app = run_scene(Some(RenderProfile::Stock), true, &dying(10, 5), 40, |app, f| {
+        if f == 0 {
+            model(app, 5, &[], None);
+            let root = app.world().resource::<SimEntities>().0[&EntityId(5)];
+            let mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::RENDER_WORLD)
+                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[100.0, 0.0, 0.0]; 3]);
+            let handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
+            app.world_mut().resource_mut::<Assets<Mesh>>().get_mut(&handle).unwrap().take_gpu_data().expect("the engine's extraction");
+            app.world_mut().spawn((Mesh3d(handle), HullPart::default(), GlobalTransform::default(), ChildOf(root)));
+        }
+    });
+    assert!(!flares(&mut app, FlareKind::DeathSpark).is_empty(), "the sparks went on");
+}
+
+/// A sample is an even stride through the vertices, all of them when there are few (the memory cost: a few KB a part).
+#[test]
+fn a_hull_sample_is_all_the_vertices_when_few_and_an_even_stride_when_many() {
+    use crate::render::hulls::{HULL_SAMPLE_MAX, hull_sample};
+    let few: Vec<[f32; 3]> = (0..10).map(|i| [i as f32, 0.0, 0.0]).collect();
+    assert_eq!(&*hull_sample(&few), &few[..]);
+    let many: Vec<[f32; 3]> = (0..HULL_SAMPLE_MAX * 4).map(|i| [i as f32, 0.0, 0.0]).collect();
+    let sample = hull_sample(&many);
+    assert_eq!(sample.len(), HULL_SAMPLE_MAX);
+    assert_eq!(sample[0], many[0]);
+    assert_eq!(sample[1][0], 4.0, "every fourth vertex");
 }

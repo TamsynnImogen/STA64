@@ -30,7 +30,9 @@
 //!   [`stock_flares::DEATH_SPARK_INTERVAL`] seconds, living as long as a hit's, sharing the cap, so a few are
 //!   alive at once (read from the executable, static; measured for the count). They end with the unit's removal
 //!   (read from the executable, static; measured). The original picks a vertex of the shown model, and so does
-//!   the client: a random vertex of the drawn hull parts, in the unit's frame (the rule as the notes grade it).
+//!   the client: a random vertex of the drawn hull parts, in the unit's frame (the rule as the notes grade it). The
+//!   vertices come from a sample the client keeps of each part ([`HullSample`]: an even stride, at most a fixed number
+//!   of points per part), because a drawn mesh's vertex data is in the render world only and cannot be read (#1426).
 //!   Without a drawn model (a unit without a hull part) STA64's own stand-in is a random point inside the shield
 //!   ellipsoid ([`super::impacts::shield_axes`]). INTERIM: the original's sparks are hidden by the hull when
 //!   behind it (depth); the flares share the shots' sprite drawing.
@@ -43,7 +45,6 @@
 use std::collections::BTreeMap;
 
 use bevy::ecs::system::SystemParam;
-use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ};
 
@@ -51,7 +52,7 @@ use super::stock_flares::{self, Anchor, Flare, FlareKind, NodeParticles};
 use super::stock_shots::ShotSprites;
 use crate::app::GameSet;
 use crate::clock::AnimClock;
-use crate::render::hulls::HullPart;
+use crate::render::hulls::{HullPart, HullSample};
 use crate::render::profile::{Effect, ProfileEffects, RenderProfile};
 use crate::render::units::SelectRadius;
 use crate::sim_link::{SimEntities, SimLink, SimMsg};
@@ -140,30 +141,21 @@ fn point_in_sphere(a: f32, b: f32, c: f32) -> Vec3 {
     Vec3::new(s * phi.cos(), z, s * phi.sin()) * c.cbrt()
 }
 
-/// The vertices of a unit's drawn hull parts.
+/// The vertices of a unit's drawn hull parts, from the samples the client keeps of them ([`HullSample`]): never from the
+/// meshes, whose vertex data is in the render world only once drawn (#1426).
 #[derive(SystemParam)]
 struct HullVertices<'w, 's> {
-    meshes: Option<Res<'w, Assets<Mesh>>>,
     children: Query<'w, 's, &'static Children>,
-    parts: Query<'w, 's, (&'static Mesh3d, &'static GlobalTransform), With<HullPart>>,
+    parts: Query<'w, 's, (&'static HullSample, &'static GlobalTransform), With<HullPart>>,
     roots: Query<'w, 's, &'static GlobalTransform>,
 }
 
 impl HullVertices<'_, '_> {
-    /// The vertex `r` (0 to 1) picks among all the vertices of the hull parts under `root`, as its world offset from
-    /// the root's origin. `None` without a drawn model.
+    /// The vertex `r` (0 to 1) picks among all the sampled vertices of the hull parts under `root`, as its world offset
+    /// from the root's origin. `None` without a drawn model, or without samples.
     fn pick(&self, root: Entity, r: f32) -> Option<Vec3> {
-        let meshes = self.meshes.as_deref()?;
         let base = self.roots.get(root).ok()?.translation();
-        let parts: Vec<(&[[f32; 3]], &GlobalTransform)> = self
-            .children
-            .iter_descendants(root)
-            .filter_map(|e| self.parts.get(e).ok())
-            .filter_map(|(m, t)| match meshes.get(&m.0)?.attribute(Mesh::ATTRIBUTE_POSITION)? {
-                VertexAttributeValues::Float32x3(p) => Some((p.as_slice(), t)),
-                _ => None,
-            })
-            .collect();
+        let parts: Vec<(&[[f32; 3]], &GlobalTransform)> = self.children.iter_descendants(root).filter_map(|e| self.parts.get(e).ok()).map(|(sample, t)| (&sample.0[..], t)).collect();
         let total: usize = parts.iter().map(|p| p.0.len()).sum();
         if total == 0 {
             return None;
