@@ -731,8 +731,8 @@ fn place_build(
 /// What an armed pick gives when the click is on the minimap at the map point `at` (x, z): the same decision as the
 /// main view's click on open ground, with no object (a click over a unit's blip gives the point, never the unit:
 /// read from the executable, static). So a command that needs an object (attack, mine, colonize, transport,
-/// capture, trade, an entity-aimed special weapon) is refused; a move is a warp move unless `plain` (Alt held, the
-/// queue modifier, Armada I content: `input::orders::minimap_plain`); a rally, a repair or decommission "anywhere",
+/// capture, trade, an entity-aimed special weapon) is refused; a move is a warp move unless `plain` (Alt held,
+/// Armada I content: `input::orders::minimap_plain`); a rally, a repair or decommission "anywhere",
 /// a point-aimed special weapon are the ground decision's. INTERIM: what the original gives for an armed attack or
 /// patrol on open ground is not established (STA64 has no ground attack order; patrol and guard are not armed modes),
 /// so those stay refused.
@@ -773,7 +773,6 @@ fn armed_from_minimap(
     mut state: ResMut<HudState>,
     feed: Res<HudFeed>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
-    bindings: Option<Res<crate::input::keys::KeyBindings>>,
     mut queue: ResMut<CommandQueue>,
     mut issued: MessageWriter<OrderIssued>,
     mut targets: ResMut<OrderTargets>,
@@ -792,10 +791,7 @@ fn armed_from_minimap(
     if points.is_empty() || !minimap_aims(&feed) {
         return;
     }
-    let plain = match (keys.as_deref(), bindings.as_deref()) {
-        (Some(k), Some(b)) => crate::input::orders::minimap_plain(k, b, db),
-        _ => false,
-    };
+    let plain = keys.as_deref().is_some_and(|k| crate::input::orders::minimap_plain(k, db));
     for at in points {
         if let Some(mode) = state.targeting {
             if !target_mode_available(&feed, mode) {
