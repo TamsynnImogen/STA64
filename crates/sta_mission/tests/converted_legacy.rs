@@ -59,15 +59,13 @@ fn first_converted_mission(book: &CampaignBook, conv: &support::Conversion) -> (
         .expect("a campaign whose first mission was converted")
 }
 
-/// The number of rules the converter reports for the mission that wrote `script`: the total in
-/// the `rules <decoded>/<total>` part of its console line.
-fn reported_rules(conv: &support::Conversion, script: &str) -> u32 {
+/// The number of rules the converter counted for the mission that wrote `script`, from the
+/// counts its result carries (#1378): a mission without them fails the test.
+fn reported_rules(conv: &support::Conversion, script: &str) -> usize {
     let mission = conv.run.summary.missions.iter().find(|m| m.written.iter().any(|f| f.eq_ignore_ascii_case(script))).expect("the mission that wrote the script");
-    let line = conv.run.console.iter().find(|l| l.trim_start().starts_with(&format!("{}:", mission.mission))).expect("the mission's console line");
-    let (_, rules) = line.rsplit_once("rules ").expect("a rules count in the line");
-    let (decoded, total) = rules.trim().split_once('/').expect("decoded/total");
-    assert_eq!(decoded, total, "every rule of the mission decodes");
-    total.trim().parse().expect("a number")
+    let counts = mission.counts.as_ref().expect("the converted mission's result carries its counts");
+    assert_eq!(counts.rule_conditions_decoded, Some(counts.rules), "every rule of the mission decodes");
+    counts.rules
 }
 
 #[test]
@@ -110,7 +108,7 @@ fn the_first_converted_mission_runs_in_the_campaign_runner() {
         rt.unsupported().len()
     );
 
-    assert_eq!(rules, reported_rules(&conv, &script), "every rule the converter reports for the mission is registered");
+    assert_eq!(rules as usize, reported_rules(&conv, &script), "every rule the converter reports for the mission is registered");
     assert!(rules > 0 && !fired.is_empty(), "the converted script fires its rules");
     assert!(steps > 0, "the converted script runs its action steps");
     assert!(step_errors.is_empty(), "converted code raised: {step_errors:?}");

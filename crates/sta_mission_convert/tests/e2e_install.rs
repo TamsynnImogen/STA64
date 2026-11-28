@@ -135,6 +135,12 @@ fn gated_every_mission_has_an_outcome_the_cache_answers_and_a_new_version_conver
         for (i, m) in a.summary.missions.iter().enumerate() {
             assert_outcome(m, &out, i);
             assert!(!m.cached, "{game}: mission #{i} was cached on a fresh cache");
+            // #1378: a mission this run converted carries what it decoded as numbers
+            assert_eq!(m.counts.is_some(), m.converted, "{game}: mission #{i}: counts with a conversion, none without");
+            if let Some(c) = &m.counts {
+                assert!(c.rules > 0 && !c.roles.is_empty(), "{game}: mission #{i}: empty counts");
+                assert!(c.roles.values().all(|r| r.complete + r.partial <= r.total), "{game}: mission #{i}: more decoded than there is");
+            }
         }
         // every mission announced was started and done, in order
         let started = a.events.iter().filter(|e| matches!(e, Event::Started { .. })).count();
@@ -149,6 +155,7 @@ fn gated_every_mission_has_an_outcome_the_cache_answers_and_a_new_version_conver
             assert_eq!((x.converted, x.failed()), (y.converted, y.failed()), "{game}: mission #{i} changed between runs");
             if !x.failed() {
                 assert!(y.cached, "{game}: mission #{i} was converted again, not taken from the cache");
+                assert!(y.counts.is_none(), "{game}: mission #{i}: the cache has no numbers");
             }
         }
         assert_eq!(scripts(&out), files_a, "{game}: the cached run writes the same scripts");

@@ -372,10 +372,58 @@ pub enum Event {
     Done { index: usize, total: usize, mission: String },
 }
 
+/// How many functions of one role (a kind of function of a mission: a rule's condition, an
+/// action, ...) a conversion decoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RoleCount {
+    /// Decoded completely.
+    pub complete: usize,
+    /// Decoded in part (Armada I; an Armada II function decodes completely or not at all).
+    pub partial: usize,
+    /// All functions of the role, decoded or not.
+    pub total: usize,
+}
+
+/// What a conversion decoded of one mission, as numbers: the content of the mission's console
+/// line, which is written from this (so the two cannot differ).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Counts {
+    /// The rules of the mission.
+    pub rules: usize,
+    /// Armada II: the rules whose condition decoded. Armada I counts conditions as the role
+    /// `condition` and has no number of its own here.
+    pub rule_conditions_decoded: Option<usize>,
+    /// By role name.
+    pub roles: std::collections::BTreeMap<String, RoleCount>,
+}
+
+impl Counts {
+    /// Whether every function of every role decoded completely (and, for Armada II, every
+    /// rule's condition).
+    pub fn complete(&self) -> bool {
+        self.roles.values().all(|r| r.complete == r.total && r.partial == 0) && self.rule_conditions_decoded.is_none_or(|d| d == self.rules)
+    }
+
+    fn of_a2(r: &convert::Report) -> Counts {
+        let roles = r.functions.iter().map(|(k, v)| (k.clone(), RoleCount { complete: v.1, partial: 0, total: v.0 })).collect();
+        Counts { rules: r.rules, rule_conditions_decoded: Some(r.rule_conditions_decoded), roles }
+    }
+
+    fn of_a1(r: &a1::Report) -> Counts {
+        let n = |v: i64| usize::try_from(v).unwrap_or(0);
+        let roles = r.functions.iter().map(|(k, v)| (k.clone(), RoleCount { complete: n(v[1]), partial: n(v[2]), total: n(v[0]) })).collect();
+        Counts { rules: r.rules, rule_conditions_decoded: None, roles }
+    }
+}
+
 /// What became of one mission.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MissionResult {
     pub mission: String,
+    /// What the conversion decoded, when this run converted the mission itself. `None` for a
+    /// mission that failed and for one that came from the cache (the cache keeps the script
+    /// and the console lines, not the numbers).
+    pub counts: Option<Counts>,
     /// The converter (or the cache) produced the Lua.
     pub converted: bool,
     /// It came from the cache.
@@ -567,27 +615,23 @@ pub fn a1_cache_key(map: &str, dsl: &Path, drl: &Path) -> Option<String> {
 }
 
 /// The console line of a converted Armada II mission.
-fn a2_line(c: &convert::Converted) -> String {
-    let r = &c.report;
-    let tot: usize = r.functions.values().map(|v| v.0).sum();
-    let dec: usize = r.functions.values().map(|v| v.1).sum();
-    let parts: Vec<String> = r.functions.iter().map(|(k, v)| format!("{k} {}/{}", v.1, v.0)).collect();
+fn a2_line(mission: &str, c: &Counts) -> String {
+    let tot: usize = c.roles.values().map(|v| v.total).sum();
+    let dec: usize = c.roles.values().map(|v| v.complete).sum();
+    let parts: Vec<String> = c.roles.iter().map(|(k, v)| format!("{k} {}/{}", v.complete, v.total)).collect();
     format!(
-        "  {}: {dec}/{tot} functions decoded {}; rules {}/{}",
-        c.mission,
+        "  {mission}: {dec}/{tot} functions decoded {}; rules {}/{}",
         parts.join(", "),
-        r.rule_conditions_decoded,
-        r.rules
+        c.rule_conditions_decoded.unwrap_or(0),
+        c.rules
     )
 }
 
 /// The console lines of a converted Armada I mission.
-fn a1_lines(map: &str, r: &a1::Report) -> Vec<String> {
+fn a1_lines(map: &str, r: &a1::Report, c: &Counts) -> Vec<String> {
     use std::collections::BTreeMap;
-    let mut fr: Vec<(&String, &[i64; 4])> = r.functions.iter().collect();
-    fr.sort_by(|x, y| x.0.cmp(y.0));
-    let parts: Vec<String> = fr.iter().map(|(k, v)| format!("{k} {}+{}p/{}", v[1], v[2], v[0])).collect();
-    let mut l = vec![format!("  {map} ({}): rules {}, {}", r.mission, r.rules, parts.join(", "))];
+    let parts: Vec<String> = c.roles.iter().map(|(k, v)| format!("{k} {}+{}p/{}", v.complete, v.partial, v.total)).collect();
+    let mut l = vec![format!("  {map} ({}): rules {}, {}", r.mission, c.rules, parts.join(", "))];
     let sorted: BTreeMap<&String, &i64> = r.registration_calls.iter().collect();
     for (k, v) in sorted {
         l.push(format!("    registration: {k} x{v} in the rule DLL's set-up code is not converted"));
@@ -751,7 +795,9 @@ fn convert_mission(
                 let engine = d.engine.as_ref().expect("an Armada II run has its engine");
                 match convert::convert_one_with(job, engine, &mut |p| loaded.load(p, decoder)) {
                     Ok(convert::Outcome::Converted(c)) => {
-                        let e = Entry::Converted { source: c.source.clone().into_bytes(), console: vec![a2_line(&c)] };
+                        let counts = Counts::of_a2(&c.report);
+                        let e = Entry::Converted { source: c.source.clone().into_bytes(), console: vec![a2_line(&c.mission, &counts)] };
+                        r.counts = Some(counts);
                         store(cache, ckey.as_ref(), &e);
                         Some(e)
                     }
@@ -767,7 +813,9 @@ fn convert_mission(
                 // any fault of one mission fails that mission only
                 match a1::mission::convert_one_with(job, &mut |p| loaded.load(p, decoder)) {
                     Ok((src, rep)) => {
-                        let e = Entry::Converted { source: src.into_bytes(), console: a1_lines(&job.map, &rep) };
+                        let counts = Counts::of_a1(&rep);
+                        let e = Entry::Converted { source: src.into_bytes(), console: a1_lines(&job.map, &rep, &counts) };
+                        r.counts = Some(counts);
                         store(cache, ckey.as_ref(), &e);
                         Some(e)
                     }
@@ -800,4 +848,51 @@ fn convert_mission(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod counts_tests {
+    use super::*;
+
+    fn role(complete: usize, partial: usize, total: usize) -> RoleCount {
+        RoleCount { complete, partial, total }
+    }
+
+    /// The counts of an Armada II mission are its report's numbers, and its console line is
+    /// written from them (invented role names and numbers).
+    #[test]
+    fn armada_two_counts_and_the_line_written_from_them() {
+        let mut report = convert::Report { mission: "inv01".into(), rules: 7, rule_conditions_decoded: 6, ..convert::Report::default() };
+        report.functions.insert("zeta".into(), (4, 3));
+        report.functions.insert("alpha".into(), (2, 2));
+        let c = Counts::of_a2(&report);
+        assert_eq!((c.rules, c.rule_conditions_decoded), (7, Some(6)));
+        assert_eq!(c.roles.iter().map(|(k, v)| (k.as_str(), *v)).collect::<Vec<_>>(), [("alpha", role(2, 0, 2)), ("zeta", role(3, 0, 4))]);
+        assert_eq!(a2_line("inv01", &c), "  inv01: 5/6 functions decoded alpha 2/2, zeta 3/4; rules 6/7");
+        assert!(!c.complete(), "a function and a rule's condition are missing");
+        report.functions.insert("zeta".into(), (4, 4));
+        assert!(!Counts::of_a2(&report).complete(), "a rule's condition is missing");
+        report.rule_conditions_decoded = 7;
+        assert!(Counts::of_a2(&report).complete());
+    }
+
+    /// The same for Armada I, whose roles also count functions decoded in part.
+    #[test]
+    fn armada_one_counts_and_the_line_written_from_them() {
+        let mut report = a1::Report { mission: "inv".into(), rules: 3, ..a1::Report::default() };
+        // in order of first use, not of name: the line and the counts go by name
+        report.functions.insert("step".into(), [5, 4, 1, 0]);
+        report.functions.insert("condition".into(), [3, 3, 0, 0]);
+        let c = Counts::of_a1(&report);
+        assert_eq!((c.rules, c.rule_conditions_decoded), (3, None));
+        assert_eq!(c.roles.iter().map(|(k, v)| (k.as_str(), *v)).collect::<Vec<_>>(), [("condition", role(3, 0, 3)), ("step", role(4, 1, 5))]);
+        assert_eq!(a1_lines("map1", &report, &c), ["  map1 (inv): rules 3, condition 3+0p/3, step 4+1p/5"]);
+        assert!(!c.complete(), "one function decoded only in part");
+        report.functions.insert("step".into(), [5, 5, 0, 0]);
+        assert!(Counts::of_a1(&report).complete());
+        // a mission with nothing to count is complete, and a negative number never becomes a count
+        assert!(Counts::default().complete());
+        report.functions.insert("step".into(), [5, -1, -1, 0]);
+        assert_eq!(Counts::of_a1(&report).roles["step"], role(0, 0, 5));
+    }
 }
