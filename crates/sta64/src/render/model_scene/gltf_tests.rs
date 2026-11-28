@@ -438,3 +438,43 @@ fn glb_vfs_draws_checker_offscreen() {
         "GLB checker not rendered: red={red}, blue={blue}"
     );
 }
+
+/// A hull part carries the client's sample of its vertices (the death sparks read it, since the mesh itself is the
+/// renderer's once drawn, #1426), on the first build and on a part-cache hit alike; a part that is no hull part has none.
+#[test]
+fn hull_parts_carry_a_vertex_sample_on_the_first_build_and_on_a_cache_hit() {
+    use crate::render::hulls::{HullPart, HullSample};
+    let fixture = Fixture::new();
+    let vfs = fixture.vfs();
+    let model = load(&vfs);
+    let mut world = World::new();
+    let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
+    let (mut texture_cache, mut parts) = (TextureCache::default(), PartCache::default());
+    let mut roots = Vec::new();
+    for unlit in [false, false, true] {
+        let (_, root) = spawn_fixture(&mut world, &model, &vfs, &mut meshes, &mut materials, &mut images, &mut texture_cache, &mut parts, true, unlit);
+        roots.push(root);
+    }
+    // (is a hull part, sample points, sample's whole count) of every drawn part under a root.
+    let parts_of = |world: &mut World, root: Entity| -> Vec<(bool, usize, usize)> {
+        let mut found = Vec::new();
+        let drawn: Vec<Entity> = world.query_filtered::<Entity, With<Mesh3d>>().iter(world).collect();
+        for e in drawn {
+            let mut up = e;
+            while up != root {
+                match world.get::<ChildOf>(up) {
+                    Some(c) => up = c.parent(),
+                    None => break,
+                }
+            }
+            if up == root {
+                let sample = world.get::<HullSample>(e).map(|s| (s.points.len(), s.full));
+                found.push((world.get::<HullPart>(e).is_some(), sample.map_or(0, |s| s.0), sample.map_or(0, |s| s.1)));
+            }
+        }
+        found
+    };
+    assert_eq!(parts_of(&mut world, roots[0]), vec![(true, 24, 24)], "the first build");
+    assert_eq!(parts_of(&mut world, roots[1]), vec![(true, 24, 24)], "a part-cache hit");
+    assert_eq!(parts_of(&mut world, roots[2]), vec![(false, 0, 0)], "an unlit part is no hull part and has no sample");
+}

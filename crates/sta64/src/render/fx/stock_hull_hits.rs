@@ -151,21 +151,24 @@ struct HullVertices<'w, 's> {
 }
 
 impl HullVertices<'_, '_> {
-    /// The vertex `r` (0 to 1) picks among all the sampled vertices of the hull parts under `root`, as its world offset
-    /// from the root's origin. `None` without a drawn model, or without samples.
+    /// The vertex `r` (0 to 1) picks among all the vertices of the hull parts under `root`, as its world offset from
+    /// the root's origin. The part is chosen by its full vertex count (every vertex of the model equally likely), then
+    /// the vertex is the sampled one at the same relative place in the part. `None` without a drawn model, or without
+    /// samples.
     fn pick(&self, root: Entity, r: f32) -> Option<Vec3> {
         let base = self.roots.get(root).ok()?.translation();
-        let parts: Vec<(&[[f32; 3]], &GlobalTransform)> = self.children.iter_descendants(root).filter_map(|e| self.parts.get(e).ok()).map(|(sample, t)| (&sample.0[..], t)).collect();
-        let total: usize = parts.iter().map(|p| p.0.len()).sum();
+        let parts: Vec<(&HullSample, &GlobalTransform)> = self.children.iter_descendants(root).filter_map(|e| self.parts.get(e).ok()).filter(|(s, _)| s.full > 0 && !s.points.is_empty()).collect();
+        let total: usize = parts.iter().map(|p| p.0.full).sum();
         if total == 0 {
             return None;
         }
         let mut i = ((r.clamp(0.0, 1.0) * total as f32) as usize).min(total - 1);
-        for (p, t) in parts {
-            if i < p.len() {
-                return Some(t.transform_point(Vec3::from(p[i])) - base);
+        for (s, t) in parts {
+            if i < s.full {
+                let j = (i * s.points.len() / s.full).min(s.points.len() - 1);
+                return Some(t.transform_point(Vec3::from(s.points[j])) - base);
             }
-            i -= p.len();
+            i -= s.full;
         }
         None
     }
