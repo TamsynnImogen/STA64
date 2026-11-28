@@ -170,6 +170,8 @@ impl Plugin for ImpactFxPlugin {
             Update,
             (track, spawn_impacts, smoke_attach, emit_smoke, update_impacts, attach_visuals, apply_alpha, apply_shields, apply_fire, apply_quads)
                 .chain()
+                // The beams' hull ends of this frame (`HullHitPoints`) are written first.
+                .after(super::stock_shots::update_shots)
                 .in_set(GameSet::Interpolate)
                 .distributive_run_if(resource_exists::<SimLink>),
         );
@@ -274,7 +276,8 @@ pub(super) fn spawn_impacts(
     mut explosions: Option<ResMut<super::stock_explosions::ExplosionQueue>>,
     mut store: Option<ResMut<super::stock_flares::NodeParticles>>,
     sprites: Option<Res<super::stock_shots::ShotSprites>>,
-    mut dying: Local<std::collections::BTreeSet<EntityId>>,
+    mut dying: ResMut<super::stock_hull_hits::DyingUnits>,
+    points: Option<Res<super::stock_hull_hits::HullHitPoints>>,
     mut logged: Local<bool>,
 ) {
     let tick = clock.tick();
@@ -286,9 +289,9 @@ pub(super) fn spawn_impacts(
     for SimMsg(ev) in msgs.read() {
         match ev {
             SimEvent::Dying { id, .. } => {
-                dying.insert(*id);
+                dying.0.insert(*id);
             }
-            SimEvent::Hit { target, weapon, facing, shield, hull, at, .. } => {
+            SimEvent::Hit { target, by, weapon, facing, shield, hull, at, .. } => {
                 // A unit the client does not draw (no record: `track`) gets no shield shell and no sparks.
                 let known = seen.0.get(target).copied();
                 if known.is_none() && fog.is_some() {
@@ -333,10 +336,13 @@ pub(super) fn spawn_impacts(
                 }
                 if hull.to_f32() > 0.0 && stock_hits {
                     // A hit on a unit already dying draws none; the lethal hit itself does (`Dying` follows it).
-                    if !dying.contains(target)
+                    if !dying.0.contains(target)
                         && let (Some(store), Some(sprites)) = (store.as_mut(), sprites.as_ref())
                     {
-                        let local = super::stock_flares::to_local(s.heading, at - s.pos);
+                        // Where the stock beam drawing says its end on the hull is; else the event's place (the target's
+                        // centre). INTERIM against the original's hit node.
+                        let spot = points.as_ref().and_then(|p| p.of(*by, *weapon, *target)).unwrap_or(at);
+                        let local = super::stock_flares::to_local(s.heading, spot - s.pos);
                         super::stock_hull_hits::raise_hit_spark(&mut cmds, store, sprites, &mut logged, *target, s.radius, local, rand(*target, tick, 0, 70), clock.now() * TICK_HZ as f64);
                     }
                 } else if hull.to_f32() > 0.0 {
@@ -380,7 +386,7 @@ pub(super) fn spawn_impacts(
                 ));
             }
             SimEvent::Destroyed { id, .. } => {
-                dying.remove(id);
+                dying.0.remove(id);
                 let Some(s) = seen.0.remove(id) else { continue };
                 let p = s.pos;
                 if stock
@@ -476,7 +482,7 @@ fn smoke_level(share: f32) -> u8 {
 }
 
 /// Attach, retune and detach emitters as `HullShare` crosses the thresholds. Under the Stock look STA64's smoke is
-/// off (D-02: the original draws none): every emitter detaches and none is made.
+/// off (D-02: the original's damage look is the model's damage nodes): every emitter detaches and none is made.
 fn smoke_attach(
     mut cmds: Commands,
     clock: Res<AnimClock>,

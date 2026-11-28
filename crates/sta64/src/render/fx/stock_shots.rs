@@ -421,6 +421,12 @@ impl StockShot {
     pub(super) fn beam_end_now(&self) -> Vec3 {
         self.shield_end
     }
+
+    /// Where a beam ends on the hull of its target whatever the shields show: the chosen hardpoint, the centre where
+    /// the model has none, a planet's sphere towards the muzzle. `None` before the target has been seen.
+    pub(super) fn hull_end(&self) -> Option<Vec3> {
+        self.last_body.as_ref().map(|b| beam_end(self.muzzle, b, true))
+    }
 }
 
 /// The nodes and bodies of the render side, for the systems of this module.
@@ -627,13 +633,19 @@ pub(super) fn update_shots(
     mut store: ResMut<NodeParticles>,
     mut caps: ResMut<ShieldCapQueue>,
     fractions: Res<BeamFractions>,
+    mut points: ResMut<super::stock_hull_hits::HullHitPoints>,
     mut q: Query<(Entity, &mut StockShot)>,
 ) {
     let alpha = clock.alpha();
     let now_ticks = clock.now() * TICK_HZ as f64;
+    points.0.clear();
+    let mut hull_hits = Vec::new();
     // The earliest matching shot in flight has arrived.
     for ev in msgs.read().map(|m| &m.0) {
-        if let SimEvent::Hit { target, by, weapon, .. } = ev {
+        if let SimEvent::Hit { target, by, weapon, hull, .. } = ev {
+            if hull.to_f32() > 0.0 {
+                hull_hits.push((*by, *weapon, *target));
+            }
             let hit = q.iter().filter(|(_, s)| s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target)).min_by_key(|(_, s)| s.fired).map(|(e, _)| e);
             if let Some(e) = hit {
                 cmds.entity(e).try_despawn();
@@ -780,6 +792,17 @@ pub(super) fn update_shots(
             if !ctx.ground_in_sight(head) {
                 s.geom = Geom::None;
             }
+        }
+    }
+    // Where each beam's hull hit struck: its end on the hull (the hull-hit spark is drawn there, `stock_hull_hits`).
+    for (by, weapon, target) in hull_hits {
+        let end = q
+            .iter()
+            .filter(|(_, s)| s.path == ShotPath::Ribbon && s.shooter == by && s.weapon == weapon && s.target == Target::Entity(target))
+            .max_by_key(|(_, s)| s.fired)
+            .and_then(|(_, s)| s.hull_end());
+        if let Some(end) = end {
+            points.0.push((by, weapon, target, end));
         }
     }
 }
@@ -995,7 +1018,7 @@ impl Plugin for StockShotsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Shots);
-        app.init_resource::<ShieldCapQueue>();
+        app.init_resource::<ShieldCapQueue>().init_resource::<super::stock_hull_hits::HullHitPoints>();
         app.init_resource::<ShotSprites>().init_resource::<ShotBatches>().init_resource::<NodeParticles>();
         app.add_systems(
             Update,

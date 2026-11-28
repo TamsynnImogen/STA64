@@ -110,8 +110,8 @@ pub enum Effect {
     /// during the dying phase (`fx/stock_hull_hits.rs`). Finer than [`Effect::Impacts`]: under Stock the Refit hull-hit
     /// streaks are not drawn.
     HullHits,
-    /// STA64's own hull-damage smoke (`fx/impacts.rs`). The original draws none (read from the executable, static;
-    /// D-02): registering a stock implementation switches it off under the Stock look; Refit keeps it.
+    /// STA64's own hull-damage smoke (`fx/impacts.rs`). Its thresholds are STA64's own; the original's damage look
+    /// is the model's damage nodes, which STA64 already draws (D-02): registering a stock implementation switches it off under the Stock look; Refit keeps it.
     DamageSmoke,
 }
 

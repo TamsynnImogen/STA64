@@ -5,11 +5,12 @@ use crate::app::configure_sets;
 use crate::render::fx::impacts::{self, ImpactFx, ImpactFxPlugin, SmokeEmitter, HIT_SPARKS};
 use crate::render::fx::stock_shots;
 use crate::render::sprites::SpriteTables;
+use crate::render::hulls::HullPart;
 use crate::render::units::HullShare;
-use crate::sim_link::{ContentRes, SimEntity, SimLink, SimLinkPlugin};
+use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink, SimLinkPlugin};
 use bevy::time::TimeUpdateStrategy;
 use sta_assets::a2fmt::spr::SpriteTable;
-use sta_content::{ContentBuilder, UnitDef, WeaponDef, WeaponKind};
+use sta_content::{ContentBuilder, ShotLook, UnitDef, WeaponDef, WeaponKind};
 use sta_sim::PlayerId;
 use sta_sim::command::LocalRouter;
 use sta_sim::fake::ScriptedSource;
@@ -24,14 +25,21 @@ fn table(family: bool) -> SpriteTable {
             text += &format!("{name} tex_{name} 0 0 32 32 @anim=flip4\n");
         }
     }
+    text += "beamspr tex_beam 0 64 32 32\n";
     text += "other tex_other 0 32 32 32\n@animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n";
     SpriteTable::parse(text.as_bytes())
 }
 
 fn content() -> sta_content::ContentDb {
+    let mut beam = WeaponDef::new("t_beam", "phaser", WeaponKind::Beam);
+    beam.range = sta_sim::Fixed::from_int(1000);
+    beam.look = ShotLook { sprite: Some("beamspr".into()), radius: Some(4.0), life_span: Some(1.0), travel_time_fraction: Some(0.2), ..Default::default() };
+    let mut ship = UnitDef::new("t_ship", "cruiser");
+    ship.stats.hull_target_hardpoints = vec!["hull_a".into()];
     ContentBuilder::default()
         .weapon(WeaponDef::new("t_torp", "photontorpedo", WeaponKind::Projectile))
-        .unit(UnitDef::new("t_ship", "cruiser"))
+        .weapon(beam)
+        .unit(ship)
         .build()
         .unwrap()
 }
@@ -40,7 +48,8 @@ fn content() -> sta_content::ContentDb {
 fn run_scene(profile: Option<RenderProfile>, family: bool, events: &str, frames: u32, mut each: impl FnMut(&mut App, u32)) -> App {
     let db = content();
     let torp = db.key("t_torp").unwrap().0;
-    let events = events.replace("TORP", &torp.to_string());
+    let beam = db.key("t_beam").unwrap().0;
+    let events = events.replace("TORP", &torp.to_string()).replace("BEAM", &beam.to_string());
     let text = format!(
         "{{ units: [
             {{ id: 1, def: \"t_ship\", owner: 0, hull: 800, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}] }},
@@ -82,6 +91,28 @@ fn flares(app: &mut App, kind: FlareKind) -> Vec<Flare> {
 
 fn hit(at: u32, target: u32, shield: u32, hull: u32) -> String {
     format!("{{ at: {at}, event: {{ Hit: {{ target: {target}, by: 1, weapon: TORP, facing: 0, shield: {shield}, hull: {hull}, at: {{ x: 0, y: 0, z: 590 }} }} }} }},")
+}
+
+/// A beam of unit 1 at unit 4 and its hit on the hull, on one tick.
+fn beam_hit(at: u32) -> String {
+    format!(
+        "{{ at: {at}, event: {{ Fired: {{ shooter: 1, weapon: BEAM, hardpoint: 0, target: {{ Entity: 4 }} }} }} }},
+         {{ at: {at}, event: {{ Hit: {{ target: 4, by: 1, weapon: BEAM, facing: 0, shield: 0, hull: 40, at: {{ x: 0, y: 0, z: 590 }} }} }} }},"
+    )
+}
+
+/// A model for unit `id` (a root at the origin) with named nodes and hull parts of the given vertices at `at`.
+fn model(app: &mut App, id: u32, nodes: &[(&str, Vec3)], hull: Option<(Vec3, Vec<[f32; 3]>)>) {
+    let root = app.world_mut().spawn((GlobalTransform::default(), InheritedVisibility::VISIBLE)).id();
+    for (name, at) in nodes {
+        app.world_mut().spawn((Name::new(name.to_string()), GlobalTransform::from_translation(*at), ChildOf(root)));
+    }
+    if let Some((at, vertices)) = hull {
+        let mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, default()).with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
+        let handle = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
+        app.world_mut().spawn((Mesh3d(handle), HullPart::default(), GlobalTransform::from_translation(at), ChildOf(root)));
+    }
+    app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(id), root);
 }
 
 fn dying(at: u32, id: u32) -> String {
@@ -196,4 +227,66 @@ fn stock_draws_no_damage_smoke_at_any_hull_level_and_the_remaster_look_keeps_it(
     }
     // Without the profile resources it is today's rule.
     assert!(damage_smoke(None, None));
+}
+
+#[test]
+fn a_beams_hull_hit_spark_is_drawn_at_its_end_on_the_hull_and_a_projectiles_at_the_centre() {
+    let spark_at = |events: &str, with_node: bool| {
+        let mut app = run_scene(Some(RenderProfile::Stock), true, events, 30, |app, f| {
+            if f == 0 && with_node {
+                model(app, 4, &[("hull_a", Vec3::new(5.0, 0.0, 0.0))], None);
+            }
+        });
+        let sparks = flares(&mut app, FlareKind::HullHit);
+        assert_eq!(sparks.len(), 1, "one spark for {events}");
+        match sparks[0].anchor {
+            Anchor::Frame(local) => local,
+            _ => panic!("a spark follows its unit"),
+        }
+    };
+    // A beam: the target hardpoint the shot chose (a node five units off the centre) against the centre.
+    let beam = beam_hit(14);
+    let (on_node, on_centre) = (spark_at(&beam, true), spark_at(&beam, false));
+    assert!(((on_node - on_centre).length() - 5.0).abs() < 0.01, "{on_node} against {on_centre}");
+    // A projectile: the node does not matter; it is where the event puts it, the target's centre in the sim.
+    let torp = hit(14, 4, 0, 40);
+    assert_eq!(spark_at(&torp, true), spark_at(&torp, false));
+}
+
+#[test]
+fn death_sparks_are_vertices_of_the_drawn_hull_and_else_inside_the_shield_ellipsoid() {
+    let events = dying(10, 5);
+    let sparks_of = |hull: Option<(Vec3, Vec<[f32; 3]>)>| {
+        let mut seen = Vec::new();
+        let _ = run_scene(Some(RenderProfile::Stock), true, &events, 40, |app, f| {
+            if f == 0 {
+                model(app, 5, &[], hull.clone());
+            }
+            for s in flares(app, FlareKind::DeathSpark) {
+                if let Anchor::Frame(local) = s.anchor {
+                    seen.push(local);
+                }
+            }
+        });
+        seen
+    };
+    // A hull part whose vertices are a hundred units off the centre: every spark lands on one of them.
+    let on_hull = sparks_of(Some((Vec3::new(100.0, 0.0, 0.0), vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])));
+    assert!(!on_hull.is_empty());
+    assert!(on_hull.iter().all(|l| (99.0..101.5).contains(&l.length())), "{on_hull:?}");
+    // No drawn hull: STA64's own stand-in, inside the shield ellipsoid of the radius.
+    let bare = sparks_of(None);
+    assert!(!bare.is_empty());
+    let reach = impacts::DEFAULT_RADIUS * 1.5 + 0.01;
+    assert!(bare.iter().all(|l| l.length() <= reach), "{bare:?}");
+}
+
+#[test]
+fn the_dying_set_and_the_emitters_are_forgotten_at_a_matchs_end() {
+    use bevy::ecs::system::RunSystemOnce;
+    let mut app = run_scene(Some(RenderProfile::Stock), true, &dying(10, 5), 30, |_, _| {});
+    assert!(app.world().resource::<DyingUnits>().0.contains(&EntityId(5)));
+    assert!(!app.world().resource::<Emitters>().0.is_empty());
+    app.world_mut().run_system_once(forget).unwrap();
+    assert!(app.world().resource::<DyingUnits>().0.is_empty() && app.world().resource::<Emitters>().0.is_empty());
 }
