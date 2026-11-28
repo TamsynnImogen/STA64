@@ -9,6 +9,9 @@
 //! detection through the same mount the game uses). They go once every crate's tests are migrated.
 //!
 //! Nothing here writes to disk or starts a game.
+//!
+//! **This crate must never become a dependency of a non-test target.** Crates list it under
+//! `[dev-dependencies]` only; it exists for tests that read a player's own install.
 
 use std::path::{Path, PathBuf};
 
