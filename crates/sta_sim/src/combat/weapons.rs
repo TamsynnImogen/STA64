@@ -20,8 +20,9 @@
 //!   cancelling cases are read from the executable, static, not measured.
 //!   STA64's own rules, on which the evidence is silent: the hit roll stays
 //!   at fire time and a missed beam keeps nothing; a beam follows a replaced
-//!   target as a shot does. Only regular beams of this module: not point
-//!   defence, sustained special beams or mining beams.
+//!   target as a shot does. Only the regular beam class ([`REGULAR_BEAM_CLASS`],
+//!   [`lands_at_end`]): the other beam classes, weapons without ordnance, point
+//!   defence, sustained special beams and mining beams hit as before.
 //! - Under `start_fire_hold` nothing fires before [`START_HOLD_TICKS`] of
 //!   mission time (SIM-53). An
 //!   `Attack` order adds no delay of its own: a mount fires on the first
@@ -191,6 +192,18 @@ const BEAMS_TAG: u64 = 0x6265_616d_735f_3031;
 /// times the weapon's range (`beam_damage_at_end`; a constant of the rule, not a data key).
 pub(crate) const BEAM_BREAK_RANGE_FACTOR: i32 = 2;
 
+/// The ordnance class of the regular beam, the one class the evidence for
+/// `beam_damage_at_end` covers (a data key value, as in `sta_content::weapon::BEAM_CLASSES`).
+pub(crate) const REGULAR_BEAM_CLASS: &str = "phaser";
+
+/// Whether a shot of `w` under `features` lands when its life ends instead of when it
+/// fires: the switch is on, and `w` is a beam of the regular class with a life. Every other
+/// beam class, a weapon without ordnance (its class is its own) and a beam with no
+/// `duration` hit on the tick they fire, as without the switch.
+pub(crate) fn lands_at_end(features: &sta_content::Features, w: &sta_content::WeaponDef) -> bool {
+    features.beam_damage_at_end && w.kind == WeaponKind::Beam && w.class.0 == REGULAR_BEAM_CLASS && w.duration > 0
+}
+
 /// Whether a beam in flight still holds on this tick, and between what: its shooter and its
 /// target as they are now. `None`: the beam is lost and never applies its damage.
 ///
@@ -200,13 +213,17 @@ pub(crate) const BEAM_BREAK_RANGE_FACTOR: i32 = 2;
 /// - The target is farther than [`BEAM_BREAK_RANGE_FACTOR`] times the weapon's range.
 ///   INTERIM, as `pick` measures a range today: centre to centre and flat (which two
 ///   points and whether in three dimensions is not settled).
+/// - The target is phased (`Specials::phased`, the state in which `damage` applies no
+///   hit): a target that phases during the beam's life and comes back before its end
+///   takes nothing.
 ///
 /// Not tested, because not settled: a shooter whose weapons are off, disabled, held or
-/// cloaked since, or that has a new order. Not modelled: a body between the two.
-fn beam_holds<'a>(units: &'a Entities, b: &Beam) -> Option<(&'a Entity, &'a Entity)> {
+/// cloaked since, or that has a new order. INTERIM, because STA64 has no such state at
+/// this place: a target hidden from its shooter. Not modelled: a body between the two.
+fn beam_holds<'a>(db: &ContentDb, units: &'a Entities, specials: &Specials, b: &Beam) -> Option<(&'a Entity, &'a Entity)> {
     let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
     let (s, t) = (alive(b.shooter)?, alive(b.target)?);
-    (flat(s.pos, t.pos).1 <= b.range * Fixed::from_int(BEAM_BREAK_RANGE_FACTOR)).then_some((s, t))
+    (flat(s.pos, t.pos).1 <= b.range * Fixed::from_int(BEAM_BREAK_RANGE_FACTOR) && !specials.phased(db, t)).then_some((s, t))
 }
 
 /// One hardpoint's firing state: the first tick its weapon may fire again.
@@ -313,11 +330,18 @@ impl Weapons {
         self.beams.clone()
     }
 
-    /// Puts back the beams a snapshot held. Every list is accepted: the order is the order
-    /// they fired in (weapons differ in `duration`, so end ticks need not ascend), and a
-    /// beam whose shooter or target is unknown is dropped on the next tick.
-    pub(crate) fn set_beams(&mut self, beams: Vec<Beam>) {
+    /// Puts back the beams a snapshot held; `false` (a corrupt record) when one names a
+    /// weapon `db` does not have. The order is the order they fired in (weapons differ in
+    /// `duration`, so end ticks need not ascend). A beam that names a unit that does not
+    /// exist is accepted, unlike such a row in other records: a unit destroyed after the
+    /// weapons step is removed in the same tick, so a snapshot taken at the end of that
+    /// tick holds its beams until the next step drops them.
+    pub(crate) fn set_beams(&mut self, db: Option<&ContentDb>, beams: Vec<Beam>) -> bool {
+        if db.is_some_and(|db| beams.iter().any(|b| db.weapon(b.weapon).is_none())) {
+            return false;
+        }
         self.beams = beams;
+        true
     }
 
     /// Beams in flight.
@@ -548,7 +572,7 @@ impl Weapons {
         // (it never lands, even if its target comes back); one whose life ends lands now.
         let mut lasting = Vec::with_capacity(self.beams.len());
         for b in std::mem::take(&mut self.beams) {
-            let Some((s, t)) = beam_holds(units, &b) else { continue };
+            let Some((s, t)) = beam_holds(db, units, specials, &b) else { continue };
             if b.ends > tick {
                 lasting.push(b);
                 continue;
@@ -688,7 +712,7 @@ impl Weapons {
                         step,
                         damage,
                     });
-                } else if features.beam_damage_at_end && w.duration > 0 {
+                } else if lands_at_end(features, w) {
                     self.beams.push(Beam {
                         shooter: u.id,
                         weapon: w.key,

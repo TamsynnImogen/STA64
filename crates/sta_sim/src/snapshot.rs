@@ -770,7 +770,9 @@ impl Sim {
             }
         }
         let mut weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
-        weapons.set_beams(beam_rows);
+        if !weapons.set_beams(content.as_deref(), beam_rows) {
+            return Err(corrupt("beams"));
+        }
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
         if autonomy.to_rec().iter().any(|(id, _)| {
             units.get(*id).is_none_or(|u| !matches!(u.kind, EntityKind::Craft | EntityKind::Station))

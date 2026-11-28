@@ -223,8 +223,11 @@ fn an_unknown_mode_value_is_refused_by_the_decoders() {
     // A snapshot record naming a mode that does not exist.
     let (sim, _) = fleet();
     let snap = sim.snapshot();
-    let mut forged = snap[..snap.len() - 2].to_vec();
+    // The move-mode record (version 1, one row, unit 1, mode tag 2) in place of the empty one,
+    // and the empty beams record (version 1, no rows) after it, as in a well-formed file.
+    let mut forged = snap[..snap.len() - 4].to_vec();
     forged.extend_from_slice(&[1, 1, 1, 2]);
+    forged.extend_from_slice(&[1, 0]);
     assert!(matches!(Sim::from_snapshot(&forged, sim.content().cloned()), Err(SnapshotError::Corrupt(_))));
     // A replay whose logged move order carries one.
     let mut rec = Recorder::with_interval(&setup(MapDef::empty()), 10);

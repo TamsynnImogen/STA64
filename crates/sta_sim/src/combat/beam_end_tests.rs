@@ -4,10 +4,10 @@
 
 use std::sync::Arc;
 
-use sta_content::{ContentDb, Lookup, WeaponDef, WeaponKind};
+use sta_content::{ClassLabel, ContentDb, DefRef, Hardpoint, Lookup, WeaponDef, WeaponKind};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 
-use super::weapons::BEAM_BREAK_RANGE_FACTOR;
+use super::weapons::{lands_at_end, Beam, Weapons, BEAM_BREAK_RANGE_FACTOR, REGULAR_BEAM_CLASS};
 use crate::command::{Command, CommandKind, Order};
 use crate::event::SimEvent;
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -23,8 +23,9 @@ fn v(x: i32, z: i32) -> Vec3 {
     Vec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::from_int(z) }
 }
 
-/// `fake::db()` with the switch as given, the authored beam, and a shooter (`fx_beamer`)
-/// that carries nothing else. `patch` is applied to the beam last.
+/// `fake::db()` with the switch as given, the authored beam, a shooter (`fx_beamer`) that
+/// carries nothing else, and a frigate with an instant, free phase cloak (`fx_phaser`).
+/// `patch` is applied to the beam last.
 fn db(switch: bool, patch: impl Fn(&mut sta_content::Features, &mut WeaponDef)) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
     let mut features = fake.features().clone();
@@ -52,7 +53,11 @@ fn db(switch: bool, patch: impl Fn(&mut sta_content::Features, &mut WeaponDef)) 
     beamer.odf = "fx_beamer".into();
     beamer.hardpoints.retain(|h| h.weapon.odf == "fx_beam");
     assert_eq!(beamer.hardpoints.len(), 1);
-    Arc::new(b.unit(beamer).build().unwrap())
+    let mut phaser = fake.units().find(|u| u.odf == "fx_frigate").unwrap().clone();
+    phaser.odf = "fx_phaser".into();
+    phaser.hardpoints = vec![Hardpoint { weapon: DefRef::new("fx_phase_cloak"), node: "hp01".into(), arc: None }];
+    let cloak = WeaponDef::new("fx_phase_cloak", "phasecloakdevice", WeaponKind::Beam);
+    Arc::new(b.weapon(cloak).unit(beamer).unit(phaser).build().unwrap())
 }
 
 struct Game {
@@ -69,11 +74,16 @@ struct Game {
 
 /// The shooter and a frigate 300 units ahead of it, both at rest, the attack ordered.
 fn game(db: Arc<ContentDb>) -> Game {
+    game_against(db, "fx_frigate")
+}
+
+/// [`game`] with a target of `target_def`.
+fn game_against(db: Arc<ContentDb>, target_def: &str) -> Game {
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
     let setup = GameSetup { seed: 7, map: Arc::new(sta_content::MapDef::empty()), content: db.clone(), players: vec![seat(1), seat(2)], options: GameOptions::default() };
     let mut sim = Sim::from_setup(&setup);
     let shooter = sim.spawn_def(db.key("fx_beamer").unwrap(), PlayerId(1), v(2000, 2000), (Fixed::ZERO, Fixed::ONE)).unwrap();
-    let target = sim.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(2), v(2000, 2300), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let target = sim.spawn_def(db.key(target_def).unwrap(), PlayerId(2), v(2000, 2300), (Fixed::ZERO, Fixed::ONE)).unwrap();
     let mut g = Game { sim, db, shooter, target, ticks: 0, fired: Vec::new(), hits: Vec::new() };
     let order = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![shooter], target }) };
     g.step_with(&[order]);
@@ -245,7 +255,7 @@ fn a_beam_in_flight_is_in_the_digest_and_an_empty_list_is_not() {
     // The same world without its beam in flight is another state.
     let mut emptied = Sim::from_snapshot(&g.sim.snapshot(), Some(g.db.clone())).unwrap();
     assert_eq!(emptied.digest(), with_beam);
-    emptied.weapons.set_beams(Vec::new());
+    assert!(emptied.weapons.set_beams(None, Vec::new()));
     assert_ne!(emptied.digest(), with_beam, "the beam in flight is hashed");
     // Once the list is empty the weapons digest has no beams block: a snapshot from the
     // format before the record (the same bytes without it) loads to the same digest.
@@ -258,4 +268,114 @@ fn a_beam_in_flight_is_in_the_digest_and_an_empty_list_is_not() {
     let previous = Sim::from_snapshot(&old, Some(g.db.clone())).unwrap();
     assert_eq!(previous.digest(), g.sim.digest());
     assert_eq!(previous.snapshot(), bytes, "and is written back in the current format");
+}
+
+#[test]
+fn a_target_that_phases_during_the_life_loses_the_beam_even_if_it_is_back_before_the_end() {
+    let cloak = |g: &mut Game, on: bool| {
+        let target = g.target;
+        g.step_with(&[Command { player: PlayerId(2), seq: 0, kind: CommandKind::Order(Order::Cloak { units: vec![target], on }) }]);
+    };
+    let mut g = game_against(db(true, |_, _| {}), "fx_phaser");
+    let fired = g.until_fired();
+    g.run(LIFE / 4);
+    assert_eq!(g.beams(), 1);
+    cloak(&mut g, true);
+    let target = g.sim.unit(g.target).unwrap().clone();
+    assert!(g.sim.specials.phased(&g.db, &target), "the authored cloak phases at once");
+    g.run(1);
+    assert_eq!(g.beams(), 0, "lost on a phased tick");
+    cloak(&mut g, false);
+    let target = g.sim.unit(g.target).unwrap().clone();
+    assert!(!g.sim.specials.phased(&g.db, &target));
+    assert!(g.ticks < fired + LIFE, "back in phase before the beam's life would have ended");
+    g.run(2 * LIFE);
+    assert!(g.hits.is_empty(), "{:?}", g.hits);
+
+    // The same target, never phased, takes the hit.
+    let mut plain = game_against(db(true, |_, _| {}), "fx_phaser");
+    let fired = plain.until_fired();
+    plain.run(LIFE);
+    assert_eq!(plain.hits.iter().map(|h| h.0).collect::<Vec<_>>(), [fired + LIFE]);
+}
+
+#[test]
+fn another_beam_class_hits_on_the_tick_it_fires_as_before() {
+    // The same weapon under another beam class, the switch on.
+    let other = "unibeam";
+    assert!(sta_content::weapon::BEAM_CLASSES.contains(&other) && other != REGULAR_BEAM_CLASS);
+    let mut g = game(db(true, |_, w| w.class = ClassLabel::new(other)));
+    let fired = g.until_fired();
+    assert_eq!(g.hits.iter().map(|h| h.0).collect::<Vec<_>>(), [fired]);
+    assert_eq!(g.beams(), 0);
+}
+
+#[test]
+fn only_a_regular_beam_with_a_life_lands_at_its_end() {
+    let mut on = sta_content::Features::default();
+    on.beam_damage_at_end = true;
+    let mut regular = WeaponDef::new("fx_a", REGULAR_BEAM_CLASS, WeaponKind::Beam);
+    regular.duration = LIFE;
+    assert!(lands_at_end(&on, &regular));
+    assert!(!lands_at_end(&sta_content::Features::default(), &regular), "the switch off");
+    let with = |edit: &dyn Fn(&mut WeaponDef)| {
+        let mut w = regular.clone();
+        edit(&mut w);
+        lands_at_end(&on, &w)
+    };
+    assert!(!with(&|w| w.duration = 0), "no life");
+    assert!(!with(&|w| w.kind = WeaponKind::PointDefence), "point defence");
+    assert!(!with(&|w| w.kind = WeaponKind::Projectile), "a flown shot");
+    for class in ["pdlbeam", "tractor_bm", "holding_bm", "utribeam", sta_content::weapon::MINING_BEAM_CLASS] {
+        assert!(!with(&|w| w.class = ClassLabel::new(class)), "{class}");
+    }
+    // A weapon without ordnance has its own class label, never the regular beam's.
+    assert!(!with(&|w| w.class = ClassLabel::new("cannon")));
+}
+
+#[test]
+fn a_beam_in_flight_follows_a_replaced_target() {
+    let mut g = game(db(true, |_, _| {}));
+    let fired = g.until_fired();
+    let stand_in = g.sim.spawn_def(g.db.key("fx_frigate").unwrap(), PlayerId(2), v(2100, 2300), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    g.sim.weapons.retarget_replacement_shots(g.target, stand_in);
+    let mut hit_on = Vec::new();
+    for _ in 0..LIFE {
+        for e in g.sim.step(&[]).events {
+            if let SimEvent::Hit { target, by, .. } = e
+                && by == g.shooter
+            {
+                hit_on.push((g.ticks, target));
+            }
+        }
+        g.ticks += 1;
+    }
+    assert_eq!(hit_on, [(fired + LIFE, stand_in)]);
+}
+
+#[test]
+fn a_beam_row_with_an_unknown_weapon_is_corrupt_and_one_with_a_removed_unit_is_not() {
+    let mut g = game(db(true, |_, _| {}));
+    g.until_fired();
+    // The shooter is removed after this tick's weapons step: the snapshot still holds its beam.
+    assert!(g.sim.despawn(g.shooter, None));
+    assert_eq!(g.beams(), 1);
+    let mut back = Sim::from_snapshot(&g.sim.snapshot(), Some(g.db.clone())).expect("a beam of a removed unit loads");
+    assert_eq!(back.digest(), g.sim.digest());
+    back.step(&[]);
+    assert_eq!(back.weapons.beams_in_flight(), 0, "and is dropped on the next step");
+
+    let row = |weapon| Beam { shooter: g.shooter, weapon, target: g.target, ends: 9, damage: Fixed::ONE, range: Fixed::ONE };
+    let mut weapons = Weapons::default();
+    assert!(weapons.set_beams(Some(&g.db), vec![row(g.db.key("fx_beam").unwrap())]));
+    assert!(!weapons.set_beams(Some(&g.db), vec![row(sta_core::ContentKey(60_000))]), "a weapon the content does not have");
+    // Through a snapshot: the last record, forged with that key, is refused.
+    let good = g.sim.snapshot();
+    let record = postcard::to_allocvec(&(1u8, g.sim.weapons.beams_rec())).unwrap();
+    assert_eq!(&good[good.len() - record.len()..], &record[..], "the beams record is the last one");
+    let mut forged_rows = g.sim.weapons.beams_rec();
+    forged_rows[0].weapon = sta_core::ContentKey(60_000);
+    let mut forged = good[..good.len() - record.len()].to_vec();
+    forged.extend(postcard::to_allocvec(&(1u8, forged_rows)).unwrap());
+    assert!(matches!(Sim::from_snapshot(&forged, Some(g.db.clone())), Err(crate::snapshot::SnapshotError::Corrupt(_))));
 }
