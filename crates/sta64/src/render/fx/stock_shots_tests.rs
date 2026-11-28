@@ -379,11 +379,13 @@ struct Shielded {
     shields: bool,
     /// The views of these ticks (from, until) carry unit 1's beam at unit 2 as one the sim holds (#1068).
     held: Option<(u64, u64, sta_sim::ContentKey)>,
+    /// From this tick on unit 1 (the shooter) carries the dying flag.
+    dying_from: Option<u64>,
 }
 
 impl Shielded {
     fn patch(&self, view: Arc<WorldView>) -> Arc<WorldView> {
-        if !self.shields && self.held.is_none() {
+        if !self.shields && self.held.is_none() && self.dying_from.is_none() {
             return view;
         }
         let mut v = (*view).clone();
@@ -396,6 +398,13 @@ impl Shielded {
             && (from..until).contains(&v.tick)
         {
             v.beam_rows = vec![sta_sim::view::BeamRow { shooter: EntityId(1), weapon, target: EntityId(2), ends: until }];
+        }
+        if let Some(from) = self.dying_from
+            && v.tick >= from
+        {
+            for u in v.units.iter_mut().filter(|u| u.id.0 == 1) {
+                u.flags = u.flags.with(sta_sim::view::UnitFlags::DYING, true);
+            }
         }
         Arc::new(v)
     }
@@ -425,11 +434,13 @@ struct Setup {
     events: Vec<(u64, &'static str, u8, u64)>,
     /// The ticks (from, until) whose views carry the phaser's beam as held by the sim.
     held: Option<(u64, u64)>,
+    /// The shooter starts to die at this tick.
+    shooter_dying: Option<u64>,
 }
 
 impl Setup {
     fn new(rules: ShotCfg) -> Setup {
-        Setup { db: content(rules), shields: false, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None }
+        Setup { db: content(rules), shields: false, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None, shooter_dying: None }
     }
     /// The phaser lands at the end of its life (`beam_damage_at_end`).
     fn at_end(mut self, rules: ShotCfg) -> Setup {
@@ -477,7 +488,7 @@ impl Setup {
             .add_plugins(SimLinkPlugin)
             .insert_resource(ContentRes(Arc::new(self.db.clone())))
             .insert_resource(SpriteTables(Arc::new(table())))
-            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())) }), Box::new(LocalRouter::new()), PlayerId(0)));
+            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())), dying_from: self.shooter_dying }), Box::new(LocalRouter::new()), PlayerId(0)));
         if let Some(p) = profile {
             app.insert_resource(p);
         }
@@ -813,6 +824,43 @@ fn under_beam_damage_at_end_a_beam_the_sim_lost_is_drawn_on_to_its_range_while_t
 }
 
 #[test]
+fn under_beam_damage_at_end_a_dying_shooter_or_a_target_beyond_twice_the_range_ends_the_beam_at_once_and_a_lost_target_does_not() {
+    let miss = ShotCfg { beam_miss_lifetime: Some(Fixed::from_f64(0.5)), normal_weapon_team_color: None };
+    let base = || Setup::new(miss).at_end(miss).fire(4, "w_phaser", 0).held(4, 12);
+    // The target is lost (phased, say) with the timer running: drawn on past the loss.
+    assert!(last_drawn(&base(), 60).is_some_and(|f| f >= 17));
+    // The shooter starts to die when the sim loses the beam: it ends within a few ticks, timer or not.
+    let mut dying = base();
+    dying.shooter_dying = Some(12);
+    assert!(last_drawn(&dying, 60).is_some_and(|f| f <= 16), "a dying shooter's beam ran on");
+    // The target is beyond twice the range (the authored range is 1000): it ends at once as without the switch.
+    let mut far = base();
+    far.target_z = 2100;
+    assert!(last_drawn(&far, 60).is_some_and(|f| f <= 16), "a beam to a target beyond the break distance ran on");
+}
+
+#[test]
+fn a_beam_the_sim_lost_stays_lost_to_the_end_of_its_life_with_a_timer_longer_than_the_life() {
+    // A timer of two seconds outlasts the beam's life: the beam, lost at tick 12 with its target still in the view, is
+    // drawn on to its range to the end and does not snap back to the target when the judging window ends.
+    let long = ShotCfg { beam_miss_lifetime: Some(Fixed::from_f64(2.0)), normal_weapon_team_color: None };
+    let setup = Setup::new(long).at_end(long).fire(4, "w_phaser", 0).held(4, 12);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let mut late = Vec::new();
+    for i in 0..60 {
+        app.update();
+        if let Some(s) = shots(&mut app).first()
+            && i >= 14
+            && let Geom::Segment { b, .. } = s.geom
+        {
+            late.push(b.length());
+        }
+    }
+    assert!(late.len() >= 10, "drawn on to the end of the life: {} frames", late.len());
+    assert!(late.iter().all(|l| (l - 1000.0).abs() < 25.0), "{late:?}");
+}
+
+#[test]
 fn under_beam_damage_at_end_the_sims_break_distance_decides_not_the_drawings_own_reading() {
     // The drawing's own cut ends a beam whose target is beyond twice the range (the authored range is 1000), measured from
     // the muzzle: with the switch off a target at 2100 gets no beam. With the switch on the sim decides: it holds the beam
@@ -889,7 +937,7 @@ fn a_pulse_streak_and_a_torpedo_sprite_fly_to_their_target_and_end_on_the_hit() 
     hit.events.clear();
     let inner = ScriptedSource::from_json5(&src, &hit.db).unwrap();
     let mut app = hit.app(Some(RenderProfile::Stock));
-    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, held: None }), Box::new(LocalRouter::new()), PlayerId(0));
+    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, held: None, dying_from: None }), Box::new(LocalRouter::new()), PlayerId(0));
     let mut after = Vec::new();
     for _ in 0..24 {
         app.update();
@@ -1494,6 +1542,7 @@ fn authored_shot(path: ShotPath, geom: Geom, radius: f32, sprite: &str) -> Stock
         muzzle_flare: None,
         impact_flare: None,
         arrived: false,
+        sim_lost: false,
         geom,
     }
 }

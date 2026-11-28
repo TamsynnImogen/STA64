@@ -49,7 +49,8 @@
 //!   established, along which line is not: the last aim line is taken; a target that reappears
 //!   inside the time does not resume the beam); lost after that, the beam
 //!   ends at once (read from the executable, static; not measured; under `beam_damage_at_end` a beam
-//!   the sim loses is drawn the same way); a target further than twice the range ends it at once (this replaces an
+//!   the sim loses because its target is gone or phased is drawn the same way, and stays lost; one it loses because
+//!   its shooter is gone or dying, or its target is beyond twice the range, ends at once); a target further than twice the range ends it at once (this replaces an
 //!   earlier reading of the factor as the square root of two; #1068). A planet blocking the path is not tested (no such information in the view).
 //! - **Sim timing.** The sim applies a beam's damage on the fire tick (issue #1068); the original
 //!   applies it at the end of `lifeSpan`. The beam is drawn for the data's `lifeSpan` from the
@@ -411,6 +412,8 @@ pub struct StockShot {
     impact_flare: Option<FlareSpec>,
     /// A beam has reached its target (once per beam): its flare or its shield cap was raised then.
     arrived: bool,
+    /// The sim lost this beam mid-life (latched: a target that comes back does not resume it).
+    sim_lost: bool,
     pub geom: Geom,
 }
 
@@ -628,6 +631,7 @@ impl StockShots<'_, '_> {
             muzzle_flare,
             impact_flare,
             arrived: false,
+            sim_lost: false,
             geom: Geom::None,
             hidden_shooter: !self.client_draws(shooter),
         });
@@ -705,18 +709,41 @@ pub(super) fn update_shots(
                 _ => None,
             };
             // Under `beam_damage_at_end` the sim holds the beam until its life ends and drops it when it is lost
-            // (shooter or target gone, the target phased, out of range): the drawing follows the sim, so the
-            // beam drawn and the damage that lands agree (#1068). The view and the drawing's clock may differ by a
-            // couple of ticks at the ends of the life, so a beam is judged lost only between them. A beam the sim
-            // lost is then drawn as any lost target (below): on to full range while the miss timer runs, then it
-            // ends. Every other beam is read as before.
+            // (shooter or target gone, the shooter dying, the target phased, out of range): the drawing follows the
+            // sim, so the beam drawn and the damage that lands agree (#1068). The view and the drawing's clock may
+            // differ by a couple of ticks at the ends of the life, so a beam is judged lost only between them; once
+            // lost it stays lost (a target that comes back does not resume it: not established). The cause is read
+            // from the view, as the sim's own rule reads it. A shooter that is gone or dying, or a target beyond
+            // twice the range, ends the beam at once, as without the switch (read from the executable, static); a
+            // target that is gone or phased is a lost target below: drawn on while the miss timer runs, then ended.
+            // Every other beam is read as before.
             let at_end_life = ctx.content.as_ref().and_then(|c| c.0.weapon(s.weapon)).filter(|w| ctx.lands_at_end(w)).map(|w| w.duration as f32);
-            let sim_lost = match (at_end_life, s.target) {
-                (Some(life), Target::Entity(id)) => age >= BEAM_VIEW_SLACK && age < life - BEAM_VIEW_SLACK && !link.real_curr().beam_held(s.shooter, s.weapon, id),
-                _ => false,
-            };
+            if let (Some(life), Target::Entity(id)) = (at_end_life, s.target)
+                && age >= BEAM_VIEW_SLACK
+                && age < life - BEAM_VIEW_SLACK
+                && !link.real_curr().beam_held(s.shooter, s.weapon, id)
+            {
+                s.sim_lost = true;
+            }
+            if s.sim_lost
+                && let Target::Entity(id) = s.target
+            {
+                let view = link.real_curr();
+                let shooter_ends = view.unit(s.shooter).is_none_or(|u| u.flags.contains(sta_sim::view::UnitFlags::DYING));
+                let beyond = match (view.unit(s.shooter), view.unit(id)) {
+                    (Some(a), Some(b)) => {
+                        let (a, b) = (to_bevy(a.pos.to_f32()), to_bevy(b.pos.to_f32()));
+                        s.range > 0.0 && (a - b).with_y(0.0).length_squared() > 4.0 * s.range * s.range
+                    }
+                    _ => false,
+                };
+                if shooter_ends || beyond {
+                    cmds.entity(e).try_despawn();
+                    continue;
+                }
+            }
             // A target the shot itself killed on the fire tick is held where it was for the beam's life.
-            let lost = sim_lost || (live.is_none() && !s.pinned);
+            let lost = s.sim_lost || (live.is_none() && !s.pinned);
             if let Some(b) = live {
                 s.last_body = Some(b);
             }
