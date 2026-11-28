@@ -242,19 +242,25 @@ fn planet_frames(bin: &str, tag: &str) -> Vec<Vec<u8>> {
     files.iter().map(|f| std::fs::read(f).unwrap()).collect()
 }
 
+/// Bloom is on by default and is seeded only by authored emissive texels ("bloom never
+/// reads scene brightness", `render/hulls/emissive_bloom.rs`). The planet scene has none,
+/// so `--postfx bloom` and `--postfx off` give the same frames there, and the frames
+/// repeat. That bloom does change a frame with emissive texels is pinned in-process by the
+/// GPU test in `render/hulls.rs` (the same scene with and without it): the bench scenes
+/// carry no emissive maps to show it through the command line.
 #[cfg(unix)]
 #[test]
-fn bloom_changes_frames_and_repeats() {
+fn bloom_seeded_by_emissive_texels_leaves_a_scene_without_them_unchanged_and_repeats() {
     if !adapter(&tmp("probe-postfx")) {
         return;
     }
     let wrap = tmp("postfx-wrap");
     let bloom = sta64_with_postfx(&wrap, "bloom");
-    let off = planet_frames(sta64(), "postfx-off");
+    let off = planet_frames(&sta64_with_postfx(&wrap, "off"), "postfx-off");
     let on_a = planet_frames(&bloom, "postfx-on-a");
     let on_b = planet_frames(&bloom, "postfx-on-b");
     assert_eq!(on_a, on_b, "bloom on twice must give the same frames");
-    assert_ne!(off, on_a, "bloom must change the frames");
+    assert_eq!(off, on_a, "no emissive texels in the scene: bloom has nothing to seed from");
 }
 
 /// The fog of war and the shroud (RND-13): `fog.ini` draws them as team 1 sees the map,
