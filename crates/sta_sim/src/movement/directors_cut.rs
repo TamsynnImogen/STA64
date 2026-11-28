@@ -200,10 +200,10 @@ mod tests {
 
         let mut old_save = sim.snapshot();
         // The Director's Cut flag (one byte), the move-mode, beams, dying and warp ramp records
-        // (two bytes each: no rows) and the warp option (one byte) are what was appended after
-        // format 50 (SIM-76 appended the second, #1068 the third, #1100 the fourth, #1102 the
-        // fifth and the sixth).
-        old_save.truncate(old_save.len() - 10);
+        // (two bytes each: no rows), the warp option (one byte) and the torpedo flights (two bytes: no
+        // rows) are what was appended after format 50 (SIM-76 appended the second, #1068 the third and
+        // the last, #1100 the fourth, #1102 the fifth and the sixth).
+        old_save.truncate(old_save.len() - 12);
         old_save[4..6].copy_from_slice(&crate::snapshot::PRE_DIRECTORS_CUT_FORMAT.to_le_bytes());
         old_save[10..18].copy_from_slice(&old_hash.to_le_bytes());
         let restored = Sim::from_snapshot(&old_save, Some(setup.content.clone())).unwrap();
